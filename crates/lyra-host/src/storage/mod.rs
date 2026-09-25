@@ -114,6 +114,8 @@ pub struct OpenReport {
     pub interrupted: Vec<RunId>,
 }
 
+mod db;
+mod schema;
 mod thread;
 
 pub use thread::Storage;

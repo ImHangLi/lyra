@@ -5,7 +5,7 @@
 mod actor;
 mod server;
 #[allow(dead_code)] // wired into the actor by LYR-04
-mod storage;
+pub mod storage;
 
 use lyra_protocol::ids::AbsolutePath;
 use lyra_protocol::paths::WorkspacePaths;
