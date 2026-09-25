@@ -36,7 +36,7 @@ Every command prints exactly one JSON reply with `--json` (the default without a
 
 - `lyra logs RUN_ID_OR_ACTION --json` — the last 100 records of that run, oldest first. Page older with `--after "$(meta.next_cursor)"`. `--follow` streams JSONL until the run ends.
 - `lyra runs --action REF --json`, `lyra runs RUN_ID --json` — outcome, exit, cleanup, note.
-- `lyra view PLUGIN.VIEW --json` — typed tables, logs, trees, text, JSON. Check `freshness` (`current`, `historical`, `stale`) and `recorded_at`; an old success is not evidence that the current code works.
+- `lyra view PLUGIN.VIEW --json` — typed tables, logs, trees, text, JSON. `freshness` is `current` only while the producing run is still live; data from a finished run or a manual publish is `historical` (normal, not an error); `stale` means the definition changed or the source failed. Always read `recorded_at`: an old success is not evidence that the current code works.
 - Large values come back as `meta.payload`; read them with `lyra payload read TOKEN`. `PAYLOAD_GONE` means the data was cleaned up; do not rerun the action to recreate it unless the task needs it.
 
 Read only the run you care about. Never read `state.sqlite3`, `~/Library/Logs/Lyra`, or caches directly; `lyra paths --json` explains what each location is for.
