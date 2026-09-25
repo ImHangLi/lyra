@@ -146,11 +146,6 @@
         },
         "request_key": {
           "$ref": "#/$defs/RequestKey"
-        },
-        "restart": {
-          "default": false,
-          "description": "`restart` semantics: stop the current instance first.",
-          "type": "boolean"
         }
       },
       "required": [
