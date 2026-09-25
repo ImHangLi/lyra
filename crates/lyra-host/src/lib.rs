@@ -3,8 +3,10 @@
 //! Started as `lyra __host --root PATH` by the first client that finds no running host.
 
 mod actor;
+mod env;
+mod logs;
+mod runner;
 mod server;
-#[allow(dead_code)] // wired into the actor by LYR-04
 pub mod storage;
 
 use lyra_protocol::ids::AbsolutePath;

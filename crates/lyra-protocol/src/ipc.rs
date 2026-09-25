@@ -310,9 +310,6 @@ pub struct ActionInvokeParams {
     /// Lets a waiting CLI run a task without an existing session (§5.2).
     #[serde(default)]
     pub foreground: bool,
-    /// `restart` semantics: stop the current instance first.
-    #[serde(default)]
-    pub restart: bool,
 }
 
 /// Ad-hoc command through the same command/task path; never a catalog entry.
