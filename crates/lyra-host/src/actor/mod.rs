@@ -4,6 +4,7 @@
 //! The actor never awaits a child process, a file scan, or a storage commit inline.
 
 mod artifacts;
+mod configure;
 mod plugin;
 mod runs;
 mod session;
@@ -117,6 +118,13 @@ pub enum Msg {
         revision: ViewRevision,
         error: Option<String>,
     },
+    ConfigDone {
+        result: Result<configure::Loaded, configure::LoadFailure>,
+        responder: Option<Responder>,
+        is_apply: bool,
+        previous_blocked: configure::Blocked,
+        previous_hash: Option<Digest>,
+    },
     Shutdown,
 }
 
@@ -161,6 +169,7 @@ pub struct Actor {
     idle_since: Option<Instant>,
     views: views::ViewStore,
     artifacts: artifacts::Artifacts,
+    cfg: configure::ConfigCtl,
 }
 
 fn load_config(paths: &WorkspacePaths) -> ConfigState {
@@ -216,6 +225,7 @@ impl Actor {
             }
         };
         let (runner_tx, runner_rx) = mpsc::channel(4096);
+        let paths_for_cfg = paths.clone();
         Self {
             paths,
             epoch: HostEpoch::random(),
@@ -239,6 +249,7 @@ impl Actor {
             idle_since: Some(Instant::now()),
             views: views::ViewStore::default(),
             artifacts: artifacts::Artifacts::default(),
+            cfg: configure::ConfigCtl::new(&paths_for_cfg),
         }
     }
 
@@ -325,10 +336,12 @@ impl Actor {
                     Some(m) => self.handle(m),
                 },
                 Some((run_id, ev)) = self.runner_rx.recv() => self.runner_event(run_id, ev),
+                Some(()) = self.cfg.fs_rx.recv() => self.fs_changed(),
                 _ = tick.tick() => {
                     self.session_tick();
                     self.flush_progress();
                     self.views_tick();
+                    self.config_tick();
                     if self.idle_since.is_some_and(|t| t.elapsed() >= IDLE_EXIT) {
                         self.flush_views_now().await;
                         break;
@@ -395,6 +408,13 @@ impl Actor {
                 revision,
                 error,
             } => self.view_saved(view_ref, revision, error),
+            Msg::ConfigDone {
+                result,
+                responder,
+                is_apply,
+                previous_blocked,
+                previous_hash,
+            } => self.config_done(result, responder, is_apply, previous_blocked, previous_hash),
             Msg::Shutdown => {}
         }
     }
@@ -494,6 +514,11 @@ impl Actor {
             Method::ViewAction => self.view_action(client, parse!(p), r),
             Method::ArtifactList => self.artifact_list(parse!(p), r),
             Method::ArtifactRead => self.artifact_read(parse!(p), r),
+            Method::ConfigApply => self.config_apply(parse!(p), r),
+            Method::ConfigReload => {
+                let _: Empty = parse!(p);
+                self.config_reload(Some(r))
+            }
             Method::StreamSubscribe => self.subscribe(client, parse!(p), r),
             Method::StreamUnsubscribe => self.unsubscribe(client, parse!(p), r),
             other => r.send(Err(RpcError::new(
@@ -550,11 +575,13 @@ impl Actor {
                 });
             }
         }
+        let mut config_warnings = self.config_warnings();
+        config_warnings.extend(self.retiring_warnings());
         StatusData {
             session: self.session_info(),
             runs,
             storage_warnings,
-            config_warnings: self.config_warnings(),
+            config_warnings,
         }
     }
 

@@ -243,6 +243,7 @@ impl Actor {
                 format!("no action `{}`", p.action_ref),
             )
         })?;
+        self.check_blocked(&lp.plugin.id)?;
         if !lp.plugin.enabled {
             return Err(err(
                 ErrorCode::INVALID_ARGUMENT,

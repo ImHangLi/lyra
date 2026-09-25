@@ -14,6 +14,7 @@ hex = "0.4.3"
 hmac = "0.13.0"
 jsonschema = { version = "0.58.0", default-features = false }
 lyra-protocol = { version = "0.1.0", path = "../lyra-protocol" }
+notify = "8.2.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rustix = { version = "1.1.5", features = ["process"] }
 serde = { version = "1.0.229", features = ["derive"] }
