@@ -225,6 +225,7 @@ impl Actor {
     pub(crate) fn end_session_if_idle(&mut self) {
         if self.session.as_ref().is_some_and(|s| s.stopping) && self.runs.is_empty() {
             self.session = None;
+            self.clear_session_views();
         }
     }
 

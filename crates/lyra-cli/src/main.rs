@@ -151,6 +151,48 @@ enum Command {
         #[arg(long)]
         follow: bool,
     },
+    /// Read one page of a view with its source, revision, and freshness (never re-runs it).
+    View {
+        #[arg(value_name = "VIEW")]
+        view: String,
+        #[arg(long, value_name = "CURSOR")]
+        after: Option<String>,
+        #[arg(long)]
+        limit: Option<u32>,
+        #[arg(long)]
+        max_bytes: Option<u32>,
+    },
+    /// Publish one LPP view frame to VIEW; needs no session for `last` views.
+    Publish {
+        #[arg(value_name = "VIEW")]
+        view: String,
+        /// The frame file, or `-` for stdin.
+        #[arg(long, value_name = "FILE")]
+        input: String,
+        #[arg(long, value_name = "N")]
+        expected_view_revision: Option<u64>,
+        #[arg(long, value_name = "KEY")]
+        request_key: Option<String>,
+    },
+    /// Run a table row action with input bound from that row at the given view revision.
+    ViewAction {
+        #[arg(value_name = "VIEW")]
+        view: String,
+        #[arg(value_name = "ACTION")]
+        action: String,
+        #[arg(long, value_name = "ROW")]
+        row: String,
+        #[arg(long, value_name = "N")]
+        expected_view_revision: u64,
+    },
+    /// List registered artifacts (optionally of one run), or read one as bounded text.
+    #[command(args_conflicts_with_subcommands = true)]
+    Artifacts {
+        #[arg(value_name = "RUN")]
+        run: Option<String>,
+        #[command(subcommand)]
+        read: Option<ArtifactsCommand>,
+    },
     /// Internal: serve the workspace host.
     #[command(name = "__host", hide = true)]
     Host {
@@ -162,6 +204,19 @@ enum Command {
         /// Rescan even when the discovery cache is still valid.
         #[arg(long)]
         refresh: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ArtifactsCommand {
+    /// Read a bounded UTF-8 text chunk of one artifact.
+    Read {
+        #[arg(value_name = "ID")]
+        id: String,
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+        #[arg(long)]
+        max_bytes: Option<u32>,
     },
 }
 
@@ -254,6 +309,34 @@ fn main() -> ExitCode {
             max_bytes,
             follow,
         }) => commands::runtime::logs(&ctx, &target, after, limit, max_bytes, follow),
+        Some(Command::View {
+            view,
+            after,
+            limit,
+            max_bytes,
+        }) => commands::views::view(&ctx, &view, after, limit, max_bytes),
+        Some(Command::Publish {
+            view,
+            input,
+            expected_view_revision,
+            request_key,
+        }) => commands::views::publish(&ctx, &view, &input, expected_view_revision, request_key),
+        Some(Command::ViewAction {
+            view,
+            action,
+            row,
+            expected_view_revision,
+        }) => commands::views::view_action(&ctx, &view, &action, row, expected_view_revision),
+        Some(Command::Artifacts { run, read: None }) => commands::views::artifacts(&ctx, run),
+        Some(Command::Artifacts {
+            read:
+                Some(ArtifactsCommand::Read {
+                    id,
+                    offset,
+                    max_bytes,
+                }),
+            ..
+        }) => commands::views::artifact_read(&ctx, id, offset, max_bytes),
         Some(Command::Paths) => commands::inspect::paths(&ctx),
         Some(Command::Doctor) => commands::inspect::doctor(&ctx),
         Some(Command::Host { root }) => match lyra_protocol::ids::AbsolutePath::from_path(&root) {

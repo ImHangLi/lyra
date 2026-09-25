@@ -165,6 +165,74 @@ impl Actor {
         self.deliver(StreamKind::State, |_| true, &line);
     }
 
+    /// A view got a new revision; subscribers read the content with `view.read`.
+    pub(crate) fn broadcast_view(
+        &mut self,
+        view_ref: &lyra_protocol::ids::ViewRef,
+        view_revision: lyra_protocol::ids::ViewRevision,
+    ) {
+        if !self
+            .subs
+            .values()
+            .any(|s| s.kinds.contains(&StreamKind::View))
+        {
+            return;
+        }
+        let key = view_ref.to_string();
+        let line = self.frame(
+            None,
+            Some(view_ref.to_item_ref()),
+            StreamEvent::View {
+                view_ref: view_ref.clone(),
+                view_revision,
+            },
+        );
+        self.deliver(
+            StreamKind::View,
+            |s| s.refs.is_empty() || s.refs.iter().any(|r| r == &key),
+            &line,
+        );
+    }
+
+    /// Coalesced plugin progress (the latest value per tick).
+    pub(crate) fn broadcast_progress(
+        &mut self,
+        run_id: &RunId,
+        message: String,
+        current: Option<(f64, f64)>,
+    ) {
+        if !self
+            .subs
+            .values()
+            .any(|s| s.kinds.contains(&StreamKind::Progress))
+        {
+            return;
+        }
+        let action = self
+            .runs
+            .get(run_id)
+            .and_then(|r| r.record.action_ref.clone());
+        let keys = [
+            Some(run_id.to_string()),
+            action.as_ref().map(ToString::to_string),
+        ];
+        let line = self.frame(
+            Some(run_id.clone()),
+            action.as_ref().map(|a| a.to_item_ref()),
+            StreamEvent::Progress {
+                run_id: run_id.clone(),
+                message,
+                current: current.map(|c| c.0),
+                total: current.map(|c| c.1),
+            },
+        );
+        self.deliver(
+            StreamKind::Progress,
+            |s| s.refs.is_empty() || s.refs.iter().any(|r| keys.iter().flatten().any(|k| k == r)),
+            &line,
+        );
+    }
+
     pub(crate) fn broadcast_logs(&mut self, run_id: &RunId, records: Vec<LogRecord>) {
         if records.is_empty()
             || !self

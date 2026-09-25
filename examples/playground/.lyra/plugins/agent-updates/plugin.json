@@ -3,5 +3,8 @@
   "id": "agent-updates",
   "name": "Agent Updates",
   "description": "Keep short responses explicitly published by this project's agents.",
-  "views": [{"id": "feed", "title": "Updates", "kind": "log", "persistence": "last"}]
+  "views": [
+    {"id": "feed", "title": "Updates", "kind": "log", "persistence": "last"},
+    {"id": "live", "title": "Live notes", "kind": "text", "persistence": "session", "description": "Scratch notes that last only for the current session."}
+  ]
 }

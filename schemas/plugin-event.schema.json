@@ -99,6 +99,10 @@
         "producer_at": {
           "$ref": "#/$defs/Timestamp"
         },
+        "recorded_at": {
+          "$ref": "#/$defs/Timestamp",
+          "description": "Set by the host when stored and returned by `view.read`. Producers must omit it:\nframe validation rejects a producer-supplied value."
+        },
         "text": {
           "type": "string"
         }
