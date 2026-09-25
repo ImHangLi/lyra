@@ -686,9 +686,14 @@ pub enum SessionState {
 pub struct SessionInfo {
     pub id: SessionId,
     pub mode: SessionMode,
+    /// Controllers, including CLIs waiting on their own task.
     pub controller_count: u32,
     pub expires_at: Option<Timestamp>,
     pub state: SessionState,
+    /// True when an explicit background lease keeps work running without controllers
+    /// (`expires_at` is null for a `ttl: none` lease).
+    #[serde(default)]
+    pub background_lease: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

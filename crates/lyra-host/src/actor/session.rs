@@ -55,7 +55,8 @@ impl Actor {
         self.session.as_ref().map(|s| SessionInfo {
             id: s.id.clone(),
             mode: s.mode(),
-            controller_count: s.controllers.len() as u32,
+            controller_count: (s.controllers.len() + s.temporary.len()) as u32,
+            background_lease: s.lease.is_some(),
             expires_at: s.lease.flatten().map(|(_, t)| t),
             state: if s.stopping {
                 SessionState::Stopping
