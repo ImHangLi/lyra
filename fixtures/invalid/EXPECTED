@@ -1,0 +1,16 @@
+# case expected-error-code
+bad-id SCHEMA_INVALID
+bom SCHEMA_INVALID
+duplicate-item SCHEMA_INVALID
+duplicate-key SCHEMA_INVALID
+empty-plugin SCHEMA_INVALID
+external-ref SCHEMA_INVALID
+float-integer SCHEMA_INVALID
+null-timeout SCHEMA_INVALID
+process-schedule SCHEMA_INVALID
+pty-plugin-runner SCHEMA_INVALID
+reserved-env SCHEMA_INVALID
+timeout-range SCHEMA_INVALID
+unknown-field SCHEMA_INVALID
+unknown-tag SCHEMA_INVALID
+unsupported-api UNSUPPORTED_API

@@ -1,0 +1,8 @@
+{
+  "api": 1,
+  "name": "Lyra Playground",
+  "plugins": ["plugins/dev", "plugins/demo", "plugins/file-check", "plugins/agent-updates"],
+  "autostart": [],
+  "ui": {"theme": "terminal", "mouse": false},
+  "meta": {}
+}

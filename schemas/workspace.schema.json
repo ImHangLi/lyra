@@ -1,0 +1,147 @@
+{
+  "$defs": {
+    "ActionRef": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}\\.[a-z][a-z0-9-]{0,47}$",
+      "type": "string"
+    },
+    "Api1": {
+      "const": 1
+    },
+    "StoragePolicyWire": {
+      "additionalProperties": false,
+      "description": "Retention overrides (§14.3). Every field is an optional positive integer.",
+      "properties": {
+        "artifact_bytes_per_workspace": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "artifact_days": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_bytes_per_workspace": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_days": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "history_days": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "log_bytes_per_run": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "log_bytes_per_workspace": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "log_days": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "result_bytes_per_workspace": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs_per_action": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs_per_workspace": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "view_bytes_per_workspace": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "view_days": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "view_log_items": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "UiTheme": {
+      "enum": [
+        "terminal"
+      ],
+      "type": "string"
+    },
+    "UiWire": {
+      "additionalProperties": false,
+      "properties": {
+        "mouse": {
+          "type": "boolean"
+        },
+        "theme": {
+          "$ref": "#/$defs/UiTheme"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "api": {
+      "$ref": "#/$defs/Api1"
+    },
+    "autostart": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ActionRef"
+      },
+      "type": "array"
+    },
+    "meta": {
+      "additionalProperties": true,
+      "default": {},
+      "type": "object"
+    },
+    "name": {
+      "type": "string"
+    },
+    "plugins": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "storage": {
+      "$ref": "#/$defs/StoragePolicyWire"
+    },
+    "ui": {
+      "$ref": "#/$defs/UiWire"
+    }
+  },
+  "required": [
+    "api",
+    "name"
+  ],
+  "title": "WorkspaceWire",
+  "type": "object"
+}

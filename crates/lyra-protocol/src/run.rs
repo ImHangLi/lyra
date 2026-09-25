@@ -1,0 +1,223 @@
+//! Run lifecycle, run records, and canonical log records (§5.3, §14.2, §14.4).
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+use crate::error::ErrorInfo;
+use crate::ids::{ActionRef, CatalogRevision, Digest, LogSeq, RunId, SessionId, WorkspaceId};
+use crate::lpp::HealthState;
+use crate::reply::PayloadRef;
+use crate::time::Timestamp;
+use crate::view::LogLevel;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StopReason {
+    User,
+    SessionClosed,
+    Timeout,
+    TtlExpired,
+    ProtocolError,
+    OutputLimit,
+    InternalError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Succeeded,
+    Failed,
+    Cancelled,
+    TimedOut,
+    Interrupted,
+}
+
+/// `starting → running → stopping → finished`; a failed start may go straight to finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Lifecycle {
+    Starting,
+    Running,
+    Stopping { reason: StopReason },
+    Finished { outcome: Outcome },
+}
+
+impl Lifecycle {
+    pub fn is_active(self) -> bool {
+        !matches!(self, Self::Finished { .. })
+    }
+    /// Whether `self → next` is a legal transition.
+    pub fn can_become(self, next: Lifecycle) -> bool {
+        use Lifecycle::*;
+        matches!(
+            (self, next),
+            (Starting, Running)
+                | (Starting, Stopping { .. })
+                | (Starting, Finished { .. })
+                | (Running, Stopping { .. })
+                | (Running, Finished { .. })
+                | (Stopping { .. }, Finished { .. })
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReportedHealth {
+    pub state: HealthState,
+    pub message: Option<String>,
+    pub updated_at: Option<Timestamp>,
+}
+
+impl ReportedHealth {
+    pub fn unknown() -> Self {
+        Self {
+            state: HealthState::Unknown,
+            message: None,
+            updated_at: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExitInfo {
+    pub code: Option<i32>,
+    pub signal: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CleanupState {
+    NotNeeded,
+    Pending,
+    Running {
+        started_at: Timestamp,
+    },
+    Succeeded {
+        ended_at: Timestamp,
+    },
+    Failed {
+        ended_at: Timestamp,
+        error: ErrorInfo,
+    },
+    Unknown {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RunSource {
+    Tui,
+    Cli,
+    Schedule,
+    Hook,
+}
+
+/// Plugin-reported result, kept separate from the OS outcome.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunResult {
+    pub ok: bool,
+    pub summary: String,
+    /// Inline when small; otherwise `null` with `payload` set.
+    pub data: Value,
+    pub payload: Option<PayloadRef>,
+    pub error: Option<ErrorInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LogLocation {
+    pub first_seq: Option<LogSeq>,
+    pub last_seq: Option<LogSeq>,
+    pub dropped_records: u64,
+    pub truncated_records: u64,
+}
+
+/// Git context recorded at start. It is context, not proof of the working tree's contents.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GitContext {
+    pub head: Option<String>,
+    pub branch: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunRecord {
+    pub run_id: RunId,
+    pub workspace_id: WorkspaceId,
+    pub session_id: Option<SessionId>,
+    /// `null` for ad-hoc `exec` runs, which are never catalog entries.
+    pub action_ref: Option<ActionRef>,
+    /// Action title or the `exec --label`.
+    pub label: String,
+    pub definition_hash: Digest,
+    pub catalog_revision: CatalogRevision,
+    pub source: RunSource,
+    pub started_at: Timestamp,
+    pub ended_at: Option<Timestamp>,
+    pub lifecycle: Lifecycle,
+    pub reported_health: ReportedHealth,
+    pub exit: Option<ExitInfo>,
+    pub stop_reason: Option<StopReason>,
+    pub cleanup: CleanupState,
+    pub result: Option<RunResult>,
+    pub log: LogLocation,
+    pub git: Option<GitContext>,
+    /// Set when the reported state could not be confirmed (e.g. after a host crash).
+    pub note: Option<String>,
+}
+
+/// The run summary carried in status and state events (§11.6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunSummary {
+    pub run_id: RunId,
+    pub action_ref: Option<ActionRef>,
+    pub lifecycle: Lifecycle,
+    pub reported_health: ReportedHealth,
+    pub definition_hash: Digest,
+    pub started_at: Timestamp,
+}
+
+impl From<&RunRecord> for RunSummary {
+    fn from(r: &RunRecord) -> Self {
+        Self {
+            run_id: r.run_id.clone(),
+            action_ref: r.action_ref.clone(),
+            lifecycle: r.lifecycle,
+            reported_health: r.reported_health.clone(),
+            definition_hash: r.definition_hash.clone(),
+            started_at: r.started_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LogStream {
+    Stdout,
+    Stderr,
+    Plugin,
+    Host,
+    Pty,
+}
+
+/// One canonical log record; persisted as one JSONL line per record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LogRecord {
+    pub log_seq: LogSeq,
+    pub recorded_at: Timestamp,
+    pub stream: LogStream,
+    pub level: LogLevel,
+    pub text: String,
+    pub continued: bool,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Map<String, Value>>,
+}

@@ -1,0 +1,55 @@
+{
+  "api": 1,
+  "id": "dev",
+  "name": "Development",
+  "description": "Playground commands: a passing check, a failing check, a long-running server, an interactive prompt, and a counter.",
+  "tags": ["dev"],
+  "actions": [
+    {
+      "id": "check",
+      "title": "Check",
+      "description": "Run a quick check that succeeds.",
+      "mode": "task",
+      "run": {"kind": "command", "argv": ["python3", "scripts/check.py"]}
+    },
+    {
+      "id": "fail",
+      "title": "Failing check",
+      "description": "Run a check that exits with status 3.",
+      "mode": "task",
+      "run": {"kind": "command", "argv": ["python3", "scripts/check.py", "--fail"]}
+    },
+    {
+      "id": "web",
+      "title": "Web server",
+      "description": "Start a long-running development server that logs a heartbeat.",
+      "mode": "process",
+      "run": {"kind": "command", "argv": ["python3", "scripts/web.py"]},
+      "stop_grace_ms": 2000
+    },
+    {
+      "id": "prompt",
+      "title": "Interactive prompt",
+      "description": "Ask for a name in a real terminal.",
+      "mode": "task",
+      "terminal": "pty",
+      "run": {"kind": "command", "argv": ["python3", "scripts/prompt.py"]},
+      "timeout": {"kind": "after", "ms": 600000}
+    },
+    {
+      "id": "count",
+      "title": "Count",
+      "description": "Increment a counter file in the plugin state directory; shows request-key deduplication.",
+      "mode": "task",
+      "run": {"kind": "command", "argv": ["python3", "scripts/count.py"]},
+      "effects": ["writes-state"]
+    },
+    {
+      "id": "flood",
+      "title": "Log flood",
+      "description": "Print many log lines quickly to exercise bounded logs.",
+      "mode": "process",
+      "run": {"kind": "command", "argv": ["python3", "scripts/flood.py"]}
+    }
+  ]
+}

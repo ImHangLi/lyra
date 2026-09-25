@@ -1,0 +1,7 @@
+{
+  "api": 1,
+  "id": "agent-updates",
+  "name": "Agent Updates",
+  "description": "Keep short responses explicitly published by this project's agents.",
+  "views": [{"id": "feed", "title": "Updates", "kind": "log", "persistence": "last"}]
+}

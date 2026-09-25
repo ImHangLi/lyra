@@ -1,0 +1,251 @@
+{
+  "$defs": {
+    "AbsolutePath": {
+      "pattern": "^/",
+      "type": "string"
+    },
+    "Api1": {
+      "const": 1
+    },
+    "CatalogRevision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "ErrorCode": {
+      "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+      "type": "string"
+    },
+    "ErrorInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "details": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "message": {
+          "type": "string"
+        },
+        "next_action": {
+          "$ref": "#/$defs/NextAction"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "type": "object"
+    },
+    "HostEpoch": {
+      "pattern": "^h_[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "NextAction": {
+      "additionalProperties": false,
+      "description": "A suggested follow-up command. Never executed automatically.",
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "argv",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "PayloadAvailability": {
+      "enum": [
+        "session",
+        "retained"
+      ],
+      "type": "string"
+    },
+    "PayloadMime": {
+      "enum": [
+        "application/json"
+      ],
+      "type": "string"
+    },
+    "PayloadRef": {
+      "additionalProperties": false,
+      "description": "Reference to a bounded result or view serialization held by the host (§11.1).",
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/PayloadAvailability"
+        },
+        "mime": {
+          "$ref": "#/$defs/PayloadMime"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "mime",
+        "size_bytes",
+        "sha256",
+        "availability"
+      ],
+      "type": "object"
+    },
+    "ReplyMeta": {
+      "additionalProperties": false,
+      "properties": {
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "not_modified": {
+          "type": "boolean"
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PayloadRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "truncated",
+        "not_modified"
+      ],
+      "type": "object"
+    },
+    "StateRevision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "WorkspaceId": {
+      "pattern": "^w_[0-9a-f]{24}$",
+      "type": "string"
+    },
+    "WorkspaceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/WorkspaceId"
+        },
+        "root": {
+          "$ref": "#/$defs/AbsolutePath"
+        }
+      },
+      "required": [
+        "id",
+        "root"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Wire form. `ok=true` ⇔ `error=null`; `ok=false` ⇒ `data=null`. Built only through\n[`PublicReply::success`]/[`PublicReply::failure`] or checked deserialization.",
+  "properties": {
+    "api": {
+      "$ref": "#/$defs/Api1"
+    },
+    "catalog_revision": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CatalogRevision"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "data": true,
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "host_epoch": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HostEpoch"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "meta": {
+      "$ref": "#/$defs/ReplyMeta"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "state_revision": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StateRevision"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "workspace": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkspaceRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "api",
+    "ok",
+    "meta"
+  ],
+  "title": "PublicReply",
+  "type": "object"
+}

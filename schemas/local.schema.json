@@ -1,0 +1,133 @@
+{
+  "$defs": {
+    "Api1": {
+      "const": 1
+    },
+    "StoragePolicyWire": {
+      "additionalProperties": false,
+      "description": "Retention overrides (§14.3). Every field is an optional positive integer.",
+      "properties": {
+        "artifact_bytes_per_workspace": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "artifact_days": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_bytes_per_workspace": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_days": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "history_days": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "log_bytes_per_run": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "log_bytes_per_workspace": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "log_days": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "result_bytes_per_workspace": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs_per_action": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs_per_workspace": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "view_bytes_per_workspace": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "view_days": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "view_log_items": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "UiTheme": {
+      "enum": [
+        "terminal"
+      ],
+      "type": "string"
+    },
+    "UiWire": {
+      "additionalProperties": false,
+      "properties": {
+        "mouse": {
+          "type": "boolean"
+        },
+        "theme": {
+          "$ref": "#/$defs/UiTheme"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Personal overrides in `.lyra/local.json`; never committed.",
+  "properties": {
+    "api": {
+      "$ref": "#/$defs/Api1"
+    },
+    "plugin_patches": {
+      "additionalProperties": false,
+      "default": {},
+      "description": "Plugin ID → RFC 7396 JSON Merge Patch applied to that plugin manifest.",
+      "patternProperties": {
+        "^[a-z][a-z0-9-]{0,47}$": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "storage": {
+      "$ref": "#/$defs/StoragePolicyWire"
+    },
+    "ui": {
+      "$ref": "#/$defs/UiWire"
+    }
+  },
+  "required": [
+    "api"
+  ],
+  "title": "LocalWire",
+  "type": "object"
+}
