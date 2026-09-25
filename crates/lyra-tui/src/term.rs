@@ -6,6 +6,7 @@ use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::cursor::{Hide, Show};
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -22,7 +23,7 @@ pub fn restore() {
     if ACTIVE.swap(false, Ordering::SeqCst) {
         let mut out = std::io::stdout();
         let _ = disable_raw_mode();
-        let _ = execute!(out, LeaveAlternateScreen, Show);
+        let _ = execute!(out, DisableBracketedPaste, LeaveAlternateScreen, Show);
         let _ = out.flush();
     }
 }
@@ -39,7 +40,7 @@ impl TerminalGuard {
         enable_raw_mode()?;
         ACTIVE.store(true, Ordering::SeqCst);
         let mut out = std::io::stdout();
-        if let Err(e) = execute!(out, EnterAlternateScreen, Hide) {
+        if let Err(e) = execute!(out, EnterAlternateScreen, Hide, EnableBracketedPaste) {
             restore();
             return Err(e);
         }

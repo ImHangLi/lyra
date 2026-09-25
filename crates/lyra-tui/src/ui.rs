@@ -61,7 +61,9 @@ pub fn draw(f: &mut Frame, app: &mut App, color: bool) {
     .areas(area);
     draw_header(f, app, &t, header);
     app.narrow = area.width < 80;
-    if app.narrow {
+    if app.term.is_open() {
+        crate::terminal::draw(f, &mut app.term, body, color);
+    } else if app.narrow {
         match app.focus {
             Focus::List => draw_list(f, app, &t, body),
             Focus::Logs => draw_detail(f, app, &t, body),

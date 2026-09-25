@@ -10,6 +10,7 @@ mod clip;
 mod ipc;
 mod logs;
 mod term;
+mod terminal;
 mod ui;
 
 use std::time::{Duration, Instant};
@@ -104,6 +105,7 @@ async fn serve(paths: WorkspacePaths, offset: time::UtcOffset) -> Result<TuiEnd,
             control: control_tx,
             read: read_tx.clone(),
             events: tx.clone(),
+            paths: paths.clone(),
         },
     );
     match attached {

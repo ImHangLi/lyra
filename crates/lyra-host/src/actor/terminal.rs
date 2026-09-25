@@ -363,8 +363,11 @@ impl Actor {
         let screen = t.handle.clone();
         let owner = t.owner.clone();
         let ctx = self.ctx();
+        let reply_now = p.reply_now;
         tokio::spawn(async move {
-            settle(&screen, before).await;
+            if !reply_now {
+                settle(&screen, before).await;
+            }
             let req = SnapshotRequest {
                 row_start: 0,
                 row_count: None,

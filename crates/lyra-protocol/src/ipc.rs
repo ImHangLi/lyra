@@ -555,6 +555,10 @@ pub struct TerminalInputParams {
     )]
     #[schemars(with = "ScreenRevision")]
     pub expected_screen_revision: Option<ScreenRevision>,
+    /// Reply with the current screen at once instead of waiting for the program to react
+    /// (interactive clients that follow `terminal` stream events).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reply_now: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

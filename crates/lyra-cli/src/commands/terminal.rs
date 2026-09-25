@@ -115,6 +115,7 @@ pub fn input(
             run_id,
             input,
             expected_screen_revision,
+            reply_now: false,
         };
         let reply: PublicReply<TerminalSnapshot> =
             match client.call(Method::TerminalInputM, &p).await {

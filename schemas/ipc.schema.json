@@ -3059,6 +3059,10 @@
         "input": {
           "$ref": "#/$defs/TerminalInput"
         },
+        "reply_now": {
+          "description": "Reply with the current screen at once instead of waiting for the program to react\n(interactive clients that follow `terminal` stream events).",
+          "type": "boolean"
+        },
         "run_id": {
           "$ref": "#/$defs/RunId"
         }
