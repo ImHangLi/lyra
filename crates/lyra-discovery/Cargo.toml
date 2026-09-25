@@ -3,7 +3,6 @@ name = "lyra-discovery"
 description = "Bounded, read-only static discovery of project facts"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
