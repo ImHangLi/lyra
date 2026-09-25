@@ -9,7 +9,7 @@ use crate::ids::{ActionRef, CatalogRevision, Digest, LogSeq, RunId, SessionId, W
 use crate::lpp::HealthState;
 use crate::reply::PayloadRef;
 use crate::time::Timestamp;
-use crate::view::LogLevel;
+use crate::view::{Freshness, LogLevel};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -170,6 +170,25 @@ pub struct RunRecord {
     pub git: Option<GitContext>,
     /// Set when the reported state could not be confirmed (e.g. after a host crash).
     pub note: Option<String>,
+    /// How far this record can be trusted now (§14.6). Computed by the host on every read and
+    /// never stored; absent only in stored records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<RunProvenance>,
+}
+
+/// Read-time provenance of a run (§14.6): a success only proves that one execution, and a
+/// changed definition makes an old result stale evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunProvenance {
+    /// `current` while the run is active; `historical` once it ended with the same definition;
+    /// `stale` when the definition changed, the action is gone, or the outcome is unknown.
+    pub freshness: Freshness,
+    pub freshness_reason: String,
+    /// True when the action's current definition hash equals `definition_hash`.
+    pub definition_current: bool,
+    /// The action's definition hash now; `null` when the action no longer exists.
+    pub current_definition_hash: Option<Digest>,
 }
 
 /// The run summary carried in status and state events (§11.6).

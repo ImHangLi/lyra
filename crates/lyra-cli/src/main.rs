@@ -42,15 +42,24 @@ enum Command {
     },
     /// Current session, active runs, and storage/config warnings.
     Status,
-    /// Bounded tool catalog.
+    /// Bounded tool catalog (default 30 items within 32 KiB; continue with --after).
     Catalog {
         #[arg(long)]
         search: Option<String>,
         /// Return not_modified when the catalog revision still equals N.
         #[arg(long, value_name = "N")]
         if_revision: Option<u64>,
+        /// With --if-revision: the workspace ID the cached catalog came from.
+        #[arg(long, value_name = "WORKSPACE_ID", requires = "if_revision")]
+        if_workspace: Option<String>,
         #[arg(long)]
         limit: Option<u32>,
+        /// Continue from the previous reply's meta.next_cursor.
+        #[arg(long, value_name = "CURSOR")]
+        after: Option<String>,
+        /// Reply budget in bytes, envelope included (default 32 KiB, up to 256 KiB).
+        #[arg(long)]
+        max_bytes: Option<u32>,
     },
     /// Purpose, inputs, and invocation hints of one plugin.item.
     Describe {
@@ -58,6 +67,9 @@ enum Command {
         item: String,
         #[arg(long)]
         include_schema: bool,
+        /// Reply budget; schemas that do not fit are returned by payload reference.
+        #[arg(long)]
+        max_bytes: Option<u32>,
     },
     /// This workspace's config, state, log, cache, and runtime locations.
     Paths,
@@ -137,6 +149,8 @@ enum Command {
         limit: Option<u32>,
         #[arg(long, value_name = "CURSOR")]
         after: Option<String>,
+        #[arg(long)]
+        max_bytes: Option<u32>,
     },
     /// Bounded run output: the tail of the current or latest run by default.
     Logs {
@@ -192,6 +206,11 @@ enum Command {
         run: Option<String>,
         #[command(subcommand)]
         read: Option<ArtifactsCommand>,
+    },
+    /// Read host-held payloads referenced by meta.payload or result.payload.
+    Payload {
+        #[command(subcommand)]
+        command: PayloadCommand,
     },
     /// Accept a draft definition set (validate first; the catalog revision must match).
     Apply {
@@ -325,6 +344,23 @@ fn rewrite_input_text(args: Vec<String>) -> Vec<String> {
     out
 }
 
+#[derive(Subcommand)]
+enum PayloadCommand {
+    /// Read one bounded UTF-8 chunk (default 16 KiB); never re-runs the producing action.
+    Read {
+        #[arg(value_name = "TOKEN")]
+        token: String,
+        /// JSON Pointer selecting a subvalue first, e.g. /rows/0.
+        #[arg(long)]
+        pointer: Option<String>,
+        /// Byte offset of the selected serialization; continue with next_offset.
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+        #[arg(long)]
+        max_bytes: Option<u32>,
+    },
+}
+
 fn main() -> ExitCode {
     let args = rewrite_input_text(std::env::args().collect());
     let cli = match Cli::try_parse_from(&args) {
@@ -372,12 +408,26 @@ fn main() -> ExitCode {
         Some(Command::Catalog {
             search,
             if_revision,
+            if_workspace,
             limit,
-        }) => commands::inspect::catalog(&ctx, search, if_revision, limit),
+            after,
+            max_bytes,
+        }) => commands::inspect::catalog(
+            &ctx,
+            commands::inspect::CatalogArgs {
+                search,
+                if_revision,
+                if_workspace,
+                limit,
+                after,
+                max_bytes,
+            },
+        ),
         Some(Command::Describe {
             item,
             include_schema,
-        }) => commands::inspect::describe(&ctx, item, include_schema),
+            max_bytes,
+        }) => commands::inspect::describe(&ctx, item, include_schema, max_bytes),
         Some(Command::Run {
             action,
             input,
@@ -407,7 +457,8 @@ fn main() -> ExitCode {
             outcome,
             limit,
             after,
-        }) => commands::runtime::runs(&ctx, run, action, outcome, limit, after),
+            max_bytes,
+        }) => commands::runtime::runs(&ctx, run, action, outcome, limit, after, max_bytes),
         Some(Command::Logs {
             target,
             after,
@@ -452,6 +503,15 @@ fn main() -> ExitCode {
             key,
             expected_screen_revision,
         }) => commands::terminal::input(&ctx, &run, text, key, expected_screen_revision),
+        Some(Command::Payload {
+            command:
+                PayloadCommand::Read {
+                    token,
+                    pointer,
+                    offset,
+                    max_bytes,
+                },
+        }) => commands::payload::read(&ctx, token, pointer, offset, max_bytes),
         Some(Command::Paths) => commands::inspect::paths(&ctx),
         Some(Command::Doctor) => commands::inspect::doctor(&ctx),
         Some(Command::Host { root }) => match lyra_protocol::ids::AbsolutePath::from_path(&root) {

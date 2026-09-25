@@ -4,8 +4,12 @@
 //! The actor never awaits a child process, a file scan, or a storage commit inline.
 
 mod artifacts;
+mod budget;
 mod configure;
+mod cursor;
+mod payloads;
 mod plugin;
+mod reads;
 mod runs;
 mod schedule;
 mod session;
@@ -177,6 +181,7 @@ pub struct Actor {
     idle_since: Option<Instant>,
     views: views::ViewStore,
     artifacts: artifacts::Artifacts,
+    payloads: payloads::Payloads,
     cfg: configure::ConfigCtl,
     schedules: schedule::Schedules,
 }
@@ -259,6 +264,7 @@ impl Actor {
             idle_since: Some(Instant::now()),
             views: views::ViewStore::default(),
             artifacts: artifacts::Artifacts::default(),
+            payloads: payloads::Payloads::new(paths_for_cfg.state_dir.join("results")),
             cfg: configure::ConfigCtl::new(&paths_for_cfg),
             schedules: schedule::Schedules::default(),
         }
@@ -535,6 +541,7 @@ impl Actor {
             Method::ArtifactList => self.artifact_list(parse!(p), r),
             Method::ArtifactRead => self.artifact_read(parse!(p), r),
             Method::ScheduleSet => self.schedule_set(client, parse!(p), r),
+            Method::PayloadRead => self.payload_read(parse!(p), r),
             Method::ConfigApply => self.config_apply(parse!(p), r),
             Method::ConfigReload => {
                 let _: Empty = parse!(p);
@@ -588,7 +595,9 @@ impl Actor {
         });
         let mut storage_warnings = self.storage_warnings.clone();
         for r in self.runs.values() {
-            if let Ok(log) = r.log.lock()
+            // Never wait for a log a flooding runner holds: status must stay fast (§9.3). A
+            // busy log is checked again on the next status or state event.
+            if let Ok(log) = r.log.try_lock()
                 && let Some(e) = &log.write_error
             {
                 storage_warnings.push(Warning {
@@ -632,23 +641,61 @@ impl Actor {
             Ok(s) => s,
             Err(e) => return self.fail(e),
         };
-        if p.if_revision == Some(self.catalog_revision) {
+        let words: Vec<String> = p
+            .query
+            .as_deref()
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        let source = self.paths.id.to_string();
+        let filter = cursor::filter_hash(&serde_json::json!({ "query": words }));
+        let revision = self.catalog_revision;
+        // A cached catalog is valid only for the same workspace, query, and revision (§17.1).
+        let same_workspace = p.if_workspace.as_ref().is_none_or(|w| w == &self.paths.id);
+        if p.cursor.is_none() && same_workspace && p.if_revision == Some(revision) {
             let meta = ReplyMeta {
                 not_modified: true,
                 ..ReplyMeta::default()
             };
             return self.ok(CatalogList { items: vec![] }, meta);
         }
+        let offset = match p
+            .cursor
+            .as_deref()
+            .map(|c| cursor::decode(c, cursor::Kind::Catalog, &source, &filter))
+            .transpose()
+        {
+            Ok(None) => 0,
+            Ok(Some(c)) if c.revision != Some(revision.get()) => {
+                let mut argv = vec!["lyra", "catalog"];
+                let query = p.query.as_deref().unwrap_or_default();
+                if !words.is_empty() {
+                    argv.extend(["--search", query]);
+                }
+                return self.fail(
+                    ErrorInfo::new(
+                        ErrorCode::REVISION_CONFLICT,
+                        format!(
+                            "the catalog changed to revision {revision} after this cursor was issued; \
+                             earlier pages may be out of date"
+                        ),
+                    )
+                    .with_next_action(&argv, "Read the catalog again from the first page."),
+                );
+            }
+            Ok(Some(c)) => c.pos.o.unwrap_or(0) as usize,
+            Err(e) => return self.fail(e),
+        };
         let limit = p
             .limit
             .map_or(DEFAULT_CATALOG_LIMIT, |l| (l as usize).clamp(1, MAX_LIMIT));
-        let query = p.query.as_deref().map(str::to_lowercase);
+        let budget = budget::budget(p.max_bytes);
         let items: Vec<CatalogItem> = set
             .catalog()
             .into_iter()
-            .filter(|i| match &query {
-                None => true,
-                Some(q) => {
+            .filter(|i| {
+                words.is_empty() || {
                     let hay = format!(
                         "{} {} {} {}",
                         i.item_ref,
@@ -657,21 +704,59 @@ impl Actor {
                         i.tags.join(" ")
                     )
                     .to_lowercase();
-                    q.split_whitespace().all(|w| hay.contains(w))
+                    words.iter().all(|w| hay.contains(w.as_str()))
                 }
             })
             .collect();
-        let truncated = items.len() > limit;
-        let meta = ReplyMeta {
-            truncated,
-            ..ReplyMeta::default()
+        let start = offset.min(items.len());
+        let candidates = &items[start..(start + limit).min(items.len())];
+        let next = |taken: usize| {
+            (start + taken < items.len()).then(|| {
+                cursor::encode(
+                    cursor::Kind::Catalog,
+                    &source,
+                    &filter,
+                    cursor::Pos {
+                        o: Some((start + taken) as u64),
+                        ..cursor::Pos::default()
+                    },
+                    Some(revision.get()),
+                )
+            })
         };
-        self.ok(
-            CatalogList {
-                items: items.into_iter().take(limit).collect(),
-            },
-            meta,
-        )
+        let sizes: Vec<usize> = candidates.iter().map(budget::json_len).collect();
+        let fitted = budget::fit(&sizes, budget, |n| {
+            let next_cursor = next(n);
+            self.ok(
+                CatalogList {
+                    items: candidates[..n].to_vec(),
+                },
+                ReplyMeta {
+                    truncated: next_cursor.is_some(),
+                    next_cursor,
+                    ..ReplyMeta::default()
+                },
+            )
+        })?;
+        match fitted {
+            budget::Fit::Items { reply, .. } => Ok(reply),
+            budget::Fit::FirstTooLarge => {
+                let first = &candidates[0];
+                let payload = self.payloads.hold(
+                    Some(format!("catalog:{revision}:{}", first.item_ref)),
+                    serde_json::to_vec(first).unwrap_or_default(),
+                );
+                self.ok(
+                    CatalogList { items: vec![] },
+                    ReplyMeta {
+                        truncated: true,
+                        next_cursor: next(1),
+                        not_modified: false,
+                        payload: Some(payload),
+                    },
+                )
+            }
+        }
     }
 
     fn describe(&self, p: ItemDescribeParams) -> Handled {
@@ -750,16 +835,37 @@ impl Actor {
         } else {
             return self.fail(not_found());
         };
-        self.ok(
-            ItemDescription {
-                item,
-                plugin: summary,
-                action,
-                view,
-                invoke_hint: hint,
-            },
-            ReplyMeta::default(),
-        )
+        let mut desc = ItemDescription {
+            item,
+            plugin: summary,
+            action,
+            view,
+            invoke_hint: hint,
+        };
+        // Schemas are compact by default; requested schemas above the budget become a payload.
+        let mut meta = ReplyMeta::default();
+        let budget = budget::budget(p.max_bytes);
+        let reply = self.ok(&desc, ReplyMeta::default())?;
+        if budget::json_len(&reply) <= budget {
+            return Ok(reply);
+        }
+        if let Some(a) = desc.action.as_mut()
+            && (a.input_schema.is_some() || a.output_schema.is_some())
+        {
+            let schemas = serde_json::json!({
+                "input_schema": a.input_schema.take(),
+                "output_schema": a.output_schema.take(),
+            });
+            meta.truncated = true;
+            meta.payload = Some(self.payloads.hold(
+                Some(format!(
+                    "describe:{}:{}",
+                    desc.item.item_ref, desc.item.definition_hash
+                )),
+                serde_json::to_vec(&schemas).unwrap_or_default(),
+            ));
+        }
+        self.ok(desc, meta)
     }
 
     /// Increments `state_revision` and notifies state subscribers.

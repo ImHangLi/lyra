@@ -23,15 +23,12 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use super::runs::{decode_cursor, encode_cursor};
-use super::{Actor, MAX_LIMIT, Msg, Responder};
+use super::cursor::{self, Kind, Pos};
+use super::{Actor, Handled, MAX_LIMIT, Msg, Responder, budget};
 use crate::diag;
 use crate::storage::{Claim, KeyClaim, KeyScope, StorageError, StoredView};
 
 const DEFAULT_PAGE: usize = 100;
-const DEFAULT_BUDGET: usize = lyra_protocol::limits::DEFAULT_REPLY_BUDGET_BYTES;
-/// Reply envelope and snapshot metadata allowance inside the byte budget.
-const ENVELOPE_BYTES: usize = 1024;
 const COALESCE: Duration = Duration::from_secs(1);
 
 pub struct ViewEntry {
@@ -236,29 +233,13 @@ impl ViewEntry {
     }
 }
 
-fn byte_len<T: serde::Serialize>(v: &T) -> usize {
-    serde_json::to_vec(v).map_or(0, |b| b.len() + 1)
-}
-
-/// Takes items from `offset` while they fit `budget` (always at least one).
-fn page<T: Clone + serde::Serialize>(
-    all: &[T],
+/// The request side of one view page.
+struct Page<'a> {
+    source: &'a str,
+    revision: ViewRevision,
     offset: usize,
     limit: usize,
     budget: usize,
-) -> (Vec<T>, bool) {
-    let mut out = Vec::new();
-    let mut size = 0;
-    for item in all.iter().skip(offset).take(limit) {
-        let n = byte_len(item);
-        if !out.is_empty() && size + n > budget {
-            break;
-        }
-        size += n;
-        out.push(item.clone());
-    }
-    let more = offset + out.len() < all.len();
-    (out, more)
 }
 
 impl Actor {
@@ -278,10 +259,13 @@ impl Actor {
                 match storage.load_view(view_ref.clone()).await {
                     Ok(Some(sv)) => match decode_stored(&sv.data_json) {
                         Ok(data) => {
-                            // Restored data stays historical only when its source run's
-                            // committed record shows a successful end (§14.6).
-                            let stale = match &sv.source_run_id {
-                                None => None,
+                            // Data restored after a host restart is stale (§8.2, §14.6): it
+                            // shows what was recorded then, not what is true now.
+                            let at = sv.recorded_at;
+                            let stale = Some(match &sv.source_run_id {
+                                None => format!(
+                                    "restored after a host restart; published at {at} and not updated since"
+                                ),
                                 Some(id) => match storage.get_run(id.clone()).await {
                                     Ok(Some(rec))
                                         if rec.lifecycle
@@ -289,16 +273,18 @@ impl Actor {
                                                 outcome: Outcome::Succeeded,
                                             } =>
                                     {
-                                        None
+                                        format!(
+                                            "restored after a host restart; recorded at {at} by run {id}, which succeeded then; not re-checked since"
+                                        )
                                     }
-                                    Ok(Some(_)) => Some(format!(
-                                        "restored after a host restart; the source run {id} did not succeed"
-                                    )),
-                                    _ => Some(format!(
-                                        "restored after a host restart; the end of the source run {id} is unknown"
-                                    )),
+                                    Ok(Some(_)) => format!(
+                                        "restored after a host restart; recorded at {at} by run {id}, which did not succeed"
+                                    ),
+                                    _ => format!(
+                                        "restored after a host restart; recorded at {at} by run {id}, whose end is unknown"
+                                    ),
                                 },
-                            };
+                            });
                             self.views.entries.insert(
                                 view_ref,
                                 ViewEntry {
@@ -782,6 +768,8 @@ impl Actor {
         self.views
             .entries
             .retain(|_, e| e.persistence != Persistence::Session);
+        // Session payloads (view bodies and oversized items by reference) end here too.
+        self.payloads.clear_session();
     }
 
     fn freshness(&self, e: &ViewEntry, def: &ViewDefinition) -> (Freshness, String) {
@@ -824,13 +812,14 @@ impl Actor {
     }
 
     pub(super) fn view_read(&mut self, p: ViewReadParams, r: Responder) {
-        r.send(match self.view_read_inner(p) {
-            Ok((snap, meta)) => self.ok(snap, meta),
+        let reply = match self.view_read_inner(p) {
+            Ok(h) => h,
             Err(e) => self.fail(e),
-        });
+        };
+        r.send(reply);
     }
 
-    fn view_read_inner(&self, p: ViewReadParams) -> Result<(ViewSnapshot, ReplyMeta), ErrorInfo> {
+    fn view_read_inner(&self, p: ViewReadParams) -> Result<Handled, ErrorInfo> {
         let set = self.accepted()?;
         let (_, def) = set
             .view(&p.view_ref)
@@ -838,12 +827,7 @@ impl Actor {
         let limit = p
             .limit
             .map_or(DEFAULT_PAGE, |l| (l as usize).clamp(1, MAX_LIMIT));
-        let budget = p
-            .max_bytes
-            .map_or(DEFAULT_BUDGET, |b| {
-                (b as usize).clamp(1024, lyra_protocol::limits::MAX_REPLY_BUDGET_BYTES)
-            })
-            .saturating_sub(ENVELOPE_BYTES);
+        let budget = budget::budget(p.max_bytes);
         let Some(e) = self.views.entries.get(&p.view_ref) else {
             let (durability, reason) = match def.persistence {
                 Persistence::Session if self.session.is_none() => (
@@ -853,7 +837,7 @@ impl Actor {
                 Persistence::Session => (Durability::SessionOnly, "no data in this session yet"),
                 Persistence::Last => (Durability::Unavailable, "no data has been recorded"),
             };
-            return Ok((
+            return Ok(self.ok(
                 ViewSnapshot {
                     view_ref: p.view_ref,
                     view_revision: None,
@@ -870,17 +854,12 @@ impl Actor {
                 ReplyMeta::default(),
             ));
         };
+        let source = p.view_ref.to_string();
         let offset = match p.cursor.as_deref() {
             None => 0,
             Some(c) => {
-                let v = decode_cursor(c, "view")?;
-                if v.get("v").and_then(Value::as_str) != Some(p.view_ref.to_string().as_str()) {
-                    return Err(verr(
-                        ErrorCode::INVALID_ARGUMENT,
-                        "cursor belongs to another view",
-                    ));
-                }
-                if v.get("r").and_then(Value::as_u64) != Some(e.revision.get()) {
+                let c = cursor::decode(c, Kind::View, &source, "")?;
+                if c.revision != Some(e.revision.get()) {
                     return Err(verr(
                         ErrorCode::VIEW_CHANGED,
                         format!(
@@ -889,78 +868,151 @@ impl Actor {
                         ),
                     )
                     .with_next_action(
-                        &["lyra", "view", &p.view_ref.to_string()],
+                        &["lyra", "view", &source],
                         "Read the current revision from the start.",
                     ));
                 }
-                v.get("o").and_then(Value::as_u64).unwrap_or(0) as usize
+                c.pos.o.unwrap_or(0) as usize
             }
         };
-        let (body, more) = match &e.data {
-            ViewData::Table { columns, rows } => {
-                let (rows, more) = page(rows, offset, limit, budget);
-                (
-                    ViewBody::Inline(ViewData::Table {
-                        columns: columns.clone(),
-                        rows,
-                    }),
-                    more,
-                )
-            }
-            ViewData::Log { items } => {
-                let (items, more) = page(items, offset, limit, budget);
-                (ViewBody::Inline(ViewData::Log { items }), more)
-            }
+        let (freshness, reason) = self.freshness(e, def);
+        let snap = |data: ViewBody| ViewSnapshot {
+            view_ref: p.view_ref.clone(),
+            view_revision: Some(e.revision),
+            kind: e.data.kind(),
+            recorded_at: Some(e.recorded_at),
+            source_run_id: e.source_run_id.clone(),
+            source_kind: Some(e.source_kind),
+            definition_hash: e.definition_hash.clone(),
+            freshness,
+            freshness_reason: Some(reason.clone()),
+            durability: e.durability(self.storage.is_ok()),
+            data: Some(data),
+        };
+        let page = Page {
+            source: &source,
+            revision: e.revision,
+            offset,
+            limit,
+            budget,
+        };
+        Ok(match &e.data {
+            ViewData::Table { columns, rows } => self.view_page(
+                &page,
+                rows,
+                "row",
+                |rows| ViewData::Table {
+                    columns: columns.clone(),
+                    rows,
+                },
+                &snap,
+            ),
+            ViewData::Log { items } => self.view_page(
+                &page,
+                items,
+                "log item",
+                |items| ViewData::Log { items },
+                &snap,
+            ),
             other => {
-                let size = byte_len(other);
-                if size > budget {
-                    (
-                        ViewBody::Reference(ReferenceData {
-                            representation: ReferenceTag::Reference,
-                            summary: format!(
-                                "{} view data is {size} bytes, above the reply budget; retry with a larger --max-bytes (up to 256 KiB)",
-                                format!("{:?}", other.kind()).to_lowercase()
-                            ),
-                        }),
-                        false,
-                    )
-                } else {
-                    (ViewBody::Inline(other.clone()), false)
+                let reply = self.ok(snap(ViewBody::Inline(other.clone())), ReplyMeta::default());
+                match reply {
+                    Ok(v) if budget::json_len(&v) <= budget => Ok(v),
+                    Ok(_) => {
+                        let bytes = serde_json::to_vec(other).unwrap_or_default();
+                        let size = bytes.len();
+                        let payload = self
+                            .payloads
+                            .hold(Some(format!("view:{source}@{}", e.revision)), bytes);
+                        let summary = format!(
+                            "{} view data is {size} bytes, above the {budget}-byte reply budget; \
+                             read it with `lyra payload read <meta.payload.token>`",
+                            format!("{:?}", other.kind()).to_lowercase()
+                        );
+                        self.ok(
+                            snap(ViewBody::Reference(ReferenceData {
+                                representation: ReferenceTag::Reference,
+                                summary,
+                            })),
+                            ReplyMeta {
+                                truncated: true,
+                                payload: Some(payload),
+                                ..ReplyMeta::default()
+                            },
+                        )
+                    }
+                    Err(err) => Err(err),
                 }
             }
+        })
+    }
+
+    /// One page of table rows or log items within the budget. A first item that alone is
+    /// too large is returned by payload reference, and the cursor moves past it.
+    fn view_page<T: Clone + serde::Serialize>(
+        &self,
+        page: &Page<'_>,
+        all: &[T],
+        label: &str,
+        wrap: impl Fn(Vec<T>) -> ViewData,
+        snap: &dyn Fn(ViewBody) -> ViewSnapshot,
+    ) -> Handled {
+        let start = page.offset.min(all.len());
+        let candidates = &all[start..(start + page.limit).min(all.len())];
+        let next = |pos: usize| {
+            (pos < all.len()).then(|| {
+                cursor::encode(
+                    Kind::View,
+                    page.source,
+                    "",
+                    Pos {
+                        o: Some(pos as u64),
+                        ..Pos::default()
+                    },
+                    Some(page.revision.get()),
+                )
+            })
         };
-        let shown = match &body {
-            ViewBody::Inline(ViewData::Table { rows, .. }) => rows.len(),
-            ViewBody::Inline(ViewData::Log { items }) => items.len(),
-            _ => 0,
-        };
-        let truncated = more || matches!(body, ViewBody::Reference(_));
-        let next_cursor = more.then(|| {
-            encode_cursor(&json!({
-                "k": "view", "v": p.view_ref.to_string(), "r": e.revision.get(), "o": offset + shown,
-            }))
-        });
-        let (freshness, reason) = self.freshness(e, def);
-        Ok((
-            ViewSnapshot {
-                view_ref: p.view_ref,
-                view_revision: Some(e.revision),
-                kind: e.data.kind(),
-                recorded_at: Some(e.recorded_at),
-                source_run_id: e.source_run_id.clone(),
-                source_kind: Some(e.source_kind),
-                definition_hash: e.definition_hash.clone(),
-                freshness,
-                freshness_reason: Some(reason),
-                durability: e.durability(self.storage.is_ok()),
-                data: Some(body),
-            },
-            ReplyMeta {
-                truncated,
-                next_cursor,
-                ..ReplyMeta::default()
-            },
-        ))
+        let sizes: Vec<usize> = candidates.iter().map(budget::json_len).collect();
+        let fitted = budget::fit(&sizes, page.budget, |n| {
+            let next_cursor = next(start + n);
+            self.ok(
+                snap(ViewBody::Inline(wrap(candidates[..n].to_vec()))),
+                ReplyMeta {
+                    truncated: next_cursor.is_some(),
+                    next_cursor,
+                    ..ReplyMeta::default()
+                },
+            )
+        })?;
+        match fitted {
+            budget::Fit::Items { reply, .. } => Ok(reply),
+            budget::Fit::FirstTooLarge => {
+                let bytes = serde_json::to_vec(&candidates[0]).unwrap_or_default();
+                let size = bytes.len();
+                let payload = self.payloads.hold(
+                    Some(format!("view:{}@{}#{start}", page.source, page.revision)),
+                    bytes,
+                );
+                let summary = format!(
+                    "{label} {start} is {size} bytes, above the {}-byte reply budget; read it with \
+                     `lyra payload read <meta.payload.token>` and continue with next_cursor",
+                    page.budget
+                );
+                self.ok(
+                    snap(ViewBody::Reference(ReferenceData {
+                        representation: ReferenceTag::Reference,
+                        summary,
+                    })),
+                    ReplyMeta {
+                        truncated: true,
+                        next_cursor: next(start + 1),
+                        not_modified: false,
+                        payload: Some(payload),
+                    },
+                )
+            }
+        }
     }
 
     pub(super) fn view_publish(&mut self, p: ViewPublishParams, r: Responder) {

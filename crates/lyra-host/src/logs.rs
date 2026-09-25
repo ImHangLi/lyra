@@ -382,6 +382,47 @@ impl RunLog {
     }
 }
 
+impl RunLog {
+    /// Up to `limit` records with `from <= log_seq <= upto`, oldest first.
+    pub fn read_range(&mut self, from: u64, upto: u64, limit: usize) -> Vec<LogRecord> {
+        self.flush();
+        let in_range = |r: &LogRecord| (from..=upto).contains(&r.log_seq.get());
+        let ring_covers = self.ring.front().is_some_and(|r| r.log_seq.get() <= from);
+        if ring_covers || self.segments.is_empty() {
+            return self
+                .ring
+                .iter()
+                .filter(|r| in_range(r))
+                .take(limit)
+                .cloned()
+                .collect();
+        }
+        let mut out = Vec::new();
+        for (i, s) in self.segments.iter().enumerate() {
+            if s.first_seq > upto {
+                break;
+            }
+            // Skip segments that end before `from`.
+            if self
+                .segments
+                .get(i + 1)
+                .is_some_and(|next| next.first_seq <= from)
+            {
+                continue;
+            }
+            for r in read_segment(&self.dir.join(segment_name(s.number))) {
+                if in_range(&r) {
+                    out.push(r);
+                    if out.len() >= limit {
+                        return out;
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 /// Parses complete LF-terminated records; a torn final line is ignored.
 fn read_segment(path: &Path) -> Vec<LogRecord> {
     let Ok(f) = File::open(path) else {

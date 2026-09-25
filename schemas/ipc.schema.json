@@ -377,6 +377,10 @@
         "if_revision": {
           "$ref": "#/$defs/CatalogRevision"
         },
+        "if_workspace": {
+          "$ref": "#/$defs/WorkspaceId",
+          "description": "With `if_revision`: the workspace the cached catalog came from. A different workspace\nnever gets `not_modified`, even at an equal revision number (§17.1)."
+        },
         "limit": {
           "format": "uint32",
           "minimum": 0,
@@ -400,7 +404,7 @@
     },
     "ChunkData": {
       "additionalProperties": false,
-      "description": "A bounded UTF-8 chunk of an artifact or payload (§11.1).",
+      "description": "A bounded UTF-8 chunk of an artifact or payload (§11.1). For payloads, `sha256` is the\ndigest of the whole selected value (after `pointer`), so reassembled chunks can be checked.",
       "properties": {
         "done": {
           "type": "boolean"
@@ -920,6 +924,12 @@
         "include_schema": {
           "default": false,
           "type": "boolean"
+        },
+        "max_bytes": {
+          "description": "Reply budget; schemas that do not fit are returned by payload reference.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         },
         "ref": {
           "$ref": "#/$defs/ItemRef"
@@ -1818,10 +1828,49 @@
           "minimum": 0,
           "type": "integer"
         },
+        "max_bytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "outcome": {
           "$ref": "#/$defs/Outcome"
         }
       },
+      "type": "object"
+    },
+    "RunProvenance": {
+      "additionalProperties": false,
+      "description": "Read-time provenance of a run (§14.6): a success only proves that one execution, and a\nchanged definition makes an old result stale evidence.",
+      "properties": {
+        "current_definition_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Digest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The action's definition hash now; `null` when the action no longer exists."
+        },
+        "definition_current": {
+          "description": "True when the action's current definition hash equals `definition_hash`.",
+          "type": "boolean"
+        },
+        "freshness": {
+          "$ref": "#/$defs/Freshness",
+          "description": "`current` while the run is active; `historical` once it ended with the same definition;\n`stale` when the definition changed, the action is gone, or the outcome is unknown."
+        },
+        "freshness_reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "freshness",
+        "freshness_reason",
+        "definition_current"
+      ],
       "type": "object"
     },
     "RunRecord": {
@@ -1893,6 +1942,17 @@
             "string",
             "null"
           ]
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How far this record can be trusted now (§14.6). Computed by the host on every read and\nnever stored; absent only in stored records."
         },
         "reported_health": {
           "$ref": "#/$defs/ReportedHealth"

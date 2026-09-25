@@ -262,6 +262,15 @@ pub struct CatalogListParams {
     )]
     #[schemars(with = "CatalogRevision")]
     pub if_revision: Option<CatalogRevision>,
+    /// With `if_revision`: the workspace the cached catalog came from. A different workspace
+    /// never gets `not_modified`, even at an equal revision number (§17.1).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    #[schemars(with = "WorkspaceId")]
+    pub if_workspace: Option<WorkspaceId>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -292,6 +301,14 @@ pub struct ItemDescribeParams {
     pub item_ref: ItemRef,
     #[serde(default)]
     pub include_schema: bool,
+    /// Reply budget; schemas that do not fit are returned by payload reference.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    #[schemars(with = "u32")]
+    pub max_bytes: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -380,6 +397,13 @@ pub struct RunListParams {
     )]
     #[schemars(with = "u32")]
     pub limit: Option<u32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    #[schemars(with = "u32")]
+    pub max_bytes: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1073,7 +1097,8 @@ pub struct ArtifactListData {
     pub artifacts: Vec<ArtifactInfo>,
 }
 
-/// A bounded UTF-8 chunk of an artifact or payload (§11.1).
+/// A bounded UTF-8 chunk of an artifact or payload (§11.1). For payloads, `sha256` is the
+/// digest of the whole selected value (after `pointer`), so reassembled chunks can be checked.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChunkData {

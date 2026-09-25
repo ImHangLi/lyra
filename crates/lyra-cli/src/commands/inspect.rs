@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use lyra_client::ConnectOptions;
 use lyra_protocol::config::validate_draft;
-use lyra_protocol::ids::{CatalogRevision, ItemRef};
+use lyra_protocol::ids::{CatalogRevision, ItemRef, WorkspaceId};
 use lyra_protocol::ipc::*;
 use lyra_protocol::manifest::Runner;
 use lyra_protocol::paths::{WorkspacePaths, current_uid};
@@ -79,20 +79,40 @@ pub fn status(ctx: &Ctx) -> ExitCode {
     })
 }
 
-pub fn catalog(
-    ctx: &Ctx,
-    search: Option<String>,
-    if_revision: Option<u64>,
-    limit: Option<u32>,
-) -> ExitCode {
+pub struct CatalogArgs {
+    pub search: Option<String>,
+    pub if_revision: Option<u64>,
+    pub if_workspace: Option<String>,
+    pub limit: Option<u32>,
+    pub after: Option<String>,
+    pub max_bytes: Option<u32>,
+}
+
+pub fn catalog(ctx: &Ctx, args: CatalogArgs) -> ExitCode {
+    let CatalogArgs {
+        search,
+        if_revision,
+        if_workspace,
+        limit,
+        after,
+        max_bytes,
+    } = args;
     block_on(async {
-        let if_revision = match if_revision.map(CatalogRevision::new).transpose() {
-            Ok(r) => r,
+        let parsed = (|| {
+            let rev = if_revision
+                .map(CatalogRevision::new)
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            let ws = if_workspace
+                .map(WorkspaceId::parse)
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            Ok::<_, String>((rev, ws))
+        })();
+        let (if_revision, if_workspace) = match parsed {
+            Ok(v) => v,
             Err(e) => {
-                return ctx.fail(
-                    ReplyContext::default(),
-                    crate::output::invalid_argument(e.to_string()),
-                );
+                return ctx.fail(ReplyContext::default(), crate::output::invalid_argument(e));
             }
         };
         let mut client = match ctx.client(&ConnectOptions::cli()).await {
@@ -102,9 +122,10 @@ pub fn catalog(
         let p = CatalogListParams {
             query: search,
             if_revision,
-            cursor: None,
+            if_workspace,
+            cursor: after,
             limit,
-            max_bytes: None,
+            max_bytes,
         };
         match client
             .call::<_, CatalogList>(Method::CatalogListM, &p)
@@ -147,7 +168,7 @@ pub fn catalog(
     })
 }
 
-pub fn describe(ctx: &Ctx, item: String, include_schema: bool) -> ExitCode {
+pub fn describe(ctx: &Ctx, item: String, include_schema: bool, max_bytes: Option<u32>) -> ExitCode {
     block_on(async {
         let item_ref: ItemRef = match item.parse() {
             Ok(r) => r,
@@ -168,6 +189,7 @@ pub fn describe(ctx: &Ctx, item: String, include_schema: bool) -> ExitCode {
                 &ItemDescribeParams {
                     item_ref,
                     include_schema,
+                    max_bytes,
                 },
             )
             .await
