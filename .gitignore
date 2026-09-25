@@ -6,3 +6,6 @@
 .DS_Store
 *.swp
 /scratch/
+
+# Local agent state and worktrees
+/.claude/
