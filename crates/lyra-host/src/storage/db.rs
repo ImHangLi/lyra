@@ -668,6 +668,36 @@ impl Db {
         Ok((rev, hash))
     }
 
+    pub(super) fn set_schedule(&mut self, action_ref: &ActionRef, enabled: bool) -> Result<()> {
+        let tx = self.immediate("begin schedule update")?;
+        tx.execute(
+            "INSERT INTO schedule_settings (action_ref, enabled, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (action_ref) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at",
+            params![action_ref.to_string(), i64::from(enabled), Timestamp::now().unix_ms()],
+        )
+        .map_err(|e| sql("write schedule setting", e))?;
+        tx.commit().map_err(|e| sql("commit schedule setting", e))
+    }
+
+    pub(super) fn list_schedules(&mut self) -> Result<Vec<(ActionRef, bool)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT action_ref, enabled FROM schedule_settings ORDER BY action_ref")
+            .map_err(|e| sql("read schedule settings", e))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(|e| sql("read schedule settings", e))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (r, enabled) = row.map_err(|e| sql("read schedule setting", e))?;
+            // Rows for refs that no longer parse are ignored rather than failing the host.
+            if let Ok(action_ref) = r.parse::<ActionRef>() {
+                out.push((action_ref, enabled == 1));
+            }
+        }
+        Ok(out)
+    }
+
     pub(super) fn accept_catalog(&mut self, set_hash: &Digest) -> Result<CatalogRevision> {
         let (rev, hash) = self.catalog()?;
         if hash.as_ref() == Some(set_hash) {

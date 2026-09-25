@@ -92,6 +92,7 @@ impl Actor {
                     stopping: false,
                     env: env.clone(),
                 });
+                self.arm_enabled_schedules();
                 Ok(true)
             }
         }
@@ -214,6 +215,7 @@ impl Actor {
             return;
         };
         s.stopping = true;
+        self.disarm_schedules();
         let ids: Vec<_> = self.runs.keys().cloned().collect();
         for id in ids {
             self.stop_run(&id, reason);
@@ -226,6 +228,7 @@ impl Actor {
         if self.session.as_ref().is_some_and(|s| s.stopping) && self.runs.is_empty() {
             self.session = None;
             self.clear_session_views();
+            self.disarm_schedules();
         }
     }
 
@@ -234,8 +237,10 @@ impl Actor {
         if s.stopping {
             return;
         }
-        if let Some(Some((deadline, _))) = s.lease
-            && Instant::now() >= deadline
+        // Wall clock, not monotonic time: macOS monotonic time pauses during sleep, and the
+        // lease is an absolute deadline that must be checked after wake (§5.2).
+        if let Some(Some((_, wall))) = s.lease
+            && Timestamp::now() >= wall
         {
             diag("background lease expired: stopping the session");
             self.stop_session(StopReason::TtlExpired);

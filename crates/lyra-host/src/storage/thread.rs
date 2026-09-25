@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use hmac::{Hmac, KeyInit, Mac};
-use lyra_protocol::ids::{CatalogRevision, Digest, RunId, ViewRef};
+use lyra_protocol::ids::{ActionRef, CatalogRevision, Digest, RunId, ViewRef};
 use lyra_protocol::ipc::StorageStatusData;
 use lyra_protocol::paths::WorkspacePaths;
 use lyra_protocol::run::RunRecord;
@@ -38,6 +38,8 @@ enum Job {
     SaveView(Box<StoredView>, Reply<()>),
     LoadView(ViewRef, Reply<Option<StoredView>>),
     Status(Reply<StorageStatusData>),
+    SetSchedule(ActionRef, bool, Reply<()>),
+    ListSchedules(Reply<Vec<(ActionRef, bool)>>),
 }
 
 impl Job {
@@ -55,6 +57,8 @@ impl Job {
             Job::SaveView(v, tx) => drop(tx.send(db.save_view(&v))),
             Job::LoadView(v, tx) => drop(tx.send(db.load_view(&v))),
             Job::Status(tx) => drop(tx.send(db.status())),
+            Job::SetSchedule(a, e, tx) => drop(tx.send(db.set_schedule(&a, e))),
+            Job::ListSchedules(tx) => drop(tx.send(db.list_schedules())),
         }
     }
 }
@@ -172,6 +176,17 @@ impl Storage {
     }
     pub async fn load_view(&self, view: ViewRef) -> Result<Option<StoredView>, StorageError> {
         self.call(|tx| Job::LoadView(view, tx)).await
+    }
+    pub async fn set_schedule(
+        &self,
+        action_ref: ActionRef,
+        enabled: bool,
+    ) -> Result<(), StorageError> {
+        self.call(|tx| Job::SetSchedule(action_ref, enabled, tx))
+            .await
+    }
+    pub async fn list_schedules(&self) -> Result<Vec<(ActionRef, bool)>, StorageError> {
+        self.call(Job::ListSchedules).await
     }
     pub async fn status(&self) -> Result<StorageStatusData, StorageError> {
         self.call(Job::Status).await

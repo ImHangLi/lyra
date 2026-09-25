@@ -173,6 +173,26 @@
         "LAYER": "action",
         "API_TOKEN": "playground-secret-token"
       }
+    },
+    {
+      "id": "heartbeat",
+      "title": "Heartbeat",
+      "description": "Every 2 seconds, count TODO markers in README.md and record the result; no model or network.",
+      "mode": "task",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/heartbeat.py"
+        ]
+      },
+      "schedule": {
+        "every_ms": 2000
+      },
+      "effects": [
+        "read-files",
+        "writes-state"
+      ]
     }
   ]
 }

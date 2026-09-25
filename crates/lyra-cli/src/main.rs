@@ -205,6 +205,13 @@ enum Command {
     },
     /// Re-validate `.lyra` from disk; accept it only when valid.
     Reload,
+    /// Turn an action's interval schedule on or off (runs only inside a session).
+    Schedule {
+        #[arg(value_name = "ACTION")]
+        action: String,
+        #[arg(value_enum)]
+        switch: commands::schedule::Switch,
+    },
     /// Internal: serve the workspace host.
     #[command(name = "__host", hide = true)]
     Host {
@@ -362,6 +369,9 @@ fn main() -> ExitCode {
             expected_revision,
             request_key,
         }) => commands::config::apply(&ctx, &draft, expected_revision, request_key),
+        Some(Command::Schedule { action, switch }) => {
+            commands::schedule::set(&ctx, &action, switch)
+        }
         Some(Command::Reload) => commands::config::reload(&ctx),
         Some(Command::Setup { refresh }) => {
             commands::setup::run(mode, ctx.project.as_deref(), refresh)
