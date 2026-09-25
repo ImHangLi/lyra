@@ -10,6 +10,7 @@ mod cursor;
 mod payloads;
 mod plugin;
 mod reads;
+mod retention;
 mod runs;
 mod schedule;
 mod session;
@@ -124,6 +125,12 @@ pub enum Msg {
         revision: ViewRevision,
         error: Option<String>,
     },
+    /// Retention removed these views and runs.
+    ViewsCleaned {
+        views: Vec<(ViewRef, u64)>,
+        runs: Vec<RunId>,
+        at: i64,
+    },
     ScheduleSaved {
         params: ScheduleSetParams,
         saved: Result<(), ErrorInfo>,
@@ -184,6 +191,7 @@ pub struct Actor {
     payloads: payloads::Payloads,
     cfg: configure::ConfigCtl,
     schedules: schedule::Schedules,
+    last_gc: Option<Instant>,
 }
 
 fn load_config(paths: &WorkspacePaths) -> ConfigState {
@@ -267,6 +275,7 @@ impl Actor {
             payloads: payloads::Payloads::new(paths_for_cfg.state_dir.join("results")),
             cfg: configure::ConfigCtl::new(&paths_for_cfg),
             schedules: schedule::Schedules::default(),
+            last_gc: None,
         }
     }
 
@@ -361,6 +370,7 @@ impl Actor {
                     self.views_tick();
                     self.config_tick();
                     self.schedule_tick();
+                    self.retention_tick();
                     if self.idle_since.is_some_and(|t| t.elapsed() >= IDLE_EXIT) {
                         self.flush_views_now().await;
                         break;
@@ -428,6 +438,10 @@ impl Actor {
                 revision,
                 error,
             } => self.view_saved(view_ref, revision, error),
+            Msg::ViewsCleaned { views, runs, at } => {
+                self.payloads.forget_runs(&runs);
+                self.views_cleaned(views, at)
+            }
             Msg::ScheduleSaved {
                 params,
                 saved,
@@ -540,6 +554,9 @@ impl Actor {
             Method::ViewAction => self.view_action(client, parse!(p), r),
             Method::ArtifactList => self.artifact_list(parse!(p), r),
             Method::ArtifactRead => self.artifact_read(parse!(p), r),
+            Method::StorageStatus => self.storage_status(parse!(p), r),
+            Method::StorageGc => self.storage_gc(parse!(p), Some(r)),
+            Method::StorageClear => self.storage_clear(parse!(p), r),
             Method::ScheduleSet => self.schedule_set(client, parse!(p), r),
             Method::PayloadRead => self.payload_read(parse!(p), r),
             Method::ConfigApply => self.config_apply(parse!(p), r),

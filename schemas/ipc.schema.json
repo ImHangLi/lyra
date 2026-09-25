@@ -1285,6 +1285,36 @@
       ],
       "type": "string"
     },
+    "OtherWorkspace": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "log_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "state_bytes",
+        "log_bytes",
+        "cache_bytes"
+      ],
+      "type": "object"
+    },
     "Outcome": {
       "enum": [
         "succeeded",
@@ -2465,6 +2495,14 @@
     "StorageStatusData": {
       "additionalProperties": false,
       "properties": {
+        "other_workspaces": {
+          "default": [],
+          "description": "Other workspaces on this machine (`--all`); observed only, never started or cleaned.",
+          "items": {
+            "$ref": "#/$defs/OtherWorkspace"
+          },
+          "type": "array"
+        },
         "schema_version": {
           "format": "uint32",
           "minimum": 0,

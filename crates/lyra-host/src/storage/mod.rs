@@ -11,7 +11,7 @@ use lyra_protocol::time::Timestamp;
 use lyra_protocol::view::SourceKind;
 
 /// Current schema version written by this binary.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 /// View revisions are reserved in blocks of this size (§15.3).
 pub const VIEW_REVISION_BLOCK: u64 = 1024;
 
@@ -103,6 +103,32 @@ pub struct StoredView {
     pub source_kind: SourceKind,
     pub definition_hash: Digest,
     pub data_json: String,
+}
+
+/// Retention limits the ledger applies (§14.3); days are 24-hour periods.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GcPolicy {
+    pub history_days: u64,
+    pub runs_per_action: u64,
+    pub runs_per_workspace: u64,
+    pub view_days: u64,
+    pub log_days: u64,
+    pub artifact_days: u64,
+}
+
+/// Records selected for removal. Active runs are never selected.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GcSelection {
+    /// Finished runs whose summaries (and managed files) exceed retention.
+    pub runs: Vec<RunId>,
+    /// Kept runs whose logs are older than `log_days`.
+    pub old_logs: Vec<RunId>,
+    /// Kept runs whose artifacts are older than `artifact_days`.
+    pub old_artifacts: Vec<RunId>,
+    /// Finished runs, oldest first, for byte-quota trimming of logs and artifacts.
+    pub finished_oldest_first: Vec<RunId>,
+    pub views: Vec<(ViewRef, u64)>,
+    pub request_keys: u64,
 }
 
 /// What `open` found.

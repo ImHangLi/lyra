@@ -1052,6 +1052,18 @@ pub struct StorageStatusData {
     pub sqlite_version: String,
     pub usage: Vec<StorageUsage>,
     pub warnings: Vec<Warning>,
+    /// Other workspaces on this machine (`--all`); observed only, never started or cleaned.
+    #[serde(default)]
+    pub other_workspaces: Vec<OtherWorkspace>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OtherWorkspace {
+    pub id: String,
+    pub state_bytes: u64,
+    pub log_bytes: u64,
+    pub cache_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

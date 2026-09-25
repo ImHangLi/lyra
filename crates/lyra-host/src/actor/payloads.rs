@@ -307,6 +307,20 @@ impl Payloads {
         PayloadRef { token: t, ..r }
     }
 
+    /// Drops cached copies of retained results whose runs retention removed, so reads of
+    /// their tokens return PAYLOAD_GONE instead of serving a cleaned-up result.
+    pub fn forget_runs(&self, runs: &[RunId]) {
+        let ids: std::collections::HashSet<&str> = runs.iter().map(RunId::as_str).collect();
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.entries.retain(|e| {
+                parse_token(&e.token).map_or(true, |w| {
+                    !(matches!(w.m, Source::Run) && ids.contains(w.id.as_str()))
+                })
+            });
+            inner.bytes = inner.entries.iter().map(|e| e.data.len()).sum();
+        }
+    }
+
     /// Session payloads end with the session.
     pub fn clear_session(&self) {
         if let Ok(mut inner) = self.inner.lock() {

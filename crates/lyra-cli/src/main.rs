@@ -279,6 +279,11 @@ enum Command {
         #[arg(long, value_name = "N")]
         expected_screen_revision: Option<u64>,
     },
+    /// Storage usage, retention cleanup, and explicit private-state clearing.
+    Storage {
+        #[command(subcommand)]
+        command: StorageCommand,
+    },
     /// Internal: serve the workspace host.
     #[command(name = "__host", hide = true)]
     Host {
@@ -358,6 +363,39 @@ enum PayloadCommand {
         offset: u64,
         #[arg(long)]
         max_bytes: Option<u32>,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum GcKindArg {
+    Cache,
+    Logs,
+    History,
+    Artifacts,
+    All,
+}
+
+#[derive(Subcommand)]
+enum StorageCommand {
+    /// Managed usage by category and budget; `--all` also lists other workspaces (observe only).
+    Status {
+        #[arg(long)]
+        all: bool,
+    },
+    /// Plan retention cleanup; `--apply` deletes what the current policy allows.
+    Gc {
+        #[arg(long, value_enum, default_value = "all")]
+        kind: GcKindArg,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Delete one plugin's private state (only when it has no active run).
+    Clear {
+        #[arg(long)]
+        plugin: String,
+        /// Only `state` is supported.
+        #[arg(long, default_value = "state")]
+        kind: String,
     },
 }
 
@@ -528,6 +566,28 @@ fn main() -> ExitCode {
         Some(Command::Schedule { action, switch }) => {
             commands::schedule::set(&ctx, &action, switch)
         }
+        Some(Command::Storage { command }) => match command {
+            StorageCommand::Status { all } => commands::storage::status(&ctx, all),
+            StorageCommand::Gc { kind, apply } => {
+                use lyra_protocol::ipc::GcKind;
+                let kind = match kind {
+                    GcKindArg::Cache => GcKind::Cache,
+                    GcKindArg::Logs => GcKind::Logs,
+                    GcKindArg::History => GcKind::History,
+                    GcKindArg::Artifacts => GcKind::Artifacts,
+                    GcKindArg::All => GcKind::All,
+                };
+                commands::storage::gc(&ctx, kind, apply)
+            }
+            StorageCommand::Clear { plugin, kind } if kind == "state" => {
+                commands::storage::clear(&ctx, &plugin)
+            }
+            StorageCommand::Clear { .. } => output::fail(
+                mode,
+                ReplyContext::default(),
+                output::invalid_argument("only --kind state is supported"),
+            ),
+        },
         Some(Command::Reload) => commands::config::reload(&ctx),
         Some(Command::Setup { refresh }) => {
             commands::setup::run(mode, ctx.project.as_deref(), refresh)
