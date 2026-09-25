@@ -6,6 +6,7 @@ pub mod payload;
 pub mod runtime;
 pub mod schedule;
 pub mod setup;
+pub mod skills;
 pub mod storage;
 pub mod terminal;
 pub mod tui;
