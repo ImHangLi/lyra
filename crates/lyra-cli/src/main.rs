@@ -40,6 +40,35 @@ enum Command {
         #[arg(value_name = "DRAFT_DIR")]
         path: PathBuf,
     },
+    /// Current session, active runs, and storage/config warnings.
+    Status,
+    /// Bounded tool catalog.
+    Catalog {
+        #[arg(long)]
+        search: Option<String>,
+        /// Return not_modified when the catalog revision still equals N.
+        #[arg(long, value_name = "N")]
+        if_revision: Option<u64>,
+        #[arg(long)]
+        limit: Option<u32>,
+    },
+    /// Purpose, inputs, and invocation hints of one plugin.item.
+    Describe {
+        #[arg(value_name = "REF")]
+        item: String,
+        #[arg(long)]
+        include_schema: bool,
+    },
+    /// This workspace's config, state, log, cache, and runtime locations.
+    Paths,
+    /// Check the Core, configuration, socket, and required executables.
+    Doctor,
+    /// Internal: serve the workspace host.
+    #[command(name = "__host", hide = true)]
+    Host {
+        #[arg(long)]
+        root: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -79,8 +108,27 @@ fn main() -> ExitCode {
         }
     };
     let mode = Mode::resolve(cli.json, cli.text);
-    let _ = &cli.project;
+    let ctx = commands::ctx::Ctx {
+        mode,
+        project: cli.project.clone(),
+    };
     match cli.command {
+        Some(Command::Status) => commands::inspect::status(&ctx),
+        Some(Command::Catalog {
+            search,
+            if_revision,
+            limit,
+        }) => commands::inspect::catalog(&ctx, search, if_revision, limit),
+        Some(Command::Describe {
+            item,
+            include_schema,
+        }) => commands::inspect::describe(&ctx, item, include_schema),
+        Some(Command::Paths) => commands::inspect::paths(&ctx),
+        Some(Command::Doctor) => commands::inspect::doctor(&ctx),
+        Some(Command::Host { root }) => match lyra_protocol::ids::AbsolutePath::from_path(&root) {
+            Ok(root) => ExitCode::from(lyra_host::run(root)),
+            Err(_) => ExitCode::from(2),
+        },
         Some(Command::Schema { name }) => commands::contract::schema(mode, &name),
         Some(Command::Validate { path }) => commands::contract::validate(mode, &path),
         None => {

@@ -7,6 +7,7 @@ edition = "2024"
 base64 = "0.23.1"
 hex = "0.4.3"
 jsonschema = { version = "0.58.0", default-features = false }
+rustix = { version = "1.1.5", features = ["process", "fs"] }
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_jcs = "0.2.0"

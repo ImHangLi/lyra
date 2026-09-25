@@ -12,6 +12,7 @@ pub mod ipc;
 pub mod limits;
 pub mod lpp;
 pub mod manifest;
+pub mod paths;
 pub mod reply;
 pub mod run;
 pub mod schema_profile;
