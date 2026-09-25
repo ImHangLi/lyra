@@ -1,0 +1,8 @@
+set dotenv-load := false
+
+# Start everything
+up port="8080":
+    docker compose up
+
+@fmt:
+    go fmt ./...
