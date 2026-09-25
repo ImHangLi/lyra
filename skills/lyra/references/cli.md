@@ -6,7 +6,7 @@ All commands accept `--project PATH`, `--json`, `--text`. `REF` is `plugin.item`
 |---|---|
 | `lyra` | TUI for humans (needs a TTY; otherwise `TTY_REQUIRED`) |
 | `status` | session, controller count, background expiry, active runs, warnings |
-| `catalog [--search TEXT] [--if-revision N] [--limit N]` | bounded tool list |
+| `catalog [--search TEXT] [--if-revision N --if-workspace W] [--limit N] [--after CURSOR] [--max-bytes N]` | bounded tool list, paged by cursor |
 | `describe REF [--include-schema]` | purpose, runner, cwd, env names (never values), effects, invoke hint |
 | `run ACTION [--input FILE\|-] [--no-wait] [--request-key K]` | task; waits unless `--no-wait` (needs a session) |
 | `start ACTION [--input FILE\|-] [--request-key K]` | process; reuses the same running instance |
@@ -20,6 +20,12 @@ All commands accept `--project PATH`, `--json`, `--text`. `REF` is `plugin.item`
 | `view VIEW [--after CURSOR] [--limit N]`, `view-action VIEW ACTION --row ROW --expected-view-revision N` | typed data; row actions refuse stale rows (`VIEW_CHANGED`) |
 | `publish VIEW --input FILE\|- [--expected-view-revision N] [--request-key K]` | write one view frame without running a plugin |
 | `validate DRAFT_DIR`, `apply DRAFT_DIR --expected-revision N`, `reload` | config changes (see lyra-extend) |
+| `payload read TOKEN [--pointer P] [--offset N] [--max-bytes N]` | continue reading a large result or view in ≤16 KiB chunks; `PAYLOAD_GONE` = cleaned up |
+| `terminal RUN`, `input RUN --text TEXT \| --key KEY [--expected-screen-revision N]` | PTY screen and serial input (keys: enter, tab, escape, backspace, up/down/left/right, ctrl-c, ctrl-d, ctrl-z) |
+| `schedule ACTION on\|off` | persisted interval switch; runs only inside a session |
+| `artifacts [RUN]`, `artifacts read ID` | registered run outputs, bounded text reads |
+| `storage status [--all]`, `storage gc [--kind K] [--apply]`, `storage clear --plugin ID --kind state` | usage and retention; gc only plans without `--apply` |
+| `skills install --agent claude\|codex\|generic` | install/update these skills without overwriting edits |
 | `setup --json [--refresh]`, `doctor`, `paths`, `schema NAME` | setup facts, diagnostics, locations, JSON Schemas |
 
 ## Exit codes
@@ -38,3 +44,5 @@ All commands accept `--project PATH`, `--json`, `--text`. `REF` is `plugin.item`
 | `VIEW_CHANGED` | the table you acted on changed | re-read the view and choose again |
 | `OUTCOME_UNKNOWN` | the host stopped before the result was known | inspect state before repeating side effects |
 | `STORAGE_UNAVAILABLE` | a required record could not be saved; nothing new started | report it; `stop`/`down` still work |
+| `INPUT_BUSY` / `SCREEN_CHANGED` | someone else holds the terminal / the screen moved on | re-read `terminal RUN`, then retry |
+| `PAYLOAD_GONE` / `CURSOR_EXPIRED` | the data was cleaned up / the page no longer exists | read the run summary; do not rerun just to recreate history |
