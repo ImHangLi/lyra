@@ -11,8 +11,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::app::{App, Cmd, Focus, Inputs, Intent, Item, Modal};
+use crate::app::{App, Cmd, Entry, Focus, Inputs, Intent, Item, Modal, ViewItem};
+use crate::form::Kind;
 use crate::logs::{cells, display, slice_cells};
+use crate::views::{durability_word, freshness_word, kind_word};
 
 pub const MIN_W: u16 = 60;
 pub const MIN_H: u16 = 18;
@@ -85,8 +87,12 @@ pub fn draw(f: &mut Frame, app: &mut App, color: bool) {
     }
     draw_status(f, app, &t, status);
     draw_footer(f, app, &t, footer);
-    if matches!(app.modal, Modal::Help) {
-        draw_help(f, app, &t, area);
+    match &app.modal {
+        Modal::Help => draw_help(f, app, &t, area),
+        Modal::Form(_) => draw_form(f, app, &t, area),
+        Modal::Output(_) => draw_output(f, app, &t, area),
+        Modal::RowAction { .. } => draw_row_actions(f, app, &t, area),
+        _ => {}
     }
 }
 
@@ -186,6 +192,22 @@ fn state_label(app: &App, t: &Theme, item: &Item) -> (String, Style) {
     }
 }
 
+fn view_label(app: &App, t: &Theme, v: &ViewItem) -> (String, Style) {
+    let Some(p) = app.view_panes.get(&v.view_ref) else {
+        return (String::new(), Style::default());
+    };
+    match (&p.meta, p.revision()) {
+        (_, _) if p.error.is_some() => ("error".into(), t.fg(Color::Red)),
+        (None, _) => ("...".into(), t.dim()),
+        (Some(_), None) => ("no data".into(), t.dim()),
+        (Some(m), Some(_)) => match m.freshness {
+            lyra_protocol::view::Freshness::Current => ("current".into(), t.fg(Color::Green)),
+            lyra_protocol::view::Freshness::Historical => ("hist".into(), t.dim()),
+            lyra_protocol::view::Freshness::Stale => ("stale".into(), t.fg(Color::Yellow)),
+        },
+    }
+}
+
 fn draw_list(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     let w = area.width as usize;
     let mut rows: Vec<Line> = Vec::new();
@@ -196,7 +218,7 @@ fn draw_list(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                     "/{}  ({} of {})",
                     app.filter,
                     app.visible.len(),
-                    app.items.len()
+                    app.items.len() + app.views.len()
                 ),
                 0,
                 w,
@@ -204,7 +226,7 @@ fn draw_list(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
             t.dim(),
         )));
     }
-    if app.items.is_empty() {
+    if app.items.is_empty() && app.views.is_empty() {
         let msg = match &app.catalog_error {
             Some(e) => format!("Catalog unavailable: [{}] {}", e.code, e.message),
             None => "No actions in this workspace.".into(),
@@ -220,9 +242,25 @@ fn draw_list(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     }
     let mut sel_row = 0usize;
     let mut last_plugin: Option<String> = None;
-    for (vi, &ii) in app.visible.iter().enumerate() {
-        let item = &app.items[ii];
-        let plugin = item.action_ref.plugin.to_string();
+    for (vi, &entry) in app.visible.iter().enumerate() {
+        let (plugin, title, (state, style)) = match entry {
+            Entry::Action(i) => {
+                let item = &app.items[i];
+                (
+                    item.action_ref.plugin.to_string(),
+                    item.title.clone(),
+                    state_label(app, t, item),
+                )
+            }
+            Entry::View(i) => {
+                let v = &app.views[i];
+                (
+                    v.view_ref.plugin.to_string(),
+                    format!("[{}] {}", kind_word(v.kind), v.title),
+                    view_label(app, t, v),
+                )
+            }
+        };
         if last_plugin.as_deref() != Some(plugin.as_str()) {
             rows.push(Line::from(Span::styled(
                 slice_cells(&plugin.to_uppercase(), 0, w),
@@ -234,11 +272,10 @@ fn draw_list(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         if selected {
             sel_row = rows.len();
         }
-        let (state, style) = state_label(app, t, item);
         let sw = cells(&state);
         let marker = if selected { "> " } else { "  " };
         let title_w = w.saturating_sub(2 + sw + 1);
-        let title = slice_cells(&item.title, 0, title_w);
+        let title = slice_cells(&display(&title), 0, title_w);
         let pad = w.saturating_sub(2 + cells(&title) + sw);
         let base = if selected && app.focus == Focus::List {
             Style::default().add_modifier(Modifier::REVERSED)
@@ -274,6 +311,10 @@ fn ago(ts: Timestamp) -> String {
 }
 
 fn draw_detail(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
+    if app.selected_view().is_some() {
+        draw_view(f, app, t, area);
+        return;
+    }
     let Some(item) = app.selected_item() else {
         f.render_widget(Paragraph::new("Select a tool on the left."), area);
         return;
@@ -342,14 +383,43 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         "not running".to_owned()
     };
     let inputs = match app.inputs.get(&a).map(|(_, i)| i) {
-        Some(Inputs::Required(f)) => {
-            format!(" · needs input: {} (forms arrive in LYR-08)", f.join(", "))
+        Some(Inputs::Form(s)) => {
+            let req = crate::form::required_names(s);
+            if req.is_empty() {
+                " · input form (optional fields)".to_owned()
+            } else {
+                format!(" · input form, required: {}", req.join(", "))
+            }
         }
-        Some(Inputs::Optional(f)) => format!(" · optional input: {}", f.join(", ")),
         Some(Inputs::Unknown(m)) => format!(" · inputs unknown: {m}"),
         _ => String::new(),
     };
-    let l2 = format!("{state}{inputs}");
+    let sched = if app.has_schedule(&a) && app.schedule_of(&a).is_none() {
+        " · schedule off (never switched on; t turns it on)".to_owned()
+    } else {
+        String::new()
+    };
+    let sched = app.schedule_of(&a).map_or(sched, |sc| {
+        let every = sc.every_ms / 1000;
+        let every = if every >= 60 && every % 60 == 0 {
+            format!("{}m", every / 60)
+        } else {
+            format!("{every}s")
+        };
+        let next = sc
+            .next_at
+            .map_or(String::new(), |n| format!(", next {}", app.clock(n, true)));
+        let missed = if sc.missed_ticks > 0 {
+            format!(", {} skipped tick(s)", sc.missed_ticks)
+        } else {
+            String::new()
+        };
+        format!(
+            " · schedule {} every {every}{next}{missed}",
+            if sc.enabled { "ON" } else { "off" }
+        )
+    });
+    let l2 = format!("{state}{inputs}{sched}");
     let l3 = display(&item.description);
     let [head, bar, body] = Layout::vertical([
         Constraint::Length(3),
@@ -499,15 +569,13 @@ fn draw_status(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
             };
             (format!("{what}: /{text}_"), t.bold())
         }
-        Modal::Confirm {
-            action_ref, fields, ..
-        } => (
-            format!(
-                "{action_ref} takes optional input ({}); input forms arrive in LYR-08. Run with defaults?",
-                fields.join(", ")
+        Modal::Command { text, error } => match error {
+            Some(e) => (format!(":{text}_   {e}"), t.bold()),
+            None => (
+                format!(":{text}_   {}", crate::cmdbar::hint(text)),
+                t.bold(),
             ),
-            t.bold(),
-        ),
+        },
         _ => {
             if let Some(n) = &app.notice {
                 (
@@ -600,8 +668,13 @@ fn draw_help(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
             ]));
         }
         lines.push(Line::from(""));
+        lines.push(Line::from(if app.mouse {
+            "Mouse mode is on (m): the wheel scrolls; terminal selection needs Option/Shift."
+        } else {
+            "Mouse mode is off (m turns it on): your terminal's own text selection works."
+        }));
         lines.push(Line::from(
-            "Mouse is off, so your terminal's own text selection works.",
+            ": runs one public lyra command (not a shell). Forms: Tab moves, Enter runs.",
         ));
         lines.push(Line::from(
             "q and Ctrl-C close this TUI; the host stops owned work only when no controller or",
@@ -619,4 +692,355 @@ fn draw_help(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         Paragraph::new(saved_modal_bindings).block(Block::bordered().title(" Help · Esc closes ")),
         rect,
     );
+}
+
+fn centered(area: Rect, w: u16, h: u16) -> Rect {
+    let w = w.min(area.width.saturating_sub(2)).max(1);
+    let h = h.min(area.height.saturating_sub(2)).max(1);
+    Rect {
+        x: area.x + (area.width - w) / 2,
+        y: area.y + (area.height - h) / 2,
+        width: w,
+        height: h,
+    }
+}
+
+fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
+    let Some(v) = app.selected_view() else {
+        return;
+    };
+    let w = area.width as usize;
+    let r = v.view_ref.clone();
+    let title = display(&v.title);
+    let kind = kind_word(v.kind);
+    let description = display(&v.description);
+    let offset = app.offset;
+    let focus = app.focus == Focus::Logs;
+    let clock = |ts: Timestamp| {
+        let nanos = i128::from(ts.unix_ms()) * 1_000_000;
+        time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
+            .map(|d| {
+                let d = d.to_offset(offset);
+                format!("{:02}:{:02}:{:02}", d.hour(), d.minute(), d.second())
+            })
+            .unwrap_or_else(|_| "--:--:--".into())
+    };
+    let Some(p) = app.view_panes.get_mut(&r) else {
+        f.render_widget(Paragraph::new("loading..."), area);
+        return;
+    };
+    let [head, bar, body] = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    let l1 = Line::from(vec![
+        Span::styled(slice_cells(&title, 0, w / 2), t.bold()),
+        Span::raw(format!("  {r}  {kind} view")),
+    ]);
+    // Source, freshness, durability, and time are always shown; freshness never by color alone.
+    let (l2, l2_style) = match &p.meta {
+        None => ("reading...".to_owned(), Style::default()),
+        Some(m) => match m.revision {
+            None => (
+                format!(
+                    "no data: {} (this is not an empty result)",
+                    m.freshness_reason.clone().unwrap_or_default()
+                ),
+                t.fg(Color::Yellow),
+            ),
+            Some(rev) => {
+                let src = match (m.source_kind, &m.source_run_id) {
+                    (_, Some(run)) => format!("from run {run}"),
+                    (Some(k), None) => format!(
+                        "published by {}",
+                        serde_json::to_value(k)
+                            .ok()
+                            .and_then(|v| v.as_str().map(str::to_owned))
+                            .unwrap_or_default()
+                    ),
+                    (None, None) => String::new(),
+                };
+                let at = m.recorded_at.map_or(String::new(), |a| {
+                    format!("recorded {} ({} ago)", clock(a), ago(a))
+                });
+                let why = match (&m.freshness, &m.freshness_reason) {
+                    (lyra_protocol::view::Freshness::Current, _) | (_, None) => String::new(),
+                    (_, Some(reason)) => format!(": {reason}"),
+                };
+                let style = match m.freshness {
+                    lyra_protocol::view::Freshness::Stale => t.fg(Color::Yellow),
+                    _ => Style::default(),
+                };
+                (
+                    format!(
+                        "rev {rev} · {}{why} · {at} · {src} · {}",
+                        freshness_word(m.freshness),
+                        durability_word(m.durability)
+                    ),
+                    style,
+                )
+            }
+        },
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            l1,
+            Line::from(Span::styled(slice_cells(&display(&l2), 0, w), l2_style)),
+            Line::from(Span::styled(slice_cells(&description, 0, w), t.dim())),
+        ]),
+        head,
+    );
+    let mut bar_text = format!(
+        "VIEW · {} {}",
+        p.len(),
+        match p.kind {
+            lyra_protocol::manifest::ViewKind::Table => "rows",
+            lyra_protocol::manifest::ViewKind::Log => "items",
+            lyra_protocol::manifest::ViewKind::Tree => "shown nodes",
+            _ => "lines",
+        }
+    );
+    if p.len() > 0 {
+        bar_text.push_str(&format!(" · at {}", p.cursor + 1));
+    }
+    if let (Some(sel), Some(cur)) = (p.sel_rev, p.revision())
+        && sel != cur
+    {
+        bar_text.push_str(&format!(" · row chosen in rev {sel}"));
+    }
+    if !p.row_actions.is_empty() {
+        let names: Vec<String> = p.row_actions.iter().map(ToString::to_string).collect();
+        bar_text.push_str(&format!(" · row actions: {}", names.join(", ")));
+    }
+    if p.wrap {
+        bar_text.push_str(" · wrap");
+    } else if p.hscroll > 0 && p.kind != lyra_protocol::manifest::ViewKind::Table {
+        bar_text.push_str(&format!(" · col +{}", p.hscroll));
+    }
+    if p.truncated {
+        bar_text.push_str(" · partial: the host sent only part of this view");
+    }
+    if p.loading {
+        bar_text.push_str(" · reading...");
+    }
+    if let Some(n) = &p.note {
+        bar_text.push_str(&format!(" · {n}"));
+    }
+    let bar_style = if focus {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default().add_modifier(Modifier::UNDERLINED)
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            format!("{:<w$}", slice_cells(&display(&bar_text), 0, w), w = w),
+            bar_style,
+        )),
+        bar,
+    );
+    p.height = body.height as usize;
+    p.width = w;
+    if let Some(e) = &p.error {
+        f.render_widget(
+            Paragraph::new(format!("Cannot read the view: {e}"))
+                .wrap(ratatui::widgets::Wrap { trim: true }),
+            body,
+        );
+        return;
+    }
+    match &p.body {
+        crate::views::Body::Reference(summary) => {
+            f.render_widget(
+                Paragraph::new(format!(
+                    "{summary}\nUse `: view {r} --max-bytes 262144` for the full value."
+                ))
+                .wrap(ratatui::widgets::Wrap { trim: true }),
+                body,
+            );
+            return;
+        }
+        crate::views::Body::Empty => {
+            let msg = if p.meta.is_none() {
+                "reading...".to_owned()
+            } else {
+                "No data is recorded for this view. That is different from an empty result."
+                    .to_owned()
+            };
+            f.render_widget(Paragraph::new(msg), body);
+            return;
+        }
+        crate::views::Body::Data(_) => {}
+    }
+    if p.len() == 0 {
+        f.render_widget(Paragraph::new("(the view is empty)"), body);
+        return;
+    }
+    let lines = p.lines(focus);
+    f.render_widget(Paragraph::new(lines), body);
+}
+
+fn draw_form(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
+    let Modal::Form(form) = &app.modal else {
+        return;
+    };
+    let rect = centered(area, 90, area.height.saturating_sub(2));
+    let inner_w = rect.width.saturating_sub(2) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    let mut focus_line = 0usize;
+    for (i, fl) in form.fields.iter().enumerate() {
+        let focused = i == form.focus;
+        if focused {
+            focus_line = lines.len();
+        }
+        let label = format!(
+            "{}{}{}",
+            if focused { "> " } else { "  " },
+            display(&fl.title),
+            if fl.required { " *" } else { "" }
+        );
+        let mut value = fl.shown();
+        if focused && !matches!(fl.kind, Kind::Boolean | Kind::Enum(_)) {
+            value.push('_');
+        }
+        let label_w = 22.min(inner_w / 3);
+        let value_w = inner_w.saturating_sub(label_w + 1);
+        // Keep the end of long values (the typing position) visible.
+        let vw = cells(&value);
+        let shown = if vw > value_w {
+            slice_cells(&value, vw - value_w, value_w)
+        } else {
+            value
+        };
+        let st = if focused {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:<label_w$}", slice_cells(&label, 0, label_w)),
+                t.bold(),
+            ),
+            Span::raw(" "),
+            Span::styled(shown, st),
+        ]));
+        let mut hint = fl.hint();
+        if !fl.description.is_empty() {
+            hint = if hint.is_empty() {
+                display(&fl.description)
+            } else {
+                format!("{} · {hint}", display(&fl.description))
+            };
+        }
+        if !hint.is_empty() {
+            lines.push(Line::from(Span::styled(
+                slice_cells(&format!("    {hint}"), 0, inner_w),
+                t.dim(),
+            )));
+        }
+        if let Some(e) = &fl.error {
+            lines.push(Line::from(Span::styled(
+                slice_cells(&display(&format!("    ! {e}")), 0, inner_w),
+                t.fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+        }
+    }
+    let mut foot = vec![Line::from("")];
+    if let Some(e) = &form.error {
+        foot.push(Line::from(Span::styled(
+            slice_cells(&display(e), 0, inner_w),
+            t.fg(Color::Red).add_modifier(Modifier::BOLD),
+        )));
+    }
+    foot.push(Line::from(Span::styled(
+        slice_cells(
+            if form.pending {
+                "sending to the host..."
+            } else {
+                "* required · empty fields use the declared default · the host validates again"
+            },
+            0,
+            inner_w,
+        ),
+        t.dim(),
+    )));
+    let body_h = (rect.height as usize).saturating_sub(2 + foot.len());
+    let skip = focus_line.saturating_sub(body_h.saturating_sub(3));
+    let mut shown: Vec<Line> = lines.into_iter().skip(skip).take(body_h).collect();
+    while shown.len() < body_h {
+        shown.push(Line::from(""));
+    }
+    shown.extend(foot);
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        Paragraph::new(shown).block(Block::bordered().title(format!(
+            " {} {} ",
+            match form.intent {
+                Intent::Restart => "Run again",
+                _ => "Run",
+            },
+            form.action_ref
+        ))),
+        rect,
+    );
+}
+
+fn draw_output(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
+    let Modal::Output(o) = &app.modal else {
+        return;
+    };
+    let rect = centered(area, 100, area.height.saturating_sub(2));
+    let w = rect.width.saturating_sub(2) as usize;
+    let h = rect.height.saturating_sub(2) as usize;
+    let lines: Vec<Line> = o
+        .lines
+        .iter()
+        .skip(o.top)
+        .take(h)
+        .map(|l| Line::from(slice_cells(&display(l), 0, w)))
+        .collect();
+    f.render_widget(Clear, rect);
+    let title_style = if o.failed {
+        t.fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else {
+        t.bold()
+    };
+    f.render_widget(
+        Paragraph::new(lines).block(Block::bordered().title(Span::styled(
+            format!(" {} ", display(&o.title)),
+            title_style,
+        ))),
+        rect,
+    );
+}
+
+fn draw_row_actions(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
+    let Modal::RowAction {
+        choices,
+        index,
+        view_ref,
+    } = &app.modal
+    else {
+        return;
+    };
+    let rect = centered(area, 50, choices.len() as u16 + 4);
+    let mut lines = vec![Line::from(Span::styled(
+        "Run for the selected row:",
+        t.bold(),
+    ))];
+    for (i, c) in choices.iter().enumerate() {
+        let st = if i == *index {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {}.{c}", view_ref.plugin),
+            st,
+        )));
+    }
+    f.render_widget(Clear, rect);
+    f.render_widget(Paragraph::new(lines).block(Block::bordered()), rect);
 }

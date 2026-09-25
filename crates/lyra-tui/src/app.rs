@@ -7,18 +7,21 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use lyra_protocol::error::ErrorInfo;
-use lyra_protocol::ids::{ActionRef, Digest, RunId, SessionId};
+use lyra_protocol::ids::{ActionId, ActionRef, Digest, ItemRef, RunId, SessionId, ViewRef};
 use lyra_protocol::ipc::*;
-use lyra_protocol::manifest::{ActionMode, JsonObject};
+use lyra_protocol::manifest::{ActionMode, JsonObject, ViewKind};
 use lyra_protocol::run::{ExitInfo, Lifecycle, RunRecord, RunSummary};
 use lyra_protocol::time::Timestamp;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::clip;
+use crate::cmdbar;
+use crate::form::{self, Form, Outcome};
 use crate::ipc::{Control, Event, LogChunk, Read, Tx};
 use crate::logs::LogPane;
 use crate::terminal::Terminals;
+use crate::views::ViewPane;
 
 const MAX_PANES: usize = 8;
 const NOTICE_SECS: u64 = 8;
@@ -33,11 +36,27 @@ pub struct Item {
     pub definition_hash: Digest,
 }
 
+pub struct ViewItem {
+    pub view_ref: ViewRef,
+    pub title: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub kind: ViewKind,
+}
+
+/// One row of the tool list: an action or a view of some plugin.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Entry {
+    Action(usize),
+    View(usize),
+}
+
 pub enum Inputs {
     Loading,
+    /// No input properties: runs directly.
     Free,
-    Optional(Vec<String>),
-    Required(Vec<String>),
+    /// The input schema; a form collects the values.
+    Form(JsonObject),
     Unknown(String),
 }
 
@@ -54,10 +73,19 @@ pub enum Modal {
         text: String,
         prev_filter: String,
     },
-    Confirm {
-        action_ref: ActionRef,
-        intent: Intent,
-        fields: Vec<String>,
+    Form(Box<Form>),
+    /// The `:` command bar.
+    Command {
+        text: String,
+        error: Option<String>,
+    },
+    /// Output of a command-bar command.
+    Output(Box<cmdbar::Output>),
+    /// Choose which row action to run on the selected table row.
+    RowAction {
+        view_ref: ViewRef,
+        choices: Vec<ActionId>,
+        index: usize,
     },
     Help,
 }
@@ -99,6 +127,10 @@ pub enum Cmd {
     Detach,
     /// Keys go to the attached program (footer entry only).
     Forward,
+    Command,
+    Schedule,
+    Mouse,
+    CopyAll,
 }
 
 pub struct Binding {
@@ -146,6 +178,7 @@ enum OpenKind {
     Start,
     Logs,
     NeedsInput,
+    Form,
 }
 
 pub struct Io {
@@ -159,9 +192,22 @@ pub struct App {
     pub root: String,
     pub offset: time::UtcOffset,
     pub items: Vec<Item>,
+    pub views: Vec<ViewItem>,
+    plugin_order: Vec<String>,
+    pub view_panes: HashMap<ViewRef, ViewPane>,
+    pub schedules: Vec<ScheduleData>,
+    /// Last visible (never write-only) form values per action, to prefill the next form.
+    last_inputs: HashMap<ActionRef, Map<String, Value>>,
+    /// Application mouse mode; off keeps the terminal's own selection.
+    pub mouse: bool,
+    /// A mouse-mode change the render loop still has to apply.
+    pub mouse_changed: Option<bool>,
+    status_at: Option<Instant>,
+    /// Actions whose description declares a schedule.
+    scheduled: std::collections::HashSet<ActionRef>,
     pub catalog_error: Option<ErrorInfo>,
     pub filter: String,
-    pub visible: Vec<usize>,
+    pub visible: Vec<Entry>,
     pub selected: usize,
     pub list_offset: usize,
     pub focus: Focus,
@@ -175,7 +221,7 @@ pub struct App {
     pub config_warnings: Vec<Warning>,
     pub last: HashMap<ActionRef, LastRun>,
     pub pending: HashMap<ActionRef, Intent>,
-    restart_after: HashMap<ActionRef, RunId>,
+    restart_after: HashMap<ActionRef, (RunId, JsonObject)>,
     pub inputs: HashMap<ActionRef, (Digest, Inputs)>,
     queued: Option<(ActionRef, Intent)>,
     pub panes: HashMap<ActionRef, LogPane>,
@@ -198,6 +244,15 @@ impl App {
             root,
             offset,
             items: Vec::new(),
+            views: Vec::new(),
+            plugin_order: Vec::new(),
+            view_panes: HashMap::new(),
+            schedules: Vec::new(),
+            last_inputs: HashMap::new(),
+            mouse: false,
+            mouse_changed: None,
+            status_at: None,
+            scheduled: Default::default(),
             catalog_error: None,
             filter: String::new(),
             visible: Vec::new(),
@@ -238,12 +293,17 @@ impl App {
     }
 
     pub fn set_catalog(&mut self, list: CatalogList) {
-        let keep = self.selected_ref();
-        self.items = list
-            .items
-            .into_iter()
-            .filter_map(|i| match i.item {
-                CatalogItemKind::Action { mode } => Some(Item {
+        let keep = self.selected_key();
+        let mut order: Vec<String> = Vec::new();
+        self.items.clear();
+        self.views.clear();
+        for i in list.items {
+            let p = i.item_ref.plugin.to_string();
+            if !order.contains(&p) {
+                order.push(p);
+            }
+            match i.item {
+                CatalogItemKind::Action { mode } => self.items.push(Item {
                     action_ref: i.item_ref.as_action(),
                     title: i.title,
                     description: i.description,
@@ -252,23 +312,23 @@ impl App {
                     enabled: i.enabled,
                     definition_hash: i.definition_hash,
                 }),
-                CatalogItemKind::View { .. } => None,
-            })
-            .collect();
-        // Group by plugin, keeping catalog order inside and between groups.
-        let mut order: Vec<String> = Vec::new();
-        for i in &self.items {
-            let p = i.action_ref.plugin.to_string();
-            if !order.contains(&p) {
-                order.push(p);
+                CatalogItemKind::View { view_kind } => self.views.push(ViewItem {
+                    view_ref: i.item_ref.as_view(),
+                    title: i.title,
+                    description: i.description,
+                    tags: i.tags,
+                    kind: view_kind,
+                }),
             }
         }
-        self.items.sort_by_key(|i| {
-            order
-                .iter()
-                .position(|p| *p == i.action_ref.plugin.as_str())
-                .unwrap_or(usize::MAX)
-        });
+        self.plugin_order = order;
+        // Views that no longer exist lose their panel; the others read again.
+        let known: Vec<ViewRef> = self.views.iter().map(|v| v.view_ref.clone()).collect();
+        self.view_panes.retain(|r, _| known.contains(r));
+        let refs: Vec<ViewRef> = self.view_panes.keys().cloned().collect();
+        for r in refs {
+            self.load_view(&r);
+        }
         self.catalog_error = None;
         self.refilter(keep);
         self.on_select();
@@ -300,21 +360,72 @@ impl App {
                 },
             );
             let _ = self.io.read.send(Read::RunGet(r.run_id.clone()));
-            if self.restart_after.get(&a) == Some(&r.run_id) {
-                self.restart_after.remove(&a);
-                self.invoke(a);
+            if self
+                .restart_after
+                .get(&a)
+                .is_some_and(|(id, _)| *id == r.run_id)
+                && let Some((_, input)) = self.restart_after.remove(&a)
+            {
+                self.invoke(a, input);
             }
         }
         self.session = session;
         if let Some(a) = self.selected_ref() {
             self.sync_pane(&a);
         }
+        self.request_status();
+    }
+
+    /// Schedules come only with full status; read it at most once a second.
+    fn request_status(&mut self) {
+        if self
+            .status_at
+            .is_none_or(|t| t.elapsed().as_millis() >= 1000)
+        {
+            self.status_at = Some(Instant::now());
+            let _ = self.io.read.send(Read::Status);
+        }
+    }
+
+    /// The action declares an interval schedule (switched on or not yet).
+    pub fn has_schedule(&self, a: &ActionRef) -> bool {
+        self.scheduled.contains(a) || self.schedule_of(a).is_some()
+    }
+
+    pub fn schedule_of(&self, a: &ActionRef) -> Option<&ScheduleData> {
+        self.schedules.iter().find(|s| &s.action_ref == a)
+    }
+
+    fn load_view(&mut self, view_ref: &ViewRef) {
+        let kind = self
+            .views
+            .iter()
+            .find(|v| &v.view_ref == view_ref)
+            .map(|v| v.kind);
+        let Some(kind) = kind else { return };
+        let p = self
+            .view_panes
+            .entry(view_ref.clone())
+            .or_insert_with(|| ViewPane::new(kind));
+        if p.loading {
+            p.reload = true;
+            return;
+        }
+        p.loading = true;
+        let _ = self.io.read.send(Read::View(view_ref.clone()));
     }
 
     pub fn handle(&mut self, ev: Event) {
         match ev {
             Event::Input(crossterm::event::Event::Key(k)) => self.key(k),
-            Event::Input(crossterm::event::Event::Paste(s)) => self.term.paste(s),
+            Event::Input(crossterm::event::Event::Paste(t)) => {
+                if self.term.is_open() {
+                    self.term.paste(t)
+                } else {
+                    self.paste(&t)
+                }
+            }
+            Event::Input(crossterm::event::Event::Mouse(m)) => self.mouse_event(m),
             Event::Input(_) => {}
             Event::Terminal(m) => self.term.handle(m),
             Event::Frame(frame) => self.frame(*frame),
@@ -325,6 +436,18 @@ impl App {
             Event::StreamDown(m) => self.stream_issue = Some(format!("event stream lost: {m}")),
             Event::Invoked(a, res, joined) => {
                 self.pending.remove(&a);
+                if let Modal::Form(f) = &mut self.modal
+                    && f.action_ref == a
+                {
+                    match &res {
+                        Ok(_) => self.modal = Modal::None,
+                        Err(e) => {
+                            f.apply_error(e);
+                            self.restart_after.remove(&a);
+                            return;
+                        }
+                    }
+                }
                 if joined.is_some() {
                     self.attached_to = joined;
                 }
@@ -375,7 +498,12 @@ impl App {
                     .ok()
                     .or_else(|| self.item(&a).map(|i| i.definition_hash.clone()));
                 let inputs = match res {
-                    Ok(d) => inputs_of(d.action.as_ref().and_then(|x| x.input_schema.as_ref())),
+                    Ok(d) => {
+                        if d.action.as_ref().is_some_and(|x| x.has_schedule) {
+                            self.scheduled.insert(a.clone());
+                        }
+                        inputs_of(d.action.as_ref().and_then(|x| x.input_schema.as_ref()))
+                    }
                     Err(e) => Inputs::Unknown(e.message),
                 };
                 if let Some(h) = hash {
@@ -434,6 +562,65 @@ impl App {
             Event::Copied(Ok(m)) => self.info(m),
             Event::Copied(Err(m)) => self.error(m),
             Event::Signal(name) => self.quit = Some(Quit::Normal(Some(name))),
+            Event::View(r, res) => {
+                let Some(p) = self.view_panes.get_mut(&r) else {
+                    return;
+                };
+                p.loading = false;
+                match res {
+                    Ok(load) => p.apply(load.snapshot, load.truncated),
+                    Err(e) => p.error = Some(format!("[{}] {}", e.code, e.message)),
+                }
+                if std::mem::take(&mut p.reload) {
+                    self.load_view(&r);
+                }
+            }
+            Event::ViewDescribed(r, res) => {
+                if let (Some(p), Ok(d)) = (self.view_panes.get_mut(&r), res) {
+                    p.row_actions = d.view.map(|v| v.row_actions).unwrap_or_default();
+                }
+            }
+            Event::ViewActed(r, action, res) => match res {
+                Ok(acc) => self.info(format!(
+                    "started {}.{action} for the selected row ({}); select that action to see its logs",
+                    r.plugin, acc.run_id
+                )),
+                Err(e) if e.code == lyra_protocol::ErrorCode::VIEW_CHANGED => {
+                    if let Some(p) = self.view_panes.get_mut(&r) {
+                        p.accept_current();
+                    }
+                    self.load_view(&r);
+                    self.error(format!(
+                        "VIEW_CHANGED, nothing was run: {} Showing the current revision; check the row, then press Enter again.",
+                        e.message
+                    ));
+                }
+                Err(e) => self.error_info(&format!("{}.{action} did not start", r.plugin), &e),
+            },
+            Event::ScheduleSet(a, res) => {
+                self.pending.remove(&a);
+                match res {
+                    Ok(d) => {
+                        self.info(format!(
+                            "schedule for {a} is {}",
+                            if d.enabled { "on" } else { "off" }
+                        ));
+                        self.status_at = None;
+                        self.request_status();
+                    }
+                    Err(e) => self.error_info(&format!("could not change the {a} schedule"), &e),
+                }
+            }
+            Event::Status(Ok(st)) => {
+                self.schedules = st.schedules;
+                self.config_warnings = st.config_warnings;
+            }
+            Event::Status(Err(_)) => {}
+            Event::CommandDone(out) => {
+                if matches!(self.modal, Modal::Command { .. } | Modal::None) {
+                    self.modal = Modal::Output(Box::new(out));
+                }
+            }
         }
     }
 
@@ -446,7 +633,13 @@ impl App {
                 }
                 self.storage_warnings = s.storage_warnings;
                 self.config_warnings = s.config_warnings;
+                self.schedules = s.schedules;
                 self.apply_runs(s.session, s.runs);
+                // Views may have changed while the stream was down.
+                let refs: Vec<ViewRef> = self.view_panes.keys().cloned().collect();
+                for r in refs {
+                    self.load_view(&r);
+                }
             }
             StreamEvent::State {
                 session,
@@ -460,6 +653,19 @@ impl App {
             StreamEvent::Log { run_id, records } => {
                 for p in self.panes.values_mut() {
                     p.append(&run_id, &records);
+                }
+            }
+            StreamEvent::View {
+                view_ref,
+                view_revision,
+            } => {
+                // Only opened views keep a panel; others read when they are selected.
+                if self
+                    .view_panes
+                    .get(&view_ref)
+                    .is_some_and(|p| p.revision() != Some(view_revision))
+                {
+                    self.load_view(&view_ref);
                 }
             }
             StreamEvent::Gap {
@@ -574,54 +780,105 @@ impl App {
         self.items.iter().find(|i| &i.action_ref == a)
     }
 
+    pub fn selected_entry(&self) -> Option<Entry> {
+        self.visible.get(self.selected).copied()
+    }
+
     pub fn selected_item(&self) -> Option<&Item> {
-        self.visible
-            .get(self.selected)
-            .and_then(|&i| self.items.get(i))
+        match self.selected_entry()? {
+            Entry::Action(i) => self.items.get(i),
+            Entry::View(_) => None,
+        }
+    }
+
+    pub fn selected_view(&self) -> Option<&ViewItem> {
+        match self.selected_entry()? {
+            Entry::View(i) => self.views.get(i),
+            Entry::Action(_) => None,
+        }
     }
 
     pub fn selected_ref(&self) -> Option<ActionRef> {
         self.selected_item().map(|i| i.action_ref.clone())
     }
 
-    fn refilter(&mut self, keep: Option<ActionRef>) {
+    pub fn selected_view_pane(&self) -> Option<&ViewPane> {
+        self.selected_view()
+            .and_then(|v| self.view_panes.get(&v.view_ref))
+    }
+
+    fn entry_key(&self, e: Entry) -> Option<ItemRef> {
+        match e {
+            Entry::Action(i) => self.items.get(i).map(|x| x.action_ref.to_item_ref()),
+            Entry::View(i) => self.views.get(i).map(|x| x.view_ref.to_item_ref()),
+        }
+    }
+
+    fn selected_key(&self) -> Option<ItemRef> {
+        self.selected_entry().and_then(|e| self.entry_key(e))
+    }
+
+    fn refilter(&mut self, keep: Option<ItemRef>) {
         let words: Vec<String> = self
             .filter
             .to_lowercase()
             .split_whitespace()
             .map(str::to_owned)
             .collect();
-        self.visible = self
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, i)| {
-                if words.is_empty() {
-                    return true;
+        let hit = |hay: String| {
+            let hay = hay.to_lowercase();
+            words.iter().all(|w| hay.contains(w.as_str()))
+        };
+        let mut out = Vec::new();
+        for p in &self.plugin_order {
+            for (n, i) in self.items.iter().enumerate() {
+                if i.action_ref.plugin.as_str() == p
+                    && hit(format!(
+                        "{} {} {} {}",
+                        i.action_ref,
+                        i.title,
+                        i.description,
+                        i.tags.join(" ")
+                    ))
+                {
+                    out.push(Entry::Action(n));
                 }
-                let hay = format!(
-                    "{} {} {} {}",
-                    i.action_ref,
-                    i.title,
-                    i.description,
-                    i.tags.join(" ")
-                )
-                .to_lowercase();
-                words.iter().all(|w| hay.contains(w.as_str()))
-            })
-            .map(|(n, _)| n)
-            .collect();
+            }
+            for (n, v) in self.views.iter().enumerate() {
+                if v.view_ref.plugin.as_str() == p
+                    && hit(format!(
+                        "{} {} {} {} {}",
+                        v.view_ref,
+                        v.title,
+                        v.description,
+                        v.tags.join(" "),
+                        crate::views::kind_word(v.kind)
+                    ))
+                {
+                    out.push(Entry::View(n));
+                }
+            }
+        }
+        self.visible = out;
         self.selected = keep
             .and_then(|k| {
                 self.visible
                     .iter()
-                    .position(|&i| self.items[i].action_ref == k)
+                    .position(|&e| self.entry_key(e).as_ref() == Some(&k))
             })
             .unwrap_or(0)
             .min(self.visible.len().saturating_sub(1));
     }
 
     fn on_select(&mut self) {
+        if let Some(v) = self.selected_view() {
+            let r = v.view_ref.clone();
+            if !self.view_panes.contains_key(&r) {
+                self.load_view(&r);
+                let _ = self.io.read.send(Read::DescribeView(r));
+            }
+            return;
+        }
         let Some(item) = self.selected_item() else {
             return;
         };
@@ -679,11 +936,16 @@ impl App {
 
     // ----- item actions -------------------------------------------------------------
 
-    fn required(&self, a: &ActionRef) -> Option<&[String]> {
+    fn schema(&self, a: &ActionRef) -> Option<&JsonObject> {
         match self.inputs.get(a) {
-            Some((_, Inputs::Required(f))) => Some(f),
+            Some((_, Inputs::Form(s))) => Some(s),
             _ => None,
         }
+    }
+
+    fn required(&self, a: &ActionRef) -> bool {
+        self.schema(a)
+            .is_some_and(|s| !form::required_names(s).is_empty())
     }
 
     fn can_act(&self, item: &Item) -> bool {
@@ -698,8 +960,10 @@ impl App {
         if !self.can_act(item) {
             return None;
         }
-        if self.required(&item.action_ref).is_some() {
+        if self.required(&item.action_ref) {
             Some(OpenKind::NeedsInput)
+        } else if self.schema(&item.action_ref).is_some() {
+            Some(OpenKind::Form)
         } else {
             Some(OpenKind::Start)
         }
@@ -713,13 +977,12 @@ impl App {
         match self.active.get(&item.action_ref) {
             Some(r) if matches!(r.lifecycle, Lifecycle::Stopping { .. }) => None,
             Some(_) => Some(Intent::Stop),
-            None if self.required(&item.action_ref).is_some() => None,
             None => Some(Intent::Start),
         }
     }
 
     fn restart_ok(&self, item: &Item) -> bool {
-        if !self.can_act(item) || self.required(&item.action_ref).is_some() {
+        if !self.can_act(item) {
             return false;
         }
         match self.active.get(&item.action_ref) {
@@ -743,38 +1006,30 @@ impl App {
                     self.info(format!("reading {a} inputs..."));
                     return;
                 }
-                Some((_, Inputs::Required(fields))) => {
-                    let fields = fields.join(", ");
-                    self.error(format!(
-                        "{a} needs input ({fields}). Input forms arrive in LYR-08; for now: lyra run {a} --input FILE"
-                    ));
-                    return;
-                }
-                Some((_, Inputs::Optional(fields))) => {
-                    self.modal = Modal::Confirm {
-                        action_ref: a.clone(),
-                        intent,
-                        fields: fields.clone(),
-                    };
+                Some((_, Inputs::Form(schema))) => {
+                    let form = Form::new(a.clone(), intent, schema, self.last_inputs.get(a));
+                    self.modal = Modal::Form(Box::new(form));
                     return;
                 }
                 Some((_, Inputs::Free | Inputs::Unknown(_))) => {}
             }
         }
-        self.act(a, intent);
+        self.act(a, intent, JsonObject::new(), false);
     }
 
-    fn act(&mut self, a: &ActionRef, intent: Intent) {
+    /// `from_form`: the input came from a submitted form, which waits for the answer.
+    fn act(&mut self, a: &ActionRef, intent: Intent, input: JsonObject, from_form: bool) {
         let run = self.active.get(a).map(|r| r.run_id.clone());
         match (intent, run) {
             (Intent::Stop, Some(run_id)) => self.stop(a, run_id),
             (Intent::Restart, Some(run_id)) => {
-                self.restart_after.insert(a.clone(), run_id.clone());
+                self.restart_after
+                    .insert(a.clone(), (run_id.clone(), input));
                 self.stop(a, run_id);
             }
             (Intent::Stop, None) => {}
-            (Intent::Start | Intent::Restart, None) => self.invoke(a.clone()),
-            (Intent::Start, Some(_)) => self.focus = Focus::Logs,
+            (Intent::Start, Some(_)) if !from_form => self.focus = Focus::Logs,
+            (Intent::Start | Intent::Restart, _) => self.invoke(a.clone(), input),
         }
     }
 
@@ -786,11 +1041,31 @@ impl App {
         });
     }
 
-    fn invoke(&mut self, a: ActionRef) {
+    fn invoke(&mut self, a: ActionRef, input: JsonObject) {
         self.pending.insert(a.clone(), Intent::Start);
         let _ = self.io.control.send(Control::Invoke {
             action_ref: a,
-            input: JsonObject::new(),
+            input,
+        });
+    }
+
+    fn run_row_action(&mut self, view_ref: ViewRef, action: ActionId) {
+        let Some(p) = self.view_panes.get(&view_ref) else {
+            return;
+        };
+        let (Some(row), Some(expected)) = (p.selected_row_id(), p.sel_rev) else {
+            self.error("select a row first");
+            return;
+        };
+        self.info(format!(
+            "running {}.{action} for row {row} of revision {expected}...",
+            view_ref.plugin
+        ));
+        let _ = self.io.control.send(Control::ViewAction {
+            view_ref,
+            action,
+            row,
+            expected,
         });
     }
 
@@ -814,9 +1089,40 @@ impl App {
                 v.push(bind("Esc", "cancel", Cmd::Escape));
                 return v;
             }
-            Modal::Confirm { .. } => {
-                v.push(bind("Enter/y", "run with defaults", Cmd::Open));
-                v.push(bind("Esc/n", "cancel", Cmd::Escape));
+            Modal::Form(f) => {
+                v.push(bind("Tab/Up/Down", "field", Cmd::Down));
+                if f.focused()
+                    .is_some_and(|x| matches!(x.kind, form::Kind::Boolean | form::Kind::Enum(_)))
+                {
+                    v.push(bind("Space", "choose", Cmd::Toggle));
+                } else {
+                    v.push(bind("Ctrl-U", "clear", Cmd::Escape));
+                }
+                if !f.pending {
+                    let w = match f.intent {
+                        Intent::Restart => "restart",
+                        _ => "run",
+                    };
+                    v.push(bind("Enter", w, Cmd::Open));
+                }
+                v.push(bind("Esc", "cancel", Cmd::Escape));
+                return v;
+            }
+            Modal::Command { .. } => {
+                v.push(bind("Enter", "run lyra command", Cmd::Open));
+                v.push(bind("Esc", "cancel", Cmd::Escape));
+                return v;
+            }
+            Modal::Output(_) => {
+                v.push(bind("j/k", "scroll", Cmd::Down));
+                v.push(bind("y", "copy all", Cmd::Copy));
+                v.push(bind("Esc/q", "close", Cmd::Escape));
+                return v;
+            }
+            Modal::RowAction { .. } => {
+                v.push(bind("j/k", "choose", Cmd::Down));
+                v.push(bind("Enter", "run for this row", Cmd::Open));
+                v.push(bind("Esc", "cancel", Cmd::Escape));
                 return v;
             }
             Modal::Help => {
@@ -830,6 +1136,9 @@ impl App {
 
     /// The bindings of normal mode for the current focus and selection.
     pub fn normal_bindings(&self) -> Vec<Binding> {
+        if self.selected_view().is_some() {
+            return self.view_bindings();
+        }
         let mut v = Vec::new();
         let pane = self.selected_pane().filter(|p| !p.records.is_empty());
         match self.focus {
@@ -861,7 +1170,10 @@ impl App {
                 Some(OpenKind::Logs) if self.focus == Focus::List => {
                     v.push(bind("Enter", "logs", Cmd::Open))
                 }
-                Some(OpenKind::NeedsInput) => v.push(bind("Enter", "inputs", Cmd::Open)),
+                Some(OpenKind::NeedsInput) => v.push(bind("Enter", "form", Cmd::Open)),
+                Some(OpenKind::Form) => {
+                    v.push(bind("Enter", format!("{}...", start_word(item)), Cmd::Open))
+                }
                 _ => {}
             }
             if self.attach_target().is_some() {
@@ -879,6 +1191,16 @@ impl App {
                     "rerun"
                 };
                 v.push(bind("r", w, Cmd::Restart));
+            }
+            if self.has_schedule(&item.action_ref)
+                && self.control_lost.is_none()
+                && !self.pending.contains_key(&item.action_ref)
+            {
+                let on = self
+                    .schedule_of(&item.action_ref)
+                    .is_some_and(|s| s.enabled);
+                let w = if on { "schedule off" } else { "schedule on" };
+                v.push(bind("t", w, Cmd::Schedule));
             }
         }
         if self.selected_item().is_some() {
@@ -925,6 +1247,24 @@ impl App {
                 v.push(bind("Esc", "clear filter", Cmd::Escape));
             }
         }
+        self.global_bindings(&mut v);
+        v
+    }
+
+    fn global_bindings(&self, v: &mut Vec<Binding>) {
+        if self.focus == Focus::List && !self.filter.is_empty() && self.selected_view().is_some() {
+            v.push(bind("Esc", "clear filter", Cmd::Escape));
+        }
+        v.push(bind(":", "command", Cmd::Command));
+        v.push(hidden(
+            "m",
+            if self.mouse {
+                "mouse mode off (terminal selection)"
+            } else {
+                "mouse mode on (wheel scrolls)"
+            },
+            Cmd::Mouse,
+        ));
         if self.control_lost.is_none()
             && !self.keeping
             && self.is_controller()
@@ -941,6 +1281,80 @@ impl App {
             format!("quit ({})", self.quit_effect(true)),
             Cmd::Quit,
         ));
+    }
+
+    /// Keys for a selected view (list or view focus).
+    fn view_bindings(&self) -> Vec<Binding> {
+        let mut v = Vec::new();
+        let pane = self.selected_view_pane();
+        let rows = pane.map_or(0, ViewPane::len);
+        match self.focus {
+            Focus::List => {
+                if self.visible.len() > 1 {
+                    v.push(bind("j/k", "move", Cmd::Down));
+                    v.push(hidden("PgUp/PgDn", "page", Cmd::PageUp));
+                    v.push(hidden("g/Home", "first", Cmd::Top));
+                    v.push(hidden("G/End", "last", Cmd::Bottom));
+                }
+                v.push(bind("Enter", "open view", Cmd::Open));
+                v.push(bind("Tab", "view", Cmd::Focus));
+                v.push(bind("r", "refresh", Cmd::Restart));
+                if !self.items.is_empty() || !self.views.is_empty() {
+                    v.push(bind("/", "search", Cmd::Search));
+                }
+            }
+            Focus::Logs => {
+                if rows > 0 {
+                    v.push(bind("j/k", "move", Cmd::Down));
+                    v.push(hidden("PgUp/PgDn", "page", Cmd::PageUp));
+                    v.push(hidden("g/Home", "first", Cmd::Top));
+                    v.push(hidden("G/End", "last", Cmd::Bottom));
+                }
+                if let Some(p) = pane {
+                    if p.kind == ViewKind::Table
+                        && rows > 0
+                        && !p.row_actions.is_empty()
+                        && self.control_lost.is_none()
+                    {
+                        let w = if p.row_actions.len() == 1 {
+                            format!("run {}", p.row_actions[0])
+                        } else {
+                            "row actions".into()
+                        };
+                        v.push(bind("Enter", w, Cmd::Open));
+                    }
+                    if rows > 0 {
+                        let (y, big) = match p.kind {
+                            ViewKind::Table => ("copy cell", "copy row JSON"),
+                            ViewKind::Log => ("copy text", "copy item JSON"),
+                            ViewKind::Tree => ("copy label", "copy subtree JSON"),
+                            ViewKind::Json => ("copy line", "copy all JSON"),
+                            ViewKind::Text => ("copy line", "copy all text"),
+                        };
+                        v.push(bind("y", y, Cmd::Copy));
+                        v.push(bind("Y", big, Cmd::CopyAll));
+                        let lr = match p.kind {
+                            ViewKind::Table => "column",
+                            ViewKind::Tree => "fold",
+                            _ => "pan",
+                        };
+                        if p.kind != ViewKind::Table || p.data().is_some() {
+                            v.push(bind("h/l", lr, Cmd::Right));
+                        }
+                    }
+                    if p.can_wrap() {
+                        v.push(bind(
+                            "w",
+                            if p.wrap { "no wrap" } else { "wrap" },
+                            Cmd::Wrap,
+                        ));
+                    }
+                }
+                v.push(bind("r", "refresh", Cmd::Restart));
+                v.push(bind("Tab", "tools", Cmd::Focus));
+            }
+        }
+        self.global_bindings(&mut v);
         v
     }
 
@@ -991,6 +1405,15 @@ impl App {
             } else {
                 format!(
                     "Work continues: {others} other controller(s) still attached ({runs} active run(s))."
+                )
+            };
+        }
+        if s.background_lease && s.expires_at.is_none() {
+            return if short {
+                "kept in background".into()
+            } else {
+                format!(
+                    "Work continues under a background lease without expiry ({runs} active run(s)); `lyra down` stops it."
                 )
             };
         }
@@ -1064,7 +1487,7 @@ impl App {
                         let text = text.clone();
                         if !logs {
                             self.filter = text;
-                            let keep = self.selected_ref();
+                            let keep = self.selected_key();
                             self.refilter(keep);
                             self.on_select();
                         }
@@ -1073,18 +1496,97 @@ impl App {
                 }
                 return;
             }
-            Modal::Confirm { .. } => {
+            Modal::Form(_) => {
+                if repeat && k.code == KeyCode::Enter {
+                    return;
+                }
+                let Modal::Form(f) = &mut self.modal else {
+                    return;
+                };
+                match f.key(k) {
+                    Outcome::Stay => {}
+                    Outcome::Cancel => self.modal = Modal::None,
+                    Outcome::Submit(input) => {
+                        let a = f.action_ref.clone();
+                        let intent = f.intent;
+                        let keep = Form::remembered(&input, &f.fields);
+                        self.last_inputs.insert(a.clone(), keep);
+                        self.act(&a, intent, input, true);
+                    }
+                }
+                return;
+            }
+            Modal::Command { .. } => {
+                let Modal::Command { text, error } = &mut self.modal else {
+                    return;
+                };
                 match k.code {
-                    KeyCode::Enter | KeyCode::Char('y') if !repeat => {
-                        if let Modal::Confirm {
-                            action_ref, intent, ..
+                    KeyCode::Esc => self.modal = Modal::None,
+                    KeyCode::Char('c') if ctrl => self.modal = Modal::None,
+                    KeyCode::Char('u') if ctrl => text.clear(),
+                    KeyCode::Backspace => {
+                        text.pop();
+                        *error = None;
+                    }
+                    KeyCode::Enter if !repeat => match cmdbar::split(text) {
+                        Ok(words) => {
+                            let t = format!("lyra {}", words.join(" "));
+                            *error = Some(format!("running {t}..."));
+                            cmdbar::run(self.root.clone(), words, self.io.events.clone());
+                        }
+                        Err(e) => *error = Some(e),
+                    },
+                    KeyCode::Char(c) if !ctrl => {
+                        text.push(c);
+                        *error = None;
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            Modal::Output(_) => {
+                let Modal::Output(o) = &mut self.modal else {
+                    return;
+                };
+                match k.code {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => self.modal = Modal::None,
+                    KeyCode::Char('c') if ctrl => self.modal = Modal::None,
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        o.top = (o.top + 1).min(o.lines.len().saturating_sub(1))
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => o.top = o.top.saturating_sub(1),
+                    KeyCode::PageDown => o.top = (o.top + 10).min(o.lines.len().saturating_sub(1)),
+                    KeyCode::PageUp => o.top = o.top.saturating_sub(10),
+                    KeyCode::Char('y') => {
+                        let n = o.lines.len();
+                        clip::copy(o.text.clone(), n, self.io.events.clone());
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            Modal::RowAction { .. } => {
+                let Modal::RowAction { choices, index, .. } = &mut self.modal else {
+                    return;
+                };
+                match k.code {
+                    KeyCode::Esc => self.modal = Modal::None,
+                    KeyCode::Char('c') if ctrl => self.modal = Modal::None,
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        *index = (*index + 1).min(choices.len().saturating_sub(1))
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => *index = index.saturating_sub(1),
+                    KeyCode::Enter if !repeat => {
+                        if let Modal::RowAction {
+                            view_ref,
+                            choices,
+                            index,
                         } = std::mem::replace(&mut self.modal, Modal::None)
+                            && let Some(a) = choices.get(index)
                         {
-                            self.act(&action_ref, intent);
+                            self.run_row_action(view_ref, a.clone());
                         }
                     }
-                    KeyCode::Esc | KeyCode::Char('n') => self.modal = Modal::None,
-                    KeyCode::Char('c') if ctrl => self.modal = Modal::None,
                     _ => {}
                 }
                 return;
@@ -1129,6 +1631,10 @@ impl App {
             (KeyCode::Char('N'), _) => Cmd::PrevMatch,
             (KeyCode::Char('?'), _) => Cmd::Help,
             (KeyCode::Char('a'), _) => Cmd::Attach,
+            (KeyCode::Char(':'), _) => Cmd::Command,
+            (KeyCode::Char('t'), _) => Cmd::Schedule,
+            (KeyCode::Char('m'), _) => Cmd::Mouse,
+            (KeyCode::Char('Y'), _) => Cmd::CopyAll,
             _ => return,
         };
         let navigation = matches!(
@@ -1159,7 +1665,7 @@ impl App {
             && !logs
         {
             self.filter = prev_filter;
-            let keep = self.selected_ref();
+            let keep = self.selected_key();
             self.refilter(keep);
             self.on_select();
         }
@@ -1189,7 +1695,38 @@ impl App {
     }
 
     fn exec(&mut self, cmd: Cmd) {
+        if self.selected_view().is_some() && self.exec_view(cmd) {
+            return;
+        }
         match cmd {
+            Cmd::Command => {
+                self.modal = Modal::Command {
+                    text: String::new(),
+                    error: None,
+                }
+            }
+            Cmd::Mouse => {
+                self.mouse = !self.mouse;
+                self.mouse_changed = Some(self.mouse);
+                self.info(if self.mouse {
+                    "mouse mode on: the wheel scrolls; hold Option (or Shift) for terminal selection"
+                } else {
+                    "mouse mode off: the terminal's own selection works"
+                });
+            }
+            Cmd::Schedule => {
+                if let Some(a) = self.selected_ref()
+                    && self.has_schedule(&a)
+                {
+                    let enabled = !self.schedule_of(&a).is_some_and(|s| s.enabled);
+                    self.pending.insert(a.clone(), Intent::Start);
+                    let _ = self.io.control.send(Control::Schedule {
+                        action_ref: a,
+                        enabled,
+                    });
+                }
+            }
+            Cmd::CopyAll => {}
             Cmd::Up | Cmd::Down | Cmd::PageUp | Cmd::PageDown | Cmd::Top | Cmd::Bottom => {
                 self.navigate(cmd)
             }
@@ -1201,7 +1738,7 @@ impl App {
                 match self.open_kind(item) {
                     Some(OpenKind::Logs) => self.focus = Focus::Logs,
                     Some(OpenKind::Start) => self.intent(&a, Intent::Start),
-                    Some(OpenKind::NeedsInput) => self.intent(&a, Intent::Start),
+                    Some(OpenKind::NeedsInput | OpenKind::Form) => self.intent(&a, Intent::Start),
                     None => {}
                 }
             }
@@ -1283,7 +1820,7 @@ impl App {
                     }
                 } else {
                     self.filter.clear();
-                    let keep = self.selected_ref();
+                    let keep = self.selected_key();
                     self.refilter(keep);
                     self.on_select();
                 }
@@ -1300,6 +1837,111 @@ impl App {
                 }
             }
             Cmd::Detach | Cmd::Forward => {}
+        }
+    }
+
+    /// Commands that act on a selected view. Returns false for global ones.
+    fn exec_view(&mut self, cmd: Cmd) -> bool {
+        let Some(v) = self.selected_view() else {
+            return false;
+        };
+        let r = v.view_ref.clone();
+        let focus = self.focus;
+        match (cmd, focus) {
+            (Cmd::Open, Focus::List) => self.focus = Focus::Logs,
+            (Cmd::Open, Focus::Logs) => {
+                let choices = self
+                    .view_panes
+                    .get(&r)
+                    .map(|p| p.row_actions.clone())
+                    .unwrap_or_default();
+                match choices.len() {
+                    0 => {}
+                    1 => self.run_row_action(r, choices[0].clone()),
+                    _ => {
+                        self.modal = Modal::RowAction {
+                            view_ref: r,
+                            choices,
+                            index: 0,
+                        }
+                    }
+                }
+            }
+            (Cmd::Restart, _) => {
+                self.load_view(&r);
+                self.info(format!("reading {r} again"));
+            }
+            (
+                Cmd::Up | Cmd::Down | Cmd::PageUp | Cmd::PageDown | Cmd::Top | Cmd::Bottom,
+                Focus::Logs,
+            ) => {
+                if let Some(p) = self.view_panes.get_mut(&r) {
+                    match cmd {
+                        Cmd::Up => p.move_by(-1),
+                        Cmd::Down => p.move_by(1),
+                        Cmd::PageUp => p.page(false),
+                        Cmd::PageDown => p.page(true),
+                        Cmd::Top => p.home(false),
+                        _ => p.home(true),
+                    }
+                }
+            }
+            (Cmd::Left | Cmd::Right, Focus::Logs) => {
+                if let Some(p) = self.view_panes.get_mut(&r) {
+                    p.left_right(cmd == Cmd::Right);
+                }
+            }
+            (Cmd::Wrap, Focus::Logs) => {
+                if let Some(p) = self.view_panes.get_mut(&r) {
+                    p.toggle_wrap();
+                }
+            }
+            (Cmd::Copy | Cmd::CopyAll, Focus::Logs) => {
+                let got = self.view_panes.get(&r).and_then(|p| {
+                    if cmd == Cmd::Copy {
+                        p.copy_value()
+                    } else {
+                        p.copy_whole()
+                    }
+                });
+                if let Some((text, what)) = got {
+                    let n = text.lines().count().max(1);
+                    self.info(format!("copying the {what}..."));
+                    clip::copy(text, n, self.io.events.clone());
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Mouse mode: the wheel scrolls whatever has the focus.
+    pub fn mouse_event(&mut self, m: crossterm::event::MouseEvent) {
+        use crossterm::event::MouseEventKind;
+        if !self.mouse || !matches!(self.modal, Modal::None) {
+            return;
+        }
+        let cmd = match m.kind {
+            MouseEventKind::ScrollDown => Cmd::Down,
+            MouseEventKind::ScrollUp => Cmd::Up,
+            _ => return,
+        };
+        for _ in 0..3 {
+            self.exec(cmd);
+        }
+    }
+
+    /// Bracketed paste goes to the text field that has the focus.
+    pub fn paste(&mut self, text: &str) {
+        match &mut self.modal {
+            Modal::Form(f) => f.paste(text),
+            Modal::Command { text: t, .. } => t.push_str(&text.replace(['\r', '\n'], " ")),
+            Modal::Search { .. } => {
+                for c in text.chars().filter(|c| !c.is_control()) {
+                    self.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1361,27 +2003,8 @@ fn start_word(item: &Item) -> &'static str {
 }
 
 fn inputs_of(schema: Option<&JsonObject>) -> Inputs {
-    let Some(s) = schema else {
-        return Inputs::Free;
-    };
-    let names = |v: Option<&Value>| -> Vec<String> {
-        match v {
-            Some(Value::Array(a)) => a
-                .iter()
-                .filter_map(|x| x.as_str().map(str::to_owned))
-                .collect(),
-            Some(Value::Object(m)) => m.keys().cloned().collect(),
-            _ => Vec::new(),
-        }
-    };
-    let required = names(s.get("required"));
-    if !required.is_empty() {
-        return Inputs::Required(required);
-    }
-    let props = names(s.get("properties"));
-    if props.is_empty() {
-        Inputs::Free
-    } else {
-        Inputs::Optional(props)
+    match schema {
+        Some(s) if form::has_fields(s) => Inputs::Form(s.clone()),
+        _ => Inputs::Free,
     }
 }

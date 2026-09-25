@@ -7,11 +7,14 @@
 
 mod app;
 mod clip;
+mod cmdbar;
+mod form;
 mod ipc;
 mod logs;
 mod term;
 mod terminal;
 mod ui;
+mod views;
 
 use std::time::{Duration, Instant};
 
@@ -175,6 +178,9 @@ async fn serve(paths: WorkspacePaths, offset: time::UtcOffset) -> Result<TuiEnd,
                     next = rx.try_recv().ok();
                 }
                 dirty = true;
+                if let Some(on) = app.mouse_changed.take() {
+                    term::set_mouse(on);
+                }
             }
             _ = tokio::time::sleep(wait) => {
                 app.tick();
