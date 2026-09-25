@@ -85,7 +85,11 @@ impl RunLog {
             write_error: None,
             partial: [Vec::new(), Vec::new()],
         };
-        if let Err(e) = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&log.dir) {
+        if let Err(e) = std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&log.dir)
+        {
             log.write_error = Some(format!("cannot create log dir: {e}"));
         }
         log
@@ -105,12 +109,18 @@ impl RunLog {
         for n in numbers {
             let path = log.dir.join(segment_name(n));
             let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            let first = read_segment(&path).first().map_or(log.next_seq, |r| r.log_seq.get());
+            let first = read_segment(&path)
+                .first()
+                .map_or(log.next_seq, |r| r.log_seq.get());
             if let Some(last) = read_segment(&path).last() {
                 log.next_seq = last.log_seq.get() + 1;
             }
             log.total_bytes += bytes;
-            log.segments.push_back(Segment { number: n, first_seq: first, bytes });
+            log.segments.push_back(Segment {
+                number: n,
+                first_seq: first,
+                bytes,
+            });
         }
         log
     }
@@ -133,29 +143,43 @@ impl RunLog {
         }
     }
 
-    pub fn dir(&self) -> &Path {
-        &self.dir
-    }
-
     pub fn first_available(&self) -> Option<LogSeq> {
-        self.segments.front().map(|s| s.first_seq).or_else(|| self.ring.front().map(|r| r.log_seq.get())).and_then(|v| LogSeq::new(v).ok())
+        self.segments
+            .front()
+            .map(|s| s.first_seq)
+            .or_else(|| self.ring.front().map(|r| r.log_seq.get()))
+            .and_then(|v| LogSeq::new(v).ok())
     }
 
     pub fn last_available(&self) -> Option<LogSeq> {
-        (self.next_seq > 1).then(|| LogSeq::new(self.next_seq - 1).ok()).flatten()
+        (self.next_seq > 1)
+            .then(|| LogSeq::new(self.next_seq - 1).ok())
+            .flatten()
     }
 
     fn open_segment(&mut self) -> Result<(), String> {
         let number = self.segments.back().map_or(1, |s| s.number + 1);
         let path = self.dir.join(segment_name(number));
-        let file = OpenOptions::new().create(true).append(true).mode(0o600).open(&path).map_err(|e| e.to_string())?;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| e.to_string())?;
         self.writer = Some(BufWriter::with_capacity(FLUSH_BYTES, file));
-        self.segments.push_back(Segment { number, first_seq: self.next_seq, bytes: 0 });
+        self.segments.push_back(Segment {
+            number,
+            first_seq: self.next_seq,
+            bytes: 0,
+        });
         Ok(())
     }
 
     fn rotate_if_needed(&mut self) {
-        let full = self.segments.back().is_none_or(|s| s.bytes >= SEGMENT_MAX_BYTES);
+        let full = self
+            .segments
+            .back()
+            .is_none_or(|s| s.bytes >= SEGMENT_MAX_BYTES);
         if full {
             if let Some(w) = self.writer.as_mut() {
                 let _ = w.flush();
@@ -175,7 +199,6 @@ impl RunLog {
     }
 
     fn append(&mut self, record: LogRecord) {
-        self.next_seq += 1;
         match serde_json::to_vec(&record) {
             Ok(mut line) if self.write_error.is_none() => {
                 line.push(b'\n');
@@ -198,6 +221,7 @@ impl RunLog {
             }
             _ => self.dropped += 1,
         }
+        self.next_seq += 1;
         self.ring.push_back(record);
         if self.ring.len() > RING_RECORDS {
             self.ring.pop_front();
@@ -208,7 +232,13 @@ impl RunLog {
     }
 
     /// Records one line of text (without its newline) and returns the created records.
-    pub fn push_line(&mut self, stream: LogStream, level: LogLevel, text: &str, continued_from_previous: bool) -> Vec<LogRecord> {
+    pub fn push_line(
+        &mut self,
+        stream: LogStream,
+        level: LogLevel,
+        text: &str,
+        continued_from_previous: bool,
+    ) -> Vec<LogRecord> {
         let parts = chunks(text);
         let n = parts.len();
         if n > 1 {
@@ -216,7 +246,9 @@ impl RunLog {
         }
         let mut out = Vec::with_capacity(n);
         for (i, part) in parts.into_iter().enumerate() {
-            let Ok(seq) = LogSeq::new(self.next_seq) else { break };
+            let Ok(seq) = LogSeq::new(self.next_seq) else {
+                break;
+            };
             let record = LogRecord {
                 log_seq: seq,
                 recorded_at: Timestamp::now(),
@@ -237,7 +269,11 @@ impl RunLog {
     /// 8 KiB is emitted early as a continued record so memory stays bounded.
     pub fn push_bytes(&mut self, stream: LogStream, bytes: &[u8]) -> Vec<LogRecord> {
         let idx = usize::from(stream == LogStream::Stderr);
-        let level = if stream == LogStream::Stderr { LogLevel::Warn } else { LogLevel::Info };
+        let level = if stream == LogStream::Stderr {
+            LogLevel::Warn
+        } else {
+            LogLevel::Info
+        };
         let mut out = Vec::new();
         let mut buf = std::mem::take(&mut self.partial[idx]);
         buf.extend_from_slice(bytes);
@@ -273,7 +309,11 @@ impl RunLog {
         for (idx, stream) in [(0, LogStream::Stdout), (1, LogStream::Stderr)] {
             let rest = std::mem::take(&mut self.partial[idx]);
             if !rest.is_empty() {
-                let level = if idx == 1 { LogLevel::Warn } else { LogLevel::Info };
+                let level = if idx == 1 {
+                    LogLevel::Warn
+                } else {
+                    LogLevel::Info
+                };
                 out.extend(self.push_line(stream, level, &String::from_utf8_lossy(&rest), false));
             }
         }
@@ -285,10 +325,10 @@ impl RunLog {
     }
 
     pub fn flush(&mut self) {
-        if let Some(w) = self.writer.as_mut() {
-            if let Err(e) = w.flush() {
-                self.write_error = Some(e.to_string());
-            }
+        if let Some(w) = self.writer.as_mut()
+            && let Err(e) = w.flush()
+        {
+            self.write_error = Some(e.to_string());
         }
         self.unflushed = 0;
         self.last_flush = Instant::now();
@@ -298,9 +338,15 @@ impl RunLog {
     pub fn read_before(&mut self, before: Option<u64>, limit: usize) -> Vec<LogRecord> {
         self.flush();
         let upper = before.unwrap_or(u64::MAX);
-        let from_ring: Vec<LogRecord> = self.ring.iter().filter(|r| r.log_seq.get() < upper).cloned().collect();
+        let from_ring: Vec<LogRecord> = self
+            .ring
+            .iter()
+            .filter(|r| r.log_seq.get() < upper)
+            .cloned()
+            .collect();
         // The ring suffices when it holds enough records or starts at the oldest kept record.
-        let ring_complete = self.ring.front().map(|r| r.log_seq.get()) == self.segments.front().map(|s| s.first_seq);
+        let ring_complete = self.ring.front().map(|r| r.log_seq.get())
+            == self.segments.front().map(|s| s.first_seq);
         let mut records = if from_ring.len() >= limit || ring_complete || self.segments.is_empty() {
             from_ring
         } else {
@@ -309,7 +355,11 @@ impl RunLog {
                 if s.first_seq >= upper {
                     break;
                 }
-                all.extend(read_segment(&self.dir.join(segment_name(s.number))).into_iter().filter(|r| r.log_seq.get() < upper));
+                all.extend(
+                    read_segment(&self.dir.join(segment_name(s.number)))
+                        .into_iter()
+                        .filter(|r| r.log_seq.get() < upper),
+                );
             }
             all
         };
@@ -318,31 +368,13 @@ impl RunLog {
         }
         records
     }
-
-    /// Up to `limit` records with `log_seq > after`, oldest first.
-    pub fn read_after(&mut self, after: u64, limit: usize) -> Vec<LogRecord> {
-        self.flush();
-        if self.ring.front().is_some_and(|r| r.log_seq.get() <= after + 1) {
-            return self.ring.iter().filter(|r| r.log_seq.get() > after).take(limit).cloned().collect();
-        }
-        let mut out = Vec::new();
-        for s in &self.segments {
-            for r in read_segment(&self.dir.join(segment_name(s.number))) {
-                if r.log_seq.get() > after {
-                    out.push(r);
-                    if out.len() >= limit {
-                        return out;
-                    }
-                }
-            }
-        }
-        out
-    }
 }
 
 /// Parses complete LF-terminated records; a torn final line is ignored.
 fn read_segment(path: &Path) -> Vec<LogRecord> {
-    let Ok(f) = File::open(path) else { return vec![] };
+    let Ok(f) = File::open(path) else {
+        return vec![];
+    };
     let mut out = Vec::new();
     let mut reader = BufReader::new(f);
     let mut line = Vec::new();

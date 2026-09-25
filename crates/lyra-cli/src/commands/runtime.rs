@@ -27,32 +27,49 @@ fn env() -> Result<ClientEnv, ErrorInfo> {
 
 /// Reads `--input FILE|-` as one strict JSON object.
 pub fn read_input(input: Option<&str>) -> Result<Map<String, Value>, ErrorInfo> {
-    let Some(src) = input else { return Ok(Map::new()) };
+    let Some(src) = input else {
+        return Ok(Map::new());
+    };
     let bytes = if src == "-" {
         let mut b = Vec::new();
-        std::io::stdin().take(MAX_PUBLIC_REPLY_BYTES as u64 + 1).read_to_end(&mut b).map_err(|e| invalid_argument(e.to_string()))?;
+        std::io::stdin()
+            .take(MAX_PUBLIC_REPLY_BYTES as u64 + 1)
+            .read_to_end(&mut b)
+            .map_err(|e| invalid_argument(e.to_string()))?;
         b
     } else {
-        std::fs::read(Path::new(src)).map_err(|e| invalid_argument(format!("cannot read {src}: {e}")))?
+        std::fs::read(Path::new(src))
+            .map_err(|e| invalid_argument(format!("cannot read {src}: {e}")))?
     };
     match lyra_protocol::strict_json::parse(&bytes, MAX_PUBLIC_REPLY_BYTES) {
         Ok(Value::Object(m)) => Ok(m),
-        Ok(_) => Err(ErrorInfo::new(ErrorCode::SCHEMA_INVALID, "input must be a JSON object")),
-        Err(e) => Err(ErrorInfo::new(ErrorCode::SCHEMA_INVALID, format!("invalid input JSON: {e}"))),
+        Ok(_) => Err(ErrorInfo::new(
+            ErrorCode::SCHEMA_INVALID,
+            "input must be a JSON object",
+        )),
+        Err(e) => Err(ErrorInfo::new(
+            ErrorCode::SCHEMA_INVALID,
+            format!("invalid input JSON: {e}"),
+        )),
     }
 }
 
 fn parse_action(s: &str) -> Result<ActionRef, ErrorInfo> {
-    s.parse().map_err(|e| invalid_argument(format!("{e}: `{s}`")))
+    s.parse()
+        .map_err(|e| invalid_argument(format!("{e}: `{s}`")))
 }
 
 fn parse_key(k: Option<String>) -> Result<Option<RequestKey>, ErrorInfo> {
-    k.map(RequestKey::parse).transpose().map_err(|e| invalid_argument(e.to_string()))
+    k.map(RequestKey::parse)
+        .transpose()
+        .map_err(|e| invalid_argument(e.to_string()))
 }
 
 pub fn parse_target(s: &str) -> Result<RunTarget, ErrorInfo> {
     if s.starts_with("r_") {
-        RunId::parse(s.to_owned()).map(|run_id| RunTarget::Run { run_id }).map_err(|e| invalid_argument(e.to_string()))
+        RunId::parse(s.to_owned())
+            .map(|run_id| RunTarget::Run { run_id })
+            .map_err(|e| invalid_argument(e.to_string()))
     } else {
         parse_action(s).map(|action_ref| RunTarget::Action { action_ref })
     }
@@ -64,25 +81,44 @@ pub fn parse_ttl(s: &str) -> Result<TimeoutWire, ErrorInfo> {
         return Ok(TimeoutWire::None);
     }
     let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
-    let n: u64 = num.parse().map_err(|_| invalid_argument(format!("invalid ttl `{s}`; use 30m, 2h, or none")))?;
+    let n: u64 = num
+        .parse()
+        .map_err(|_| invalid_argument(format!("invalid ttl `{s}`; use 30m, 2h, or none")))?;
     let ms = match unit {
         "s" => n * 1000,
         "m" => n * 60_000,
         "h" => n * 3_600_000,
         "d" => n * 86_400_000,
-        _ => return Err(invalid_argument(format!("invalid ttl unit in `{s}`; use s, m, h, d, or none"))),
+        _ => {
+            return Err(invalid_argument(format!(
+                "invalid ttl unit in `{s}`; use s, m, h, d, or none"
+            )));
+        }
     };
     Ok(TimeoutWire::After { ms })
 }
 
 async fn connect(ctx: &Ctx) -> Result<Client, ExitCode> {
-    ctx.client(&ConnectOptions::cli()).await.map_err(|(c, e)| ctx.fail(c, e))
+    ctx.client(&ConnectOptions::cli())
+        .await
+        .map_err(|(c, e)| ctx.fail(c, e))
 }
 
 /// Polls until the run is finished (the host commits the final record first).
-async fn wait_finished(client: &mut Client, run_id: &RunId) -> Result<PublicReply<RunRecord>, ErrorInfo> {
+async fn wait_finished(
+    client: &mut Client,
+    run_id: &RunId,
+) -> Result<PublicReply<RunRecord>, ErrorInfo> {
     loop {
-        let reply: PublicReply<RunRecord> = client.call(Method::RunGet, &RunGetParams { run_id: run_id.clone() }).await.map_err(|e| e.to_error_info())?;
+        let reply: PublicReply<RunRecord> = client
+            .call(
+                Method::RunGet,
+                &RunGetParams {
+                    run_id: run_id.clone(),
+                },
+            )
+            .await
+            .map_err(|e| e.to_error_info())?;
         match reply.data() {
             Some(r) if !r.lifecycle.is_active() => return Ok(reply),
             Some(_) => tokio::time::sleep(POLL).await,
@@ -92,7 +128,10 @@ async fn wait_finished(client: &mut Client, run_id: &RunId) -> Result<PublicRepl
 }
 
 fn run_text(r: &RunRecord) -> String {
-    let target = r.action_ref.as_ref().map_or_else(|| format!("exec \"{}\"", r.label), ToString::to_string);
+    let target = r
+        .action_ref
+        .as_ref()
+        .map_or_else(|| format!("exec \"{}\"", r.label), ToString::to_string);
     let mut s = format!("{}  {}  {}", r.run_id, target, lifecycle_text(&r.lifecycle));
     if let Some(e) = &r.exit {
         match (e.code, &e.signal) {
@@ -110,7 +149,9 @@ fn run_text(r: &RunRecord) -> String {
 /// Converts a finished run into the public reply: success, or an error with the fixed class.
 fn final_reply(reply: PublicReply<RunRecord>) -> PublicReply<RunRecord> {
     let ctx = reply.context();
-    let Some(rec) = reply.data().cloned() else { return reply };
+    let Some(rec) = reply.data().cloned() else {
+        return reply;
+    };
     let outcome = match rec.lifecycle {
         Lifecycle::Finished { outcome } => outcome,
         _ => return reply,
@@ -122,7 +163,10 @@ fn final_reply(reply: PublicReply<RunRecord>) -> PublicReply<RunRecord> {
         Outcome::Cancelled => (ErrorCode::CANCELLED, "was cancelled"),
         Outcome::Interrupted => (ErrorCode::OUTCOME_UNKNOWN, "was interrupted"),
     };
-    let target = rec.action_ref.as_ref().map_or_else(|| rec.label.clone(), ToString::to_string);
+    let target = rec
+        .action_ref
+        .as_ref()
+        .map_or_else(|| rec.label.clone(), ToString::to_string);
     let exit = rec.exit.as_ref().map(|e| match (e.code, &e.signal) {
         (Some(c), _) => format!(" with exit {c}"),
         (None, Some(s)) => format!(" by {s}"),
@@ -130,26 +174,50 @@ fn final_reply(reply: PublicReply<RunRecord>) -> PublicReply<RunRecord> {
     });
     let mut details = Map::new();
     details.insert("run_id".into(), Value::String(rec.run_id.to_string()));
-    details.insert("outcome".into(), serde_json::to_value(outcome).unwrap_or(Value::Null));
-    details.insert("exit".into(), serde_json::to_value(&rec.exit).unwrap_or(Value::Null));
+    details.insert(
+        "outcome".into(),
+        serde_json::to_value(outcome).unwrap_or(Value::Null),
+    );
+    details.insert(
+        "exit".into(),
+        serde_json::to_value(&rec.exit).unwrap_or(Value::Null),
+    );
     if let Some(n) = &rec.note {
         details.insert("note".into(), Value::String(n.clone()));
     }
     let info = ErrorInfo::new(code, format!("{target} {what}{}", exit.unwrap_or_default()))
         .with_details(details)
-        .with_next_action(&["lyra", "logs", rec.run_id.as_str()], "Read the run's output.");
+        .with_next_action(
+            &["lyra", "logs", rec.run_id.as_str()],
+            "Read the run's output.",
+        );
     PublicReply::failure(ctx, info)
 }
 
-async fn run_and_wait(ctx: &Ctx, client: &mut Client, method: Method, params: Value, wait: bool) -> ExitCode {
+async fn run_and_wait(
+    ctx: &Ctx,
+    client: &mut Client,
+    method: Method,
+    params: Value,
+    wait: bool,
+) -> ExitCode {
     let accepted: PublicReply<InvokeAccepted> = match client.call(method, &params).await {
         Ok(r) => r,
         Err(e) => return ctx.fail(client.context(), e.to_error_info()),
     };
     if !wait || !accepted.is_ok() {
-        return ctx.emit(&accepted, |a| format!("{}  {}{}", a.run_id, lifecycle_text(&a.state), if a.reused { "  (reused)" } else { "" }));
+        return ctx.emit(&accepted, |a| {
+            format!(
+                "{}  {}{}",
+                a.run_id,
+                lifecycle_text(&a.state),
+                if a.reused { "  (reused)" } else { "" }
+            )
+        });
     }
-    let Some(run_id) = accepted.data().map(|a| a.run_id.clone()) else { return ctx.emit(&accepted, |_| String::new()) };
+    let Some(run_id) = accepted.data().map(|a| a.run_id.clone()) else {
+        return ctx.emit(&accepted, |_| String::new());
+    };
     if ctx.mode == Mode::Text {
         eprintln!("{run_id} started; waiting (Ctrl-C stops it)...");
     }
@@ -159,9 +227,22 @@ async fn run_and_wait(ctx: &Ctx, client: &mut Client, method: Method, params: Va
     }
 }
 
-pub fn run(ctx: &Ctx, action: &str, input: Option<&str>, no_wait: bool, request_key: Option<String>) -> ExitCode {
+pub fn run(
+    ctx: &Ctx,
+    action: &str,
+    input: Option<&str>,
+    no_wait: bool,
+    request_key: Option<String>,
+) -> ExitCode {
     block_on(async {
-        let prepared = (|| Ok::<_, ErrorInfo>((parse_action(action)?, read_input(input)?, parse_key(request_key)?, env()?)))();
+        let prepared = (|| {
+            Ok::<_, ErrorInfo>((
+                parse_action(action)?,
+                read_input(input)?,
+                parse_key(request_key)?,
+                env()?,
+            ))
+        })();
         let (action_ref, input, request_key, client_env) = match prepared {
             Ok(v) => v,
             Err(e) => return ctx.fail(ReplyContext::default(), e),
@@ -170,15 +251,33 @@ pub fn run(ctx: &Ctx, action: &str, input: Option<&str>, no_wait: bool, request_
             Ok(c) => c,
             Err(code) => return code,
         };
-        let p = ActionInvokeParams { action_ref, input, client_env, request_key, foreground: !no_wait };
+        let p = ActionInvokeParams {
+            action_ref,
+            input,
+            client_env,
+            request_key,
+            foreground: !no_wait,
+        };
         let params = serde_json::to_value(p).unwrap_or(Value::Null);
         run_and_wait(ctx, &mut client, Method::ActionInvoke, params, !no_wait).await
     })
 }
 
-pub fn start(ctx: &Ctx, action: &str, input: Option<&str>, request_key: Option<String>) -> ExitCode {
+pub fn start(
+    ctx: &Ctx,
+    action: &str,
+    input: Option<&str>,
+    request_key: Option<String>,
+) -> ExitCode {
     block_on(async {
-        let prepared = (|| Ok::<_, ErrorInfo>((parse_action(action)?, read_input(input)?, parse_key(request_key)?, env()?)))();
+        let prepared = (|| {
+            Ok::<_, ErrorInfo>((
+                parse_action(action)?,
+                read_input(input)?,
+                parse_key(request_key)?,
+                env()?,
+            ))
+        })();
         let (action_ref, input, request_key, client_env) = match prepared {
             Ok(v) => v,
             Err(e) => return ctx.fail(ReplyContext::default(), e),
@@ -187,8 +286,21 @@ pub fn start(ctx: &Ctx, action: &str, input: Option<&str>, request_key: Option<S
             Ok(c) => c,
             Err(code) => return code,
         };
-        let p = ActionInvokeParams { action_ref, input, client_env, request_key, foreground: false };
-        run_and_wait(ctx, &mut client, Method::ActionInvoke, serde_json::to_value(p).unwrap_or(Value::Null), false).await
+        let p = ActionInvokeParams {
+            action_ref,
+            input,
+            client_env,
+            request_key,
+            foreground: false,
+        };
+        run_and_wait(
+            ctx,
+            &mut client,
+            Method::ActionInvoke,
+            serde_json::to_value(p).unwrap_or(Value::Null),
+            false,
+        )
+        .await
     })
 }
 
@@ -203,20 +315,48 @@ pub fn exec(ctx: &Ctx, label: String, argv: Vec<String>, request_key: Option<Str
             Ok(c) => c,
             Err(code) => return code,
         };
-        let p = ActionExecParams { label, argv, client_env, request_key, foreground: true };
-        run_and_wait(ctx, &mut client, Method::ActionExec, serde_json::to_value(p).unwrap_or(Value::Null), true).await
+        let p = ActionExecParams {
+            label,
+            argv,
+            client_env,
+            request_key,
+            foreground: true,
+        };
+        run_and_wait(
+            ctx,
+            &mut client,
+            Method::ActionExec,
+            serde_json::to_value(p).unwrap_or(Value::Null),
+            true,
+        )
+        .await
     })
 }
 
-async fn stop_target(ctx: &Ctx, client: &mut Client, target: RunTarget, wait: bool) -> Result<PublicReply<StopAccepted>, ExitCode> {
-    let reply: PublicReply<StopAccepted> = client.call(Method::RunStop, &RunStopParams { target }).await.map_err(|e| ctx.fail(client.context(), e.to_error_info()))?;
-    if wait {
-        if let Some(run_id) = reply.data().map(|d| d.run_id.clone()) {
-            let fin = wait_finished(client, &run_id).await.map_err(|e| ctx.fail(client.context(), e))?;
-            let ctx2 = fin.context();
-            if let Some(rec) = fin.data() {
-                return Ok(PublicReply::success(ctx2, StopAccepted { run_id, state: rec.lifecycle }, reply.meta().clone()));
-            }
+async fn stop_target(
+    ctx: &Ctx,
+    client: &mut Client,
+    target: RunTarget,
+    wait: bool,
+) -> Result<PublicReply<StopAccepted>, ExitCode> {
+    let reply: PublicReply<StopAccepted> = client
+        .call(Method::RunStop, &RunStopParams { target })
+        .await
+        .map_err(|e| ctx.fail(client.context(), e.to_error_info()))?;
+    if wait && let Some(run_id) = reply.data().map(|d| d.run_id.clone()) {
+        let fin = wait_finished(client, &run_id)
+            .await
+            .map_err(|e| ctx.fail(client.context(), e))?;
+        let ctx2 = fin.context();
+        if let Some(rec) = fin.data() {
+            return Ok(PublicReply::success(
+                ctx2,
+                StopAccepted {
+                    run_id,
+                    state: rec.lifecycle,
+                },
+                reply.meta().clone(),
+            ));
         }
     }
     Ok(reply)
@@ -233,7 +373,9 @@ pub fn stop(ctx: &Ctx, target: &str, wait: bool) -> ExitCode {
             Err(code) => return code,
         };
         match stop_target(ctx, &mut client, target, wait).await {
-            Ok(reply) => ctx.emit(&reply, |s| format!("{}  {}", s.run_id, lifecycle_text(&s.state))),
+            Ok(reply) => ctx.emit(&reply, |s| {
+                format!("{}  {}", s.run_id, lifecycle_text(&s.state))
+            }),
             Err(code) => code,
         }
     })
@@ -241,7 +383,8 @@ pub fn stop(ctx: &Ctx, target: &str, wait: bool) -> ExitCode {
 
 pub fn restart(ctx: &Ctx, action: &str, input: Option<&str>) -> ExitCode {
     block_on(async {
-        let prepared = (|| Ok::<_, ErrorInfo>((parse_action(action)?, read_input(input)?, env()?)))();
+        let prepared =
+            (|| Ok::<_, ErrorInfo>((parse_action(action)?, read_input(input)?, env()?)))();
         let (action_ref, input, client_env) = match prepared {
             Ok(v) => v,
             Err(e) => return ctx.fail(ReplyContext::default(), e),
@@ -251,16 +394,37 @@ pub fn restart(ctx: &Ctx, action: &str, input: Option<&str>) -> ExitCode {
             Err(code) => return code,
         };
         // Stop the current instance (if any) and wait, then start with the current definition.
-        let stopped = client.call::<_, StopAccepted>(Method::RunStop, &RunStopParams { target: RunTarget::Action { action_ref: action_ref.clone() } }).await;
-        if let Ok(reply) = stopped {
-            if let Some(run_id) = reply.data().map(|d| d.run_id.clone()) {
-                if let Err(e) = wait_finished(&mut client, &run_id).await {
-                    return ctx.fail(client.context(), e);
-                }
-            }
+        let stopped = client
+            .call::<_, StopAccepted>(
+                Method::RunStop,
+                &RunStopParams {
+                    target: RunTarget::Action {
+                        action_ref: action_ref.clone(),
+                    },
+                },
+            )
+            .await;
+        if let Ok(reply) = stopped
+            && let Some(run_id) = reply.data().map(|d| d.run_id.clone())
+            && let Err(e) = wait_finished(&mut client, &run_id).await
+        {
+            return ctx.fail(client.context(), e);
         }
-        let p = ActionInvokeParams { action_ref, input, client_env, request_key: None, foreground: false };
-        run_and_wait(ctx, &mut client, Method::ActionInvoke, serde_json::to_value(p).unwrap_or(Value::Null), false).await
+        let p = ActionInvokeParams {
+            action_ref,
+            input,
+            client_env,
+            request_key: None,
+            foreground: false,
+        };
+        run_and_wait(
+            ctx,
+            &mut client,
+            Method::ActionInvoke,
+            serde_json::to_value(p).unwrap_or(Value::Null),
+            false,
+        )
+        .await
     })
 }
 
@@ -268,14 +432,15 @@ fn session_text(d: &SessionData) -> String {
     match &d.session {
         None => "no session".into(),
         Some(s) => format!(
-            "session {} {:?} {:?}, {} controller(s){}",
+            "session {} {} {}, {} controller(s){}",
             s.id,
-            s.mode,
-            s.state,
+            super::inspect::lc(&s.mode),
+            super::inspect::lc(&s.state),
             s.controller_count,
-            s.expires_at.map(|t| format!(", expires {t}")).unwrap_or_else(|| ", no expiry".into())
-        )
-        .to_lowercase(),
+            s.expires_at
+                .map(|t| format!(", expires {t}"))
+                .unwrap_or_else(|| ", no expiry".into())
+        ),
     }
 }
 
@@ -283,7 +448,11 @@ pub fn up(ctx: &Ctx, background: bool, ttl: &str) -> ExitCode {
     if !background {
         return ctx.fail(
             ReplyContext::default(),
-            invalid_argument("`lyra up` needs --background; open `lyra` for a foreground session").with_next_action(&["lyra", "up", "--background"], "Keep work running without an open TUI."),
+            invalid_argument("`lyra up` needs --background; open `lyra` for a foreground session")
+                .with_next_action(
+                    &["lyra", "up", "--background"],
+                    "Keep work running without an open TUI.",
+                ),
         );
     }
     block_on(async {
@@ -296,7 +465,17 @@ pub fn up(ctx: &Ctx, background: bool, ttl: &str) -> ExitCode {
             Ok(c) => c,
             Err(code) => return code,
         };
-        match client.call::<_, SessionData>(Method::SessionOpen, &SessionOpenParams { mode: OpenMode::Background, client_env, ttl }).await {
+        match client
+            .call::<_, SessionData>(
+                Method::SessionOpen,
+                &SessionOpenParams {
+                    mode: OpenMode::Background,
+                    client_env,
+                    ttl,
+                },
+            )
+            .await
+        {
             Ok(r) => ctx.emit(&r, session_text),
             Err(e) => ctx.fail(client.context(), e.to_error_info()),
         }
@@ -313,7 +492,10 @@ pub fn keep(ctx: &Ctx, ttl: &str) -> ExitCode {
             Ok(c) => c,
             Err(code) => return code,
         };
-        match client.call::<_, SessionData>(Method::SessionKeep, &SessionKeepParams { ttl }).await {
+        match client
+            .call::<_, SessionData>(Method::SessionKeep, &SessionKeepParams { ttl })
+            .await
+        {
             Ok(r) => ctx.emit(&r, session_text),
             Err(e) => ctx.fail(client.context(), e.to_error_info()),
         }
@@ -326,7 +508,10 @@ pub fn down(ctx: &Ctx, wait: bool) -> ExitCode {
             Ok(c) => c,
             Err(code) => return code,
         };
-        let reply = match client.call::<_, SessionData>(Method::SessionStop, &Empty {}).await {
+        let reply = match client
+            .call::<_, SessionData>(Method::SessionStop, &Empty {})
+            .await
+        {
             Ok(r) => r,
             Err(e) => return ctx.fail(client.context(), e.to_error_info()),
         };
@@ -335,10 +520,21 @@ pub fn down(ctx: &Ctx, wait: bool) -> ExitCode {
             loop {
                 match client.status().await {
                     Ok(s) if s.data().is_some_and(|d| d.session.is_none()) => {
-                        return ctx.emit(&s.map(|d| SessionData { session: d.session }), session_text);
+                        return ctx
+                            .emit(&s.map(|d| SessionData { session: d.session }), session_text);
                     }
-                    Ok(_) if tokio::time::Instant::now() < deadline => tokio::time::sleep(POLL).await,
-                    Ok(_) => return ctx.fail(client.context(), ErrorInfo::new(ErrorCode::TIMEOUT, "the session is still stopping after 30 s")),
+                    Ok(_) if tokio::time::Instant::now() < deadline => {
+                        tokio::time::sleep(POLL).await
+                    }
+                    Ok(_) => {
+                        return ctx.fail(
+                            client.context(),
+                            ErrorInfo::new(
+                                ErrorCode::TIMEOUT,
+                                "the session is still stopping after 30 s",
+                            ),
+                        );
+                    }
                     Err(e) => return ctx.fail(client.context(), e.to_error_info()),
                 }
             }
@@ -347,7 +543,14 @@ pub fn down(ctx: &Ctx, wait: bool) -> ExitCode {
     })
 }
 
-pub fn runs(ctx: &Ctx, run: Option<String>, action: Option<String>, outcome: Option<String>, limit: Option<u32>, after: Option<String>) -> ExitCode {
+pub fn runs(
+    ctx: &Ctx,
+    run: Option<String>,
+    action: Option<String>,
+    outcome: Option<String>,
+    limit: Option<u32>,
+    after: Option<String>,
+) -> ExitCode {
     block_on(async {
         let mut client = match connect(ctx).await {
             Ok(c) => c,
@@ -358,15 +561,23 @@ pub fn runs(ctx: &Ctx, run: Option<String>, action: Option<String>, outcome: Opt
                 Ok(r) => r,
                 Err(e) => return ctx.fail(client.context(), invalid_argument(e.to_string())),
             };
-            return match client.call::<_, RunRecord>(Method::RunGet, &RunGetParams { run_id }).await {
-                Ok(r) => ctx.emit(&r, |rec| serde_json::to_string_pretty(rec).unwrap_or_else(|_| run_text(rec))),
+            return match client
+                .call::<_, RunRecord>(Method::RunGet, &RunGetParams { run_id })
+                .await
+            {
+                Ok(r) => ctx.emit(&r, |rec| {
+                    serde_json::to_string_pretty(rec).unwrap_or_else(|_| run_text(rec))
+                }),
                 Err(e) => ctx.fail(client.context(), e.to_error_info()),
             };
         }
         let parsed = (|| {
             let action_ref = action.as_deref().map(parse_action).transpose()?;
             let outcome = outcome
-                .map(|o| serde_json::from_value::<Outcome>(Value::String(o.clone())).map_err(|_| invalid_argument(format!("unknown outcome `{o}`"))))
+                .map(|o| {
+                    serde_json::from_value::<Outcome>(Value::String(o.clone()))
+                        .map_err(|_| invalid_argument(format!("unknown outcome `{o}`")))
+                })
                 .transpose()?;
             Ok::<_, ErrorInfo>((action_ref, outcome))
         })();
@@ -374,9 +585,20 @@ pub fn runs(ctx: &Ctx, run: Option<String>, action: Option<String>, outcome: Opt
             Ok(v) => v,
             Err(e) => return ctx.fail(client.context(), e),
         };
-        let p = RunListParams { action_ref, outcome, cursor: after, limit };
+        let p = RunListParams {
+            action_ref,
+            outcome,
+            cursor: after,
+            limit,
+        };
         match client.call::<_, RunList>(Method::RunListM, &p).await {
-            Ok(r) => ctx.emit(&r, |l| if l.runs.is_empty() { "no runs".into() } else { l.runs.iter().map(run_text).collect::<Vec<_>>().join("\n") }),
+            Ok(r) => ctx.emit(&r, |l| {
+                if l.runs.is_empty() {
+                    "no runs".into()
+                } else {
+                    l.runs.iter().map(run_text).collect::<Vec<_>>().join("\n")
+                }
+            }),
             Err(e) => ctx.fail(client.context(), e.to_error_info()),
         }
     })
@@ -393,7 +615,14 @@ fn log_line(r: &lyra_protocol::run::LogRecord) -> String {
     format!("{:>6} {tag} {}", r.log_seq, r.text)
 }
 
-pub fn logs(ctx: &Ctx, target: &str, after: Option<String>, limit: Option<u32>, max_bytes: Option<u32>, follow: bool) -> ExitCode {
+pub fn logs(
+    ctx: &Ctx,
+    target: &str,
+    after: Option<String>,
+    limit: Option<u32>,
+    max_bytes: Option<u32>,
+    follow: bool,
+) -> ExitCode {
     block_on(async {
         let target = match parse_target(target) {
             Ok(t) => t,
@@ -403,15 +632,24 @@ pub fn logs(ctx: &Ctx, target: &str, after: Option<String>, limit: Option<u32>, 
             Ok(c) => c,
             Err(code) => return code,
         };
-        let p = LogReadParams { target: target.clone(), cursor: after, limit, max_bytes };
+        let p = LogReadParams {
+            target: target.clone(),
+            cursor: after,
+            limit,
+            max_bytes,
+        };
         let page: PublicReply<LogPage> = match client.call(Method::LogRead, &p).await {
             Ok(r) => r,
             Err(e) => return ctx.fail(client.context(), e.to_error_info()),
         };
         if !follow || !page.is_ok() {
-            return ctx.emit(&page, |pg| pg.items.iter().map(log_line).collect::<Vec<_>>().join("\n"));
+            return ctx.emit(&page, |pg| {
+                pg.items.iter().map(log_line).collect::<Vec<_>>().join("\n")
+            });
         }
-        let Some(tail) = page.data().cloned() else { return ctx.emit(&page, |_| String::new()) };
+        let Some(tail) = page.data().cloned() else {
+            return ctx.emit(&page, |_| String::new());
+        };
         follow_logs(ctx, tail).await
     })
 }
@@ -424,8 +662,15 @@ async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
         Err((c, e)) => return ctx.fail(c, e),
     };
     let run_id = tail.run_id.clone();
-    let sub = StreamSubscribeParams { kinds: vec![StreamKind::Log, StreamKind::State], refs: vec![run_id.to_string()], cursor: None };
-    if let Err(e) = stream.call::<_, Subscribed>(Method::StreamSubscribe, &sub).await {
+    let sub = StreamSubscribeParams {
+        kinds: vec![StreamKind::Log, StreamKind::State],
+        refs: vec![run_id.to_string()],
+        cursor: None,
+    };
+    if let Err(e) = stream
+        .call::<_, Subscribed>(Method::StreamSubscribe, &sub)
+        .await
+    {
         return ctx.fail(stream.context(), e.to_error_info());
     }
     let last_seen = tail.items.last().map(|r| r.log_seq);
@@ -444,7 +689,10 @@ async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
         match &frame.event {
             StreamEvent::Log { records, .. } => {
                 if ctx.mode == Mode::Text {
-                    for r in records.iter().filter(|r| last_seen.is_none_or(|s| r.log_seq > s)) {
+                    for r in records
+                        .iter()
+                        .filter(|r| last_seen.is_none_or(|s| r.log_seq > s))
+                    {
                         let _ = writeln!(out, "{}", log_line(r));
                     }
                 }
@@ -455,11 +703,15 @@ async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
             StreamEvent::End { .. } => done = true,
             _ => {}
         }
-        let relevant = !matches!(frame.event, StreamEvent::State { .. } | StreamEvent::Snapshot(_));
-        if ctx.mode == Mode::Json && (relevant || done) {
-            if let Ok(line) = serde_json::to_string(&frame) {
-                let _ = writeln!(out, "{line}");
-            }
+        let relevant = !matches!(
+            frame.event,
+            StreamEvent::State { .. } | StreamEvent::Snapshot(_)
+        );
+        if ctx.mode == Mode::Json
+            && (relevant || done)
+            && let Ok(line) = serde_json::to_string(&frame)
+        {
+            let _ = writeln!(out, "{line}");
         }
         let _ = out.flush();
         if done {

@@ -40,12 +40,24 @@ pub fn compose(
     let mut env: BTreeMap<String, String> = client.vars().clone();
     env.retain(|k, _| !k.starts_with("LYRA_"));
     for f in env_files {
-        let path = if f.starts_with('/') { Path::new(f).to_path_buf() } else { root.join(f) };
+        let path = if f.starts_with('/') {
+            Path::new(f).to_path_buf()
+        } else {
+            root.join(f)
+        };
         let iter = dotenvy::from_path_iter(&path).map_err(|e| {
-            ErrorInfo::new(ErrorCode::EXECUTION_FAILED, format!("cannot read env file {f}: {e}"))
+            ErrorInfo::new(
+                ErrorCode::EXECUTION_FAILED,
+                format!("cannot read env file {f}: {e}"),
+            )
         })?;
         for item in iter {
-            let (k, v) = item.map_err(|e| ErrorInfo::new(ErrorCode::EXECUTION_FAILED, format!("invalid env file {f}: {e}")))?;
+            let (k, v) = item.map_err(|e| {
+                ErrorInfo::new(
+                    ErrorCode::EXECUTION_FAILED,
+                    format!("invalid env file {f}: {e}"),
+                )
+            })?;
             if !k.starts_with("LYRA_") {
                 env.insert(k, v);
             }

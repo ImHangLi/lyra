@@ -16,6 +16,11 @@ use serde::Serialize;
 
 use super::ctx::{Ctx, block_on};
 
+/// Lower-case Debug text for simple enums.
+pub fn lc<T: std::fmt::Debug>(v: &T) -> String {
+    format!("{v:?}").to_lowercase()
+}
+
 pub fn lifecycle_text(l: &Lifecycle) -> String {
     match l {
         Lifecycle::Starting => "starting".into(),

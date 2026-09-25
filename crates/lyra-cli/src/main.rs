@@ -211,16 +211,43 @@ fn main() -> ExitCode {
             item,
             include_schema,
         }) => commands::inspect::describe(&ctx, item, include_schema),
-        Some(Command::Run { action, input, no_wait, request_key }) => commands::runtime::run(&ctx, &action, input.as_deref(), no_wait, request_key),
-        Some(Command::Start { action, input, request_key }) => commands::runtime::start(&ctx, &action, input.as_deref(), request_key),
+        Some(Command::Run {
+            action,
+            input,
+            no_wait,
+            request_key,
+        }) => commands::runtime::run(&ctx, &action, input.as_deref(), no_wait, request_key),
+        Some(Command::Start {
+            action,
+            input,
+            request_key,
+        }) => commands::runtime::start(&ctx, &action, input.as_deref(), request_key),
         Some(Command::Stop { target, wait }) => commands::runtime::stop(&ctx, &target, wait),
-        Some(Command::Restart { action, input }) => commands::runtime::restart(&ctx, &action, input.as_deref()),
-        Some(Command::Exec { label, request_key, argv }) => commands::runtime::exec(&ctx, label, argv, request_key),
+        Some(Command::Restart { action, input }) => {
+            commands::runtime::restart(&ctx, &action, input.as_deref())
+        }
+        Some(Command::Exec {
+            label,
+            request_key,
+            argv,
+        }) => commands::runtime::exec(&ctx, label, argv, request_key),
         Some(Command::Up { background, ttl }) => commands::runtime::up(&ctx, background, &ttl),
         Some(Command::Keep { ttl }) => commands::runtime::keep(&ctx, &ttl),
         Some(Command::Down { wait }) => commands::runtime::down(&ctx, wait),
-        Some(Command::Runs { run, action, outcome, limit, after }) => commands::runtime::runs(&ctx, run, action, outcome, limit, after),
-        Some(Command::Logs { target, after, limit, max_bytes, follow }) => commands::runtime::logs(&ctx, &target, after, limit, max_bytes, follow),
+        Some(Command::Runs {
+            run,
+            action,
+            outcome,
+            limit,
+            after,
+        }) => commands::runtime::runs(&ctx, run, action, outcome, limit, after),
+        Some(Command::Logs {
+            target,
+            after,
+            limit,
+            max_bytes,
+            follow,
+        }) => commands::runtime::logs(&ctx, &target, after, limit, max_bytes, follow),
         Some(Command::Paths) => commands::inspect::paths(&ctx),
         Some(Command::Doctor) => commands::inspect::doctor(&ctx),
         Some(Command::Host { root }) => match lyra_protocol::ids::AbsolutePath::from_path(&root) {

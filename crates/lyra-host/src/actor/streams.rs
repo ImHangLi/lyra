@@ -23,7 +23,12 @@ pub struct Sub {
 }
 
 impl Actor {
-    fn frame(&mut self, run_id: Option<RunId>, item_ref: Option<lyra_protocol::ids::ItemRef>, event: StreamEvent) -> Vec<u8> {
+    fn frame(
+        &mut self,
+        run_id: Option<RunId>,
+        item_ref: Option<lyra_protocol::ids::ItemRef>,
+        event: StreamEvent,
+    ) -> Vec<u8> {
         if let Some(n) = self.event_seq.next() {
             self.event_seq = n;
         }
@@ -33,10 +38,18 @@ impl Actor {
             event_seq: self.event_seq,
             recorded_at: Timestamp::now(),
             cursor: format!("{}.{}", self.epoch, self.event_seq),
-            source: StreamSource { workspace_id: self.paths.id.clone(), run_id, item_ref },
+            source: StreamSource {
+                workspace_id: self.paths.id.clone(),
+                run_id,
+                item_ref,
+            },
             event,
         };
-        let note = RpcNotification { jsonrpc: JsonRpc2, method: STREAM_EVENT.to_owned(), params: frame };
+        let note = RpcNotification {
+            jsonrpc: JsonRpc2,
+            method: STREAM_EVENT.to_owned(),
+            params: frame,
+        };
         let mut line = serde_json::to_vec(&note).unwrap_or_default();
         line.push(b'\n');
         line
@@ -44,34 +57,68 @@ impl Actor {
 
     pub(super) fn subscribe(&mut self, client: &ClientId, p: StreamSubscribeParams, r: Responder) {
         if p.kinds.is_empty() {
-            return r.send(self.fail(ErrorInfo::new(ErrorCode::INVALID_ARGUMENT, "subscribe needs at least one kind")));
+            return r.send(self.fail(ErrorInfo::new(
+                ErrorCode::INVALID_ARGUMENT,
+                "subscribe needs at least one kind",
+            )));
         }
         if p.cursor.is_some() {
             // Live cursors do not survive a new subscription; the client re-reads a snapshot.
-            return r.send(self.fail(ErrorInfo::new(ErrorCode::RESET_REQUIRED, "resume by cursor is not supported; take a new snapshot")));
+            return r.send(self.fail(ErrorInfo::new(
+                ErrorCode::RESET_REQUIRED,
+                "resume by cursor is not supported; take a new snapshot",
+            )));
         }
-        let Some(out) = self.clients.get(client).map(|c| c.out.clone()) else { return };
+        let Some(out) = self.clients.get(client).map(|c| c.out.clone()) else {
+            return;
+        };
         let id = SubscriptionId::random();
-        let ready = StreamEvent::Ready { subscription_id: id.clone(), catalog_revision: self.catalog_revision, state_revision: self.state_revision };
+        let ready = StreamEvent::Ready {
+            subscription_id: id.clone(),
+            catalog_revision: self.catalog_revision,
+            state_revision: self.state_revision,
+        };
         let snapshot = StreamEvent::Snapshot(self.status_data());
         // Reply, ready, and snapshot are produced in one actor step: no event can slip between.
-        r.send(self.ok(Subscribed { subscription_id: id.clone() }, ReplyMeta::default()));
+        r.send(self.ok(
+            Subscribed {
+                subscription_id: id.clone(),
+            },
+            ReplyMeta::default(),
+        ));
         let ready = self.frame(None, None, ready);
         let snapshot = self.frame(None, None, snapshot);
         let ok = out.event(ready) && out.event(snapshot);
-        let sub = Sub { client: client.clone(), kinds: Actor::kinds_of(&p.kinds), refs: p.refs, out };
+        let sub = Sub {
+            client: client.clone(),
+            kinds: Actor::kinds_of(&p.kinds),
+            refs: p.refs,
+            out,
+        };
         if ok {
             self.subs.insert(id, sub);
         }
     }
 
-    pub(super) fn unsubscribe(&mut self, client: &ClientId, p: StreamUnsubscribeParams, r: Responder) {
-        let known = self.subs.get(&p.subscription_id).is_some_and(|s| &s.client == client);
-        if known {
-            if let Some(sub) = self.subs.remove(&p.subscription_id) {
-                let end = self.frame(None, None, StreamEvent::End { reason: EndReason::Unsubscribed });
-                sub.out.respond(end);
-            }
+    pub(super) fn unsubscribe(
+        &mut self,
+        client: &ClientId,
+        p: StreamUnsubscribeParams,
+        r: Responder,
+    ) {
+        let known = self
+            .subs
+            .get(&p.subscription_id)
+            .is_some_and(|s| &s.client == client);
+        if known && let Some(sub) = self.subs.remove(&p.subscription_id) {
+            let end = self.frame(
+                None,
+                None,
+                StreamEvent::End {
+                    reason: EndReason::Unsubscribed,
+                },
+            );
+            sub.out.respond(end);
         }
         r.send(self.ok(Ack { ok: known }, ReplyMeta::default()));
     }
@@ -86,7 +133,13 @@ impl Actor {
         }
         for id in reset {
             if let Some(sub) = self.subs.remove(&id) {
-                let end = self.frame(None, None, StreamEvent::End { reason: EndReason::ResetRequired });
+                let end = self.frame(
+                    None,
+                    None,
+                    StreamEvent::End {
+                        reason: EndReason::ResetRequired,
+                    },
+                );
                 // The control-priority channel is unbounded, so the reset notice is not lost.
                 sub.out.respond(end);
             }
@@ -94,7 +147,11 @@ impl Actor {
     }
 
     pub(crate) fn broadcast_state(&mut self) {
-        if !self.subs.values().any(|s| s.kinds.contains(&StreamKind::State)) {
+        if !self
+            .subs
+            .values()
+            .any(|s| s.kinds.contains(&StreamKind::State))
+        {
             return;
         }
         let status = self.status_data();
@@ -109,11 +166,22 @@ impl Actor {
     }
 
     pub(crate) fn broadcast_logs(&mut self, run_id: &RunId, records: Vec<LogRecord>) {
-        if records.is_empty() || !self.subs.values().any(|s| s.kinds.contains(&StreamKind::Log)) {
+        if records.is_empty()
+            || !self
+                .subs
+                .values()
+                .any(|s| s.kinds.contains(&StreamKind::Log))
+        {
             return;
         }
-        let action = self.runs.get(run_id).and_then(|r| r.record.action_ref.clone());
-        let keys = [Some(run_id.to_string()), action.as_ref().map(ToString::to_string)];
+        let action = self
+            .runs
+            .get(run_id)
+            .and_then(|r| r.record.action_ref.clone());
+        let keys = [
+            Some(run_id.to_string()),
+            action.as_ref().map(ToString::to_string),
+        ];
         let mut batch = Vec::new();
         let mut size = 0usize;
         let mut batches = Vec::new();
@@ -129,10 +197,20 @@ impl Actor {
         batches.push(batch);
         for records in batches {
             let item = action.as_ref().map(|a| a.to_item_ref());
-            let line = self.frame(Some(run_id.clone()), item, StreamEvent::Log { run_id: run_id.clone(), records });
+            let line = self.frame(
+                Some(run_id.clone()),
+                item,
+                StreamEvent::Log {
+                    run_id: run_id.clone(),
+                    records,
+                },
+            );
             self.deliver(
                 StreamKind::Log,
-                |s| s.refs.is_empty() || s.refs.iter().any(|r| keys.iter().flatten().any(|k| k == r)),
+                |s| {
+                    s.refs.is_empty()
+                        || s.refs.iter().any(|r| keys.iter().flatten().any(|k| k == r))
+                },
                 &line,
             );
         }

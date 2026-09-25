@@ -32,8 +32,8 @@ use crate::runner::RunnerEvent;
 use crate::server::{error_line, result_line};
 use crate::storage::{Storage, StorageError};
 
-pub use runs::Reservation;
 use runs::ActiveRun;
+pub use runs::Reservation;
 use session::Session;
 use streams::Sub;
 
@@ -81,11 +81,28 @@ impl Responder {
 pub type Handled = Result<Value, RpcError>;
 
 pub enum Msg {
-    Hello { params: HelloParams, out: Outbound, reply: oneshot::Sender<Result<(ClientId, HelloReply), RpcError>> },
-    Request { client: ClientId, id: String, method: Method, params: Map<String, Value> },
-    Closed { client: ClientId },
-    Reserved { run_id: RunId, result: Result<Reservation, ErrorInfo> },
-    FinalSaved { run_id: RunId, error: Option<String> },
+    Hello {
+        params: HelloParams,
+        out: Outbound,
+        reply: oneshot::Sender<Result<(ClientId, HelloReply), RpcError>>,
+    },
+    Request {
+        client: ClientId,
+        id: String,
+        method: Method,
+        params: Map<String, Value>,
+    },
+    Closed {
+        client: ClientId,
+    },
+    Reserved {
+        run_id: RunId,
+        result: Result<Reservation, ErrorInfo>,
+    },
+    FinalSaved {
+        run_id: RunId,
+        error: Option<String>,
+    },
     Shutdown,
 }
 
@@ -99,7 +116,10 @@ struct ClientEntry {
 /// Which definition set the actor runs from, and what is on disk.
 enum ConfigState {
     NotSetup,
-    Accepted { set: Arc<ConfigSet>, disk_issues: Option<Issues> },
+    Accepted {
+        set: Arc<ConfigSet>,
+        disk_issues: Option<Issues>,
+    },
     /// Disk configuration is invalid and no set was accepted in this host lifetime.
     Invalid(Issues),
 }
@@ -136,32 +156,46 @@ fn load_config(paths: &WorkspacePaths) -> ConfigState {
         Err(i) => return ConfigState::Invalid(i),
     };
     match config::load_config_dir(&paths.lyra_dir, local.as_ref()) {
-        Ok(set) => ConfigState::Accepted { set: Arc::new(set), disk_issues: None },
+        Ok(set) => ConfigState::Accepted {
+            set: Arc::new(set),
+            disk_issues: None,
+        },
         Err(i) => ConfigState::Invalid(i),
     }
 }
 
 pub(crate) fn params<P: DeserializeOwned>(p: Map<String, Value>) -> Result<P, RpcError> {
-    serde_json::from_value(Value::Object(p)).map_err(|e| RpcError::new(RpcError::INVALID_PARAMS, e.to_string()))
+    serde_json::from_value(Value::Object(p))
+        .map_err(|e| RpcError::new(RpcError::INVALID_PARAMS, e.to_string()))
 }
 
 impl Actor {
     pub fn new(paths: WorkspacePaths, rx: mpsc::Receiver<Msg>, tx: mpsc::Sender<Msg>) -> Self {
         let config = load_config(&paths);
         if let ConfigState::Invalid(i) = &config {
-            diag(format!("configuration on disk is invalid: {}", i.to_error_info().message));
+            diag(format!(
+                "configuration on disk is invalid: {}",
+                i.to_error_info().message
+            ));
         }
         let mut storage_warnings = Vec::new();
         let storage = match Storage::open(&paths) {
             Ok((s, report)) => {
                 if !report.interrupted.is_empty() {
-                    diag(format!("{} run(s) were active when the previous host stopped; marked interrupted", report.interrupted.len()));
+                    diag(format!(
+                        "{} run(s) were active when the previous host stopped; marked interrupted",
+                        report.interrupted.len()
+                    ));
                 }
                 Ok(s)
             }
             Err(e) => {
                 diag(format!("storage unavailable: {e}"));
-                storage_warnings.push(Warning { code: e.to_error_info().code, message: e.to_string(), subject: None });
+                storage_warnings.push(Warning {
+                    code: e.to_error_info().code,
+                    message: e.to_string(),
+                    subject: None,
+                });
                 Err(e)
             }
         };
@@ -200,7 +234,8 @@ impl Actor {
             _ => None,
         };
         let Ok(storage) = &self.storage else {
-            self.catalog_revision = CatalogRevision::new(u64::from(hash.is_some())).unwrap_or_default();
+            self.catalog_revision =
+                CatalogRevision::new(u64::from(hash.is_some())).unwrap_or_default();
             return;
         };
         let result = match hash {
@@ -215,7 +250,11 @@ impl Actor {
 
     pub(crate) fn storage_warning(&mut self, e: &StorageError) {
         diag(format!("storage: {e}"));
-        let w = Warning { code: e.to_error_info().code, message: e.to_string(), subject: None };
+        let w = Warning {
+            code: e.to_error_info().code,
+            message: e.to_string(),
+            subject: None,
+        };
         if !self.storage_warnings.iter().any(|x| x.message == w.message) {
             self.storage_warnings.push(w);
             if self.storage_warnings.len() > 8 {
@@ -225,7 +264,10 @@ impl Actor {
     }
 
     fn workspace_ref(&self) -> WorkspaceRef {
-        WorkspaceRef { id: self.paths.id.clone(), root: self.paths.root.clone() }
+        WorkspaceRef {
+            id: self.paths.id.clone(),
+            root: self.paths.root.clone(),
+        }
     }
 
     pub(crate) fn ctx(&self) -> ReplyContext {
@@ -301,8 +343,15 @@ impl Actor {
             Msg::Hello { params, out, reply } => {
                 let _ = reply.send(self.hello(params, out));
             }
-            Msg::Request { client, id, method, params } => {
-                let Some(out) = self.clients.get(&client).map(|c| c.out.clone()) else { return };
+            Msg::Request {
+                client,
+                id,
+                method,
+                params,
+            } => {
+                let Some(out) = self.clients.get(&client).map(|c| c.out.clone()) else {
+                    return;
+                };
                 self.dispatch(&client, method, params, Responder { out, id });
             }
             Msg::Closed { client } => {
@@ -337,7 +386,14 @@ impl Actor {
             )));
         }
         let id = ClientId::random();
-        self.clients.insert(id.clone(), ClientEntry { kind: p.client_kind, connection: p.connection_kind, out });
+        self.clients.insert(
+            id.clone(),
+            ClientEntry {
+                kind: p.client_kind,
+                connection: p.connection_kind,
+                out,
+            },
+        );
         Ok((
             id.clone(),
             HelloReply {
@@ -401,44 +457,79 @@ impl Actor {
             Method::LogRead => self.log_read(parse!(p), r),
             Method::StreamSubscribe => self.subscribe(client, parse!(p), r),
             Method::StreamUnsubscribe => self.unsubscribe(client, parse!(p), r),
-            other => r.send(Err(RpcError::new(RpcError::METHOD_NOT_FOUND, format!("`{}` is not available in this build", other.name())))),
+            other => r.send(Err(RpcError::new(
+                RpcError::METHOD_NOT_FOUND,
+                format!("`{}` is not available in this build", other.name()),
+            ))),
         }
     }
 
     fn config_warnings(&self) -> Vec<Warning> {
         match &self.config {
             ConfigState::NotSetup => vec![],
-            ConfigState::Accepted { disk_issues: None, .. } => vec![],
-            ConfigState::Accepted { disk_issues: Some(i), .. } | ConfigState::Invalid(i) => {
+            ConfigState::Accepted {
+                disk_issues: None, ..
+            } => vec![],
+            ConfigState::Accepted {
+                disk_issues: Some(i),
+                ..
+            }
+            | ConfigState::Invalid(i) => {
                 let info = i.to_error_info();
-                vec![Warning { code: ErrorCode::SCHEMA_INVALID, message: format!("configuration on disk is not in effect: {}", info.message), subject: None }]
+                vec![Warning {
+                    code: ErrorCode::SCHEMA_INVALID,
+                    message: format!("configuration on disk is not in effect: {}", info.message),
+                    subject: None,
+                }]
             }
         }
     }
 
     pub(crate) fn status_data(&self) -> StatusData {
-        let mut runs: Vec<_> = self.runs.values().map(|r| lyra_protocol::run::RunSummary::from(&r.record)).collect();
-        runs.sort_by(|a, b| a.started_at.cmp(&b.started_at).then(a.run_id.cmp(&b.run_id)));
+        let mut runs: Vec<_> = self
+            .runs
+            .values()
+            .map(|r| lyra_protocol::run::RunSummary::from(&r.record))
+            .collect();
+        runs.sort_by(|a, b| {
+            a.started_at
+                .cmp(&b.started_at)
+                .then(a.run_id.cmp(&b.run_id))
+        });
         let mut storage_warnings = self.storage_warnings.clone();
         for r in self.runs.values() {
-            if let Ok(log) = r.log.lock() {
-                if let Some(e) = &log.write_error {
-                    storage_warnings.push(Warning {
-                        code: ErrorCode::STORAGE_UNAVAILABLE,
-                        message: format!("log writes failed ({} record(s) not saved): {e}", log.dropped),
-                        subject: Some(r.record.run_id.to_string()),
-                    });
-                }
+            if let Ok(log) = r.log.lock()
+                && let Some(e) = &log.write_error
+            {
+                storage_warnings.push(Warning {
+                    code: ErrorCode::STORAGE_UNAVAILABLE,
+                    message: format!(
+                        "log writes failed ({} record(s) not saved): {e}",
+                        log.dropped
+                    ),
+                    subject: Some(r.record.run_id.to_string()),
+                });
             }
         }
-        StatusData { session: self.session_info(), runs, storage_warnings, config_warnings: self.config_warnings() }
+        StatusData {
+            session: self.session_info(),
+            runs,
+            storage_warnings,
+            config_warnings: self.config_warnings(),
+        }
     }
 
     pub(crate) fn accepted(&self) -> Result<Arc<ConfigSet>, ErrorInfo> {
         match &self.config {
             ConfigState::Accepted { set, .. } => Ok(set.clone()),
-            ConfigState::NotSetup => Err(ErrorInfo::new(ErrorCode::NOT_SETUP, "this workspace has no .lyra/workspace.json yet")
-                .with_next_action(&["lyra", "setup", "--json"], "Discover project facts, then let your agent create plugins with the lyra skill.")),
+            ConfigState::NotSetup => Err(ErrorInfo::new(
+                ErrorCode::NOT_SETUP,
+                "this workspace has no .lyra/workspace.json yet",
+            )
+            .with_next_action(
+                &["lyra", "setup", "--json"],
+                "Discover project facts, then let your agent create plugins with the lyra skill.",
+            )),
             ConfigState::Invalid(i) => Err(i.to_error_info()),
         }
     }
@@ -449,10 +540,15 @@ impl Actor {
             Err(e) => return self.fail(e),
         };
         if p.if_revision == Some(self.catalog_revision) {
-            let meta = ReplyMeta { not_modified: true, ..ReplyMeta::default() };
+            let meta = ReplyMeta {
+                not_modified: true,
+                ..ReplyMeta::default()
+            };
             return self.ok(CatalogList { items: vec![] }, meta);
         }
-        let limit = p.limit.map_or(DEFAULT_CATALOG_LIMIT, |l| (l as usize).clamp(1, MAX_LIMIT));
+        let limit = p
+            .limit
+            .map_or(DEFAULT_CATALOG_LIMIT, |l| (l as usize).clamp(1, MAX_LIMIT));
         let query = p.query.as_deref().map(str::to_lowercase);
         let items: Vec<CatalogItem> = set
             .catalog()
@@ -460,14 +556,29 @@ impl Actor {
             .filter(|i| match &query {
                 None => true,
                 Some(q) => {
-                    let hay = format!("{} {} {} {}", i.item_ref, i.title, i.description, i.tags.join(" ")).to_lowercase();
+                    let hay = format!(
+                        "{} {} {} {}",
+                        i.item_ref,
+                        i.title,
+                        i.description,
+                        i.tags.join(" ")
+                    )
+                    .to_lowercase();
                     q.split_whitespace().all(|w| hay.contains(w))
                 }
             })
             .collect();
         let truncated = items.len() > limit;
-        let meta = ReplyMeta { truncated, ..ReplyMeta::default() };
-        self.ok(CatalogList { items: items.into_iter().take(limit).collect() }, meta)
+        let meta = ReplyMeta {
+            truncated,
+            ..ReplyMeta::default()
+        };
+        self.ok(
+            CatalogList {
+                items: items.into_iter().take(limit).collect(),
+            },
+            meta,
+        )
     }
 
     fn describe(&self, p: ItemDescribeParams) -> Handled {
@@ -475,9 +586,18 @@ impl Actor {
             Ok(s) => s,
             Err(e) => return self.fail(e),
         };
-        let not_found = || ErrorInfo::new(ErrorCode::NOT_FOUND, format!("no catalog item `{}`", p.item_ref));
-        let Some(lp) = set.plugin(&p.item_ref.plugin) else { return self.fail(not_found()) };
-        let Some(item) = set.catalog().into_iter().find(|i| i.item_ref == p.item_ref) else { return self.fail(not_found()) };
+        let not_found = || {
+            ErrorInfo::new(
+                ErrorCode::NOT_FOUND,
+                format!("no catalog item `{}`", p.item_ref),
+            )
+        };
+        let Some(lp) = set.plugin(&p.item_ref.plugin) else {
+            return self.fail(not_found());
+        };
+        let Some(item) = set.catalog().into_iter().find(|i| i.item_ref == p.item_ref) else {
+            return self.fail(not_found());
+        };
         let plugin = &lp.plugin;
         let summary = PluginSummary {
             id: plugin.id.clone(),
@@ -502,14 +622,24 @@ impl Actor {
                 has_schedule: a.schedule.is_some(),
                 write_only_fields: a.input_schema.0.write_only_fields(),
                 input_schema: p.include_schema.then(|| a.input_schema.0.as_map().clone()),
-                output_schema: if p.include_schema { a.output_schema.as_ref().map(|s| s.0.as_map().clone()) } else { None },
+                output_schema: if p.include_schema {
+                    a.output_schema.as_ref().map(|s| s.0.as_map().clone())
+                } else {
+                    None
+                },
             };
             let verb = match a.mode {
                 ActionMode::Task => "run",
                 ActionMode::Process => "start",
             };
             let mut hint = vec!["lyra".to_owned(), verb.to_owned(), p.item_ref.to_string()];
-            if a.input_schema.0.as_map().get("properties").and_then(Value::as_object).is_some_and(|m| !m.is_empty()) {
+            if a.input_schema
+                .0
+                .as_map()
+                .get("properties")
+                .and_then(Value::as_object)
+                .is_some_and(|m| !m.is_empty())
+            {
                 hint.extend(["--input".to_owned(), "input.json".to_owned()]);
             }
             (Some(desc), None, hint)
@@ -519,11 +649,24 @@ impl Actor {
                 persistence: v.persistence,
                 row_actions: v.row_actions.iter().map(|r| r.action.clone()).collect(),
             };
-            (None, Some(desc), vec!["lyra".to_owned(), "view".to_owned(), p.item_ref.to_string()])
+            (
+                None,
+                Some(desc),
+                vec!["lyra".to_owned(), "view".to_owned(), p.item_ref.to_string()],
+            )
         } else {
             return self.fail(not_found());
         };
-        self.ok(ItemDescription { item, plugin: summary, action, view, invoke_hint: hint }, ReplyMeta::default())
+        self.ok(
+            ItemDescription {
+                item,
+                plugin: summary,
+                action,
+                view,
+                invoke_hint: hint,
+            },
+            ReplyMeta::default(),
+        )
     }
 
     /// Increments `state_revision` and notifies state subscribers.
@@ -540,9 +683,11 @@ impl Actor {
 }
 
 pub(crate) fn reply_ok<T: Serialize>(ctx: ReplyContext, data: T, meta: ReplyMeta) -> Handled {
-    serde_json::to_value(PublicReply::success(ctx, data, meta)).map_err(|e| RpcError::new(RpcError::INTERNAL_ERROR, e.to_string()))
+    serde_json::to_value(PublicReply::success(ctx, data, meta))
+        .map_err(|e| RpcError::new(RpcError::INTERNAL_ERROR, e.to_string()))
 }
 
 pub(crate) fn reply_fail(ctx: ReplyContext, error: ErrorInfo) -> Handled {
-    serde_json::to_value(PublicReply::<Value>::failure(ctx, error)).map_err(|e| RpcError::new(RpcError::INTERNAL_ERROR, e.to_string()))
+    serde_json::to_value(PublicReply::<Value>::failure(ctx, error))
+        .map_err(|e| RpcError::new(RpcError::INTERNAL_ERROR, e.to_string()))
 }

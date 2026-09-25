@@ -24,17 +24,24 @@ pub struct Session {
     pub lease: Option<Option<(Instant, Timestamp)>>,
     pub stopping: bool,
     /// Environment captured from the controller that created the session (autostart, schedules).
+    #[allow(dead_code)] // read by interval schedules (LYR-13)
     pub env: ClientEnv,
 }
 
 impl Session {
     fn mode(&self) -> SessionMode {
-        if self.controllers.is_empty() && self.lease.is_some() { SessionMode::Background } else { SessionMode::Foreground }
+        if self.controllers.is_empty() && self.lease.is_some() {
+            SessionMode::Background
+        } else {
+            SessionMode::Foreground
+        }
     }
 }
 
 fn lease_from(ttl: TimeoutWire) -> Result<Option<(Instant, Timestamp)>, ErrorInfo> {
-    match TimeoutPolicy::from_wire(ttl).map_err(|m| ErrorInfo::new(ErrorCode::INVALID_ARGUMENT, m))? {
+    match TimeoutPolicy::from_wire(ttl)
+        .map_err(|m| ErrorInfo::new(ErrorCode::INVALID_ARGUMENT, m))?
+    {
         TimeoutPolicy::Unlimited => Ok(None),
         TimeoutPolicy::After(d) => {
             let wall = Timestamp::from_unix_ms(Timestamp::now().unix_ms() + d.as_millis() as i64);
@@ -50,18 +57,31 @@ impl Actor {
             mode: s.mode(),
             controller_count: s.controllers.len() as u32,
             expires_at: s.lease.flatten().map(|(_, t)| t),
-            state: if s.stopping { SessionState::Stopping } else { SessionState::Active },
+            state: if s.stopping {
+                SessionState::Stopping
+            } else {
+                SessionState::Active
+            },
         })
     }
 
     fn session_reply(&self, r: Responder) {
-        r.send(self.ok(SessionData { session: self.session_info() }, ReplyMeta::default()));
+        r.send(self.ok(
+            SessionData {
+                session: self.session_info(),
+            },
+            ReplyMeta::default(),
+        ));
     }
 
     /// Creates a session if none exists. Returns true when a new one was created.
     pub(crate) fn ensure_session(&mut self, env: &ClientEnv) -> Result<bool, ErrorInfo> {
         match &self.session {
-            Some(s) if s.stopping => Err(ErrorInfo::new(ErrorCode::BUSY, "the session is stopping; retry when it has stopped").retryable(true)),
+            Some(s) if s.stopping => Err(ErrorInfo::new(
+                ErrorCode::BUSY,
+                "the session is stopping; retry when it has stopped",
+            )
+            .retryable(true)),
             Some(_) => Ok(false),
             None => {
                 self.session = Some(Session {
@@ -77,7 +97,12 @@ impl Actor {
         }
     }
 
-    pub(super) fn session_attach(&mut self, client: &ClientId, p: SessionAttachParams, r: Responder) {
+    pub(super) fn session_attach(
+        &mut self,
+        client: &ClientId,
+        p: SessionAttachParams,
+        r: Responder,
+    ) {
         let created = match self.ensure_session(&p.client_env) {
             Ok(c) => c,
             Err(e) => return r.send(self.fail(e)),
@@ -141,10 +166,18 @@ impl Actor {
         match self.session.as_mut() {
             Some(s) if !s.stopping => s.lease = Some(lease),
             _ => {
-                return r.send(self.fail(
-                    ErrorInfo::new(ErrorCode::SESSION_REQUIRED, "no active session to keep in the background")
-                        .with_next_action(&["lyra", "up", "--background"], "Create a background session explicitly."),
-                ));
+                return r.send(
+                    self.fail(
+                        ErrorInfo::new(
+                            ErrorCode::SESSION_REQUIRED,
+                            "no active session to keep in the background",
+                        )
+                        .with_next_action(
+                            &["lyra", "up", "--background"],
+                            "Create a background session explicitly.",
+                        ),
+                    ),
+                );
             }
         }
         self.state_changed();
@@ -158,7 +191,9 @@ impl Actor {
 
     /// A controller disconnected or detached: stop owned work when it was the last one.
     pub(crate) fn controller_left(&mut self, client: &ClientId) {
-        let Some(s) = self.session.as_mut() else { return };
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
         let removed = s.controllers.remove(client) | s.temporary.remove(client);
         if removed {
             self.state_changed();
@@ -175,7 +210,9 @@ impl Actor {
 
     /// Stops every run the session owns and disables new invocations until it ends.
     pub(crate) fn stop_session(&mut self, reason: StopReason) {
-        let Some(s) = self.session.as_mut() else { return };
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
         s.stopping = true;
         let ids: Vec<_> = self.runs.keys().cloned().collect();
         for id in ids {
@@ -196,20 +233,20 @@ impl Actor {
         if s.stopping {
             return;
         }
-        if let Some(Some((deadline, _))) = s.lease {
-            if Instant::now() >= deadline {
-                diag("background lease expired: stopping the session");
-                self.stop_session(StopReason::TtlExpired);
-            }
+        if let Some(Some((deadline, _))) = s.lease
+            && Instant::now() >= deadline
+        {
+            diag("background lease expired: stopping the session");
+            self.stop_session(StopReason::TtlExpired);
         }
     }
 
     /// Adds a waiting client as a temporary controller for the duration of its task.
     pub(crate) fn add_temporary_controller(&mut self, client: &ClientId) {
-        if let Some(s) = self.session.as_mut() {
-            if !s.controllers.contains(client) {
-                s.temporary.insert(client.clone());
-            }
+        if let Some(s) = self.session.as_mut()
+            && !s.controllers.contains(client)
+        {
+            s.temporary.insert(client.clone());
         }
     }
 }

@@ -50,10 +50,17 @@ pub enum StopKind {
 
 #[derive(Debug)]
 pub enum RunnerEvent {
-    Spawned { pid: u32 },
+    Spawned,
     TimedOut,
     Logs { records: Vec<LogRecord> },
-    Finished { exit: Option<ExitInfo>, spawn_error: Option<ErrorInfo>, cleanup: CleanupState },
+    Finished(Box<FinishedRun>),
+}
+
+#[derive(Debug)]
+pub struct FinishedRun {
+    pub exit: Option<ExitInfo>,
+    pub spawn_error: Option<ErrorInfo>,
+    pub cleanup: CleanupState,
 }
 
 pub type EventSink = mpsc::Sender<(RunId, RunnerEvent)>;
@@ -73,7 +80,10 @@ pub fn signal_name(sig: i32) -> String {
 }
 
 pub fn exit_info(status: ExitStatus) -> ExitInfo {
-    ExitInfo { code: status.code(), signal: status.signal().map(signal_name) }
+    ExitInfo {
+        code: status.code(),
+        signal: status.signal().map(signal_name),
+    }
 }
 
 fn signal_group(pid: u32, sig: Signal) {
@@ -126,14 +136,15 @@ impl Batcher {
     }
     fn note(&mut self, text: &str) {
         if let Ok(mut log) = self.log.lock() {
-            self.pending.extend(log.push_line(LogStream::Host, LogLevel::Info, text, false));
+            self.pending
+                .extend(log.push_line(LogStream::Host, LogLevel::Info, text, false));
         }
     }
     fn tick(&mut self) {
-        if let Ok(mut log) = self.log.lock() {
-            if log.flush_due() {
-                log.flush();
-            }
+        if let Ok(mut log) = self.log.lock()
+            && log.flush_due()
+        {
+            log.flush();
         }
         self.send();
     }
@@ -148,7 +159,9 @@ impl Batcher {
         if !self.pending.is_empty() {
             let records = std::mem::take(&mut self.pending);
             // Live delivery is best effort; the log file and ring stay authoritative.
-            let _ = self.events.try_send((self.run_id.clone(), RunnerEvent::Logs { records }));
+            let _ = self
+                .events
+                .try_send((self.run_id.clone(), RunnerEvent::Logs { records }));
         }
     }
 }
@@ -231,7 +244,9 @@ async fn drive(
 }
 
 async fn run_cleanup(spec: &CommandSpec, reason: &str, batch: &mut Batcher) -> CleanupState {
-    let Some(argv) = &spec.cleanup else { return CleanupState::NotNeeded };
+    let Some(argv) = &spec.cleanup else {
+        return CleanupState::NotNeeded;
+    };
     let mut env = spec.env.clone();
     env.0.insert("LYRA_STOP_REASON".into(), reason.into());
     batch.note(&format!("cleanup: running {}", argv[0]));
@@ -240,53 +255,117 @@ async fn run_cleanup(spec: &CommandSpec, reason: &str, batch: &mut Batcher) -> C
         Err(e) => {
             return CleanupState::Failed {
                 ended_at: Timestamp::now(),
-                error: ErrorInfo::new(ErrorCode::EXECUTION_FAILED, format!("cannot start cleanup: {e}")),
+                error: ErrorInfo::new(
+                    ErrorCode::EXECUTION_FAILED,
+                    format!("cannot start cleanup: {e}"),
+                ),
             };
         }
     };
-    let mut pipes = Pipes { out: child.stdout.take(), err: child.stderr.take() };
+    let mut pipes = Pipes {
+        out: child.stdout.take(),
+        err: child.stderr.take(),
+    };
     let (_tx, mut never) = mpsc::channel::<StopKind>(1);
-    let (status, timed_out, _) = drive(&mut child, &mut pipes, batch, &mut never, Some(CLEANUP_TIMEOUT), Signal::TERM, Duration::from_secs(1)).await;
+    let (status, timed_out, _) = drive(
+        &mut child,
+        &mut pipes,
+        batch,
+        &mut never,
+        Some(CLEANUP_TIMEOUT),
+        Signal::TERM,
+        Duration::from_secs(1),
+    )
+    .await;
     let ended_at = Timestamp::now();
     match status {
         Some(s) if s.success() && !timed_out => CleanupState::Succeeded { ended_at },
         Some(s) => CleanupState::Failed {
             ended_at,
             error: ErrorInfo::new(
-                if timed_out { ErrorCode::TIMEOUT } else { ErrorCode::EXECUTION_FAILED },
-                format!("cleanup ended with {:?}", exit_info(s)),
+                if timed_out {
+                    ErrorCode::TIMEOUT
+                } else {
+                    ErrorCode::EXECUTION_FAILED
+                },
+                match (timed_out, s.code(), s.signal()) {
+                    (true, _, _) => "cleanup timed out after 10 s".to_owned(),
+                    (_, Some(c), _) => format!("cleanup exited with status {c}"),
+                    (_, None, Some(sig)) => format!("cleanup was ended by {}", signal_name(sig)),
+                    _ => "cleanup ended abnormally".to_owned(),
+                },
             ),
         },
-        None => CleanupState::Unknown { message: "cleanup status could not be read".into() },
+        None => CleanupState::Unknown {
+            message: "cleanup status could not be read".into(),
+        },
     }
 }
 
 /// Supervises one run from spawn to final cleanup. Never panics on child failures.
-pub async fn supervise(spec: CommandSpec, log: SharedLog, events: EventSink, mut stop_rx: mpsc::Receiver<StopKind>) {
-    let mut batch = Batcher { run_id: spec.run_id.clone(), log, events: events.clone(), pending: Vec::new() };
+pub async fn supervise(
+    spec: CommandSpec,
+    log: SharedLog,
+    events: EventSink,
+    mut stop_rx: mpsc::Receiver<StopKind>,
+) {
+    let mut batch = Batcher {
+        run_id: spec.run_id.clone(),
+        log,
+        events: events.clone(),
+        pending: Vec::new(),
+    };
     let signal = match spec.stop_signal {
         StopSignal::Term => Signal::TERM,
         StopSignal::Interrupt => Signal::INT,
     };
-    let finish = |exit, spawn_error, cleanup| RunnerEvent::Finished { exit, spawn_error, cleanup };
+    let finish = |exit, spawn_error, cleanup| {
+        RunnerEvent::Finished(Box::new(FinishedRun {
+            exit,
+            spawn_error,
+            cleanup,
+        }))
+    };
     let mut child = match command(&spec.argv, &spec.cwd, &spec.env).spawn() {
         Ok(c) => c,
         Err(e) => {
-            let err = ErrorInfo::new(ErrorCode::EXECUTION_FAILED, format!("cannot start `{}`: {e}", spec.argv[0]));
+            let err = ErrorInfo::new(
+                ErrorCode::EXECUTION_FAILED,
+                format!("cannot start `{}`: {e}", spec.argv[0]),
+            );
             batch.note(&err.message);
             batch.finish();
             remove_temp(&spec.temp_files);
-            let _ = events.send((spec.run_id.clone(), finish(None, Some(err), CleanupState::NotNeeded))).await;
+            let _ = events
+                .send((
+                    spec.run_id.clone(),
+                    finish(None, Some(err), CleanupState::NotNeeded),
+                ))
+                .await;
             return;
         }
     };
-    let _ = events.send((spec.run_id.clone(), RunnerEvent::Spawned { pid: child.id().unwrap_or(0) })).await;
-    let mut pipes = Pipes { out: child.stdout.take(), err: child.stderr.take() };
+    let _ = events
+        .send((spec.run_id.clone(), RunnerEvent::Spawned))
+        .await;
+    let mut pipes = Pipes {
+        out: child.stdout.take(),
+        err: child.stderr.take(),
+    };
     let timeout = match spec.timeout {
         TimeoutPolicy::Unlimited => None,
         TimeoutPolicy::After(d) => Some(d),
     };
-    let (status, timed_out, stop_kind) = drive(&mut child, &mut pipes, &mut batch, &mut stop_rx, timeout, signal, spec.grace).await;
+    let (status, timed_out, stop_kind) = drive(
+        &mut child,
+        &mut pipes,
+        &mut batch,
+        &mut stop_rx,
+        timeout,
+        signal,
+        spec.grace,
+    )
+    .await;
     let exit = status.map(exit_info);
     let reason = match (timed_out, stop_kind, status) {
         (true, _, _) => "timed_out",
@@ -298,7 +377,9 @@ pub async fn supervise(spec: CommandSpec, log: SharedLog, events: EventSink, mut
     let cleanup = run_cleanup(&spec, reason, &mut batch).await;
     batch.finish();
     remove_temp(&spec.temp_files);
-    let _ = events.send((spec.run_id.clone(), finish(exit, None, cleanup))).await;
+    let _ = events
+        .send((spec.run_id.clone(), finish(exit, None, cleanup)))
+        .await;
 }
 
 fn remove_temp(files: &[PathBuf]) {

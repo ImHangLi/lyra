@@ -12,7 +12,9 @@ use lyra_protocol::error::{ErrorCode, ErrorInfo};
 use lyra_protocol::hash::canonical_digest;
 use lyra_protocol::ids::*;
 use lyra_protocol::ipc::*;
-use lyra_protocol::manifest::{Action, ActionMode, Argv, Runner, StopSignal, TerminalMode, TimeoutPolicy};
+use lyra_protocol::manifest::{
+    Action, ActionMode, Argv, Runner, StopSignal, TerminalMode, TimeoutPolicy,
+};
 use lyra_protocol::reply::ReplyMeta;
 use lyra_protocol::run::*;
 use lyra_protocol::time::Timestamp;
@@ -51,14 +53,16 @@ pub struct Launch {
 }
 
 pub enum Phase {
-    Reserving { waiters: Vec<Responder>, launch: Box<Launch> },
+    Reserving {
+        waiters: Vec<Responder>,
+        launch: Box<Launch>,
+    },
     Live,
     Finalizing,
 }
 
 pub struct ActiveRun {
     pub record: RunRecord,
-    pub mode: ActionMode,
     pub fingerprint: Digest,
     pub request_key: Option<RequestKey>,
     pub log: SharedLog,
@@ -112,19 +116,32 @@ fn git_context(root: &Path) -> Option<GitContext> {
     match head.strip_prefix("ref: ") {
         Some(r) => {
             let branch = r.strip_prefix("refs/heads/").map(str::to_owned);
-            let common = std::fs::read_to_string(gitdir.join("commondir")).ok().map(|c| gitdir.join(c.trim())).unwrap_or(gitdir.clone());
-            let sha = std::fs::read_to_string(gitdir.join(r)).or_else(|_| std::fs::read_to_string(common.join(r))).ok().map(|s| s.trim().to_owned());
+            let common = std::fs::read_to_string(gitdir.join("commondir"))
+                .ok()
+                .map(|c| gitdir.join(c.trim()))
+                .unwrap_or(gitdir.clone());
+            let sha = std::fs::read_to_string(gitdir.join(r))
+                .or_else(|_| std::fs::read_to_string(common.join(r)))
+                .ok()
+                .map(|s| s.trim().to_owned());
             Some(GitContext { head: sha, branch })
         }
-        None => Some(GitContext { head: Some(head.to_owned()), branch: None }),
+        None => Some(GitContext {
+            head: Some(head.to_owned()),
+            branch: None,
+        }),
     }
 }
 
 fn outcome_for(stop: Option<StopReason>, exit: &Option<ExitInfo>, spawn_failed: bool) -> Outcome {
     match stop {
         Some(StopReason::Timeout) => Outcome::TimedOut,
-        Some(StopReason::User | StopReason::SessionClosed | StopReason::TtlExpired) => Outcome::Cancelled,
-        Some(StopReason::ProtocolError | StopReason::OutputLimit | StopReason::InternalError) => Outcome::Failed,
+        Some(StopReason::User | StopReason::SessionClosed | StopReason::TtlExpired) => {
+            Outcome::Cancelled
+        }
+        Some(StopReason::ProtocolError | StopReason::OutputLimit | StopReason::InternalError) => {
+            Outcome::Failed
+        }
         None if spawn_failed => Outcome::Failed,
         None => match exit {
             Some(ExitInfo { code: Some(0), .. }) => Outcome::Succeeded,
@@ -142,7 +159,9 @@ fn decode_cursor(s: &str, kind: &str) -> Result<Value, ErrorInfo> {
     if s.len() > lyra_protocol::limits::MAX_CURSOR_BYTES {
         return Err(bad());
     }
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).map_err(|_| bad())?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .map_err(|_| bad())?;
     let v: Value = serde_json::from_slice(&bytes).map_err(|_| bad())?;
     if v.get("k").and_then(Value::as_str) != Some(kind) {
         return Err(bad());
@@ -153,10 +172,21 @@ fn decode_cursor(s: &str, kind: &str) -> Result<Value, ErrorInfo> {
 fn write_private_json(path: &Path, v: &Value) -> Result<(), String> {
     use std::io::Write;
     if let Some(dir) = path.parent() {
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).map_err(|e| e.to_string())?;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(|e| e.to_string())?;
     }
-    let mut f = std::fs::OpenOptions::new().create(true).truncate(true).write(true).mode(0o600).open(path).map_err(|e| e.to_string())?;
-    f.write_all(v.to_string().as_bytes()).map_err(|e| e.to_string())
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    f.write_all(v.to_string().as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 impl Actor {
@@ -170,8 +200,15 @@ impl Actor {
         if let Some(v) = self.validators.get(&action.definition_hash) {
             return Ok(v.clone());
         }
-        let v = Arc::new(action.input_schema.0.compile().map_err(|e| err(ErrorCode::SCHEMA_INVALID, e))?);
-        self.validators.insert(action.definition_hash.clone(), v.clone());
+        let v = Arc::new(
+            action
+                .input_schema
+                .0
+                .compile()
+                .map_err(|e| err(ErrorCode::SCHEMA_INVALID, e))?,
+        );
+        self.validators
+            .insert(action.definition_hash.clone(), v.clone());
         Ok(v)
     }
 
@@ -179,7 +216,12 @@ impl Actor {
         self.invoke_internal(client, p, Some(r));
     }
 
-    pub(crate) fn invoke_internal(&mut self, client: &ClientId, p: ActionInvokeParams, r: Option<Responder>) {
+    pub(crate) fn invoke_internal(
+        &mut self,
+        client: &ClientId,
+        p: ActionInvokeParams,
+        r: Option<Responder>,
+    ) {
         match self.prepare_action(&p) {
             Ok(prepared) => self.start(client, prepared, r),
             Err(e) => self.fail_opt(r, e),
@@ -188,16 +230,32 @@ impl Actor {
 
     fn prepare_action(&mut self, p: &ActionInvokeParams) -> Result<Prepared, ErrorInfo> {
         let set = self.accepted()?;
-        let (lp, action) = set.action(&p.action_ref).ok_or_else(|| err(ErrorCode::NOT_FOUND, format!("no action `{}`", p.action_ref)))?;
+        let (lp, action) = set.action(&p.action_ref).ok_or_else(|| {
+            err(
+                ErrorCode::NOT_FOUND,
+                format!("no action `{}`", p.action_ref),
+            )
+        })?;
         if !lp.plugin.enabled {
-            return Err(err(ErrorCode::INVALID_ARGUMENT, format!("plugin `{}` is disabled", lp.plugin.id)));
+            return Err(err(
+                ErrorCode::INVALID_ARGUMENT,
+                format!("plugin `{}` is disabled", lp.plugin.id),
+            ));
         }
         let argv = match &action.run {
             Runner::Command { argv } => argv.as_slice().to_vec(),
-            Runner::Plugin => return Err(err(ErrorCode::EXECUTION_FAILED, "structured plugin actions are not available in this build yet")),
+            Runner::Plugin => {
+                return Err(err(
+                    ErrorCode::EXECUTION_FAILED,
+                    "structured plugin actions are not available in this build yet",
+                ));
+            }
         };
         if action.terminal == TerminalMode::Pty {
-            return Err(err(ErrorCode::EXECUTION_FAILED, "PTY actions are not available in this build yet"));
+            return Err(err(
+                ErrorCode::EXECUTION_FAILED,
+                "PTY actions are not available in this build yet",
+            ));
         }
         let schema = &action.input_schema.0;
         let effective = schema.effective_input(&p.input);
@@ -207,7 +265,8 @@ impl Actor {
             return Err(issues.to_error_info());
         }
         let storage = self.storage.as_ref().map_err(|e| e.to_error_info())?;
-        let fingerprint = storage.fingerprint(&json!({"input": effective, "definition_hash": action.definition_hash}));
+        let fingerprint = storage
+            .fingerprint(&json!({"input": effective, "definition_hash": action.definition_hash}));
         Ok(Prepared {
             action_ref: Some(p.action_ref.clone()),
             label: action.title.clone(),
@@ -238,12 +297,17 @@ impl Actor {
     pub(super) fn exec(&mut self, client: &ClientId, p: ActionExecParams, r: Responder) {
         let prepared = (|| {
             if p.label.is_empty() || p.label.len() > lyra_protocol::limits::MAX_NAME_BYTES {
-                return Err(err(ErrorCode::INVALID_ARGUMENT, "--label must be 1-128 bytes"));
+                return Err(err(
+                    ErrorCode::INVALID_ARGUMENT,
+                    "--label must be 1-128 bytes",
+                ));
             }
             let mut issues = lyra_protocol::Issues::default();
-            let argv = Argv::parse(p.argv.clone(), "/argv", &mut issues).ok_or_else(|| issues.to_error_info())?;
+            let argv = Argv::parse(p.argv.clone(), "/argv", &mut issues)
+                .ok_or_else(|| issues.to_error_info())?;
             let storage = self.storage.as_ref().map_err(|e| e.to_error_info())?;
-            let definition_hash = canonical_digest(&json!({"exec": argv.as_slice()})).map_err(|e| err(ErrorCode::INTERNAL, e))?;
+            let definition_hash = canonical_digest(&json!({"exec": argv.as_slice()}))
+                .map_err(|e| err(ErrorCode::INTERNAL, e))?;
             let fingerprint = storage.fingerprint(&json!({"exec": argv.as_slice()}));
             Ok(Prepared {
                 action_ref: None,
@@ -261,7 +325,9 @@ impl Actor {
                     env_files: vec![],
                     action_env: BTreeMap::new(),
                     client_env: p.client_env.clone(),
-                    timeout: TimeoutPolicy::After(Duration::from_millis(lyra_protocol::limits::DEFAULT_TASK_TIMEOUT_MS)),
+                    timeout: TimeoutPolicy::After(Duration::from_millis(
+                        lyra_protocol::limits::DEFAULT_TASK_TIMEOUT_MS,
+                    )),
                     stop_signal: StopSignal::Term,
                     grace: Duration::from_millis(lyra_protocol::limits::DEFAULT_STOP_GRACE_MS),
                     cleanup: None,
@@ -279,42 +345,79 @@ impl Actor {
 
     /// Singleton, session, and reservation rules shared by actions and exec.
     fn start(&mut self, client: &ClientId, prep: Prepared, r: Option<Responder>) {
-        if let Some(action_ref) = &prep.action_ref {
-            if let Some(existing) = self.by_action.get(action_ref).and_then(|id| self.runs.get(id)) {
-                let same = existing.record.definition_hash == prep.definition_hash && existing.fingerprint == prep.fingerprint;
-                let answer = match prep.mode {
-                    ActionMode::Process if same => Ok(existing.record.run_id.clone()),
-                    ActionMode::Process => Err(err(
-                        ErrorCode::ALREADY_RUNNING_DIFFERENT_INPUT,
-                        format!("`{action_ref}` already runs with a different input or definition"),
+        if let Some(action_ref) = &prep.action_ref
+            && let Some(existing) = self
+                .by_action
+                .get(action_ref)
+                .and_then(|id| self.runs.get(id))
+        {
+            let same = existing.record.definition_hash == prep.definition_hash
+                && existing.fingerprint == prep.fingerprint;
+            let answer = match prep.mode {
+                ActionMode::Process if same => Ok(existing.record.run_id.clone()),
+                ActionMode::Process => Err(err(
+                    ErrorCode::ALREADY_RUNNING_DIFFERENT_INPUT,
+                    format!("`{action_ref}` already runs with a different input or definition"),
+                )
+                .with_next_action(
+                    &["lyra", "restart", &action_ref.to_string()],
+                    "Restart explicitly to apply the new input.",
+                )),
+                ActionMode::Task => match (&prep.request_key, &existing.request_key) {
+                    (Some(k), Some(e)) if k == e && same => Ok(existing.record.run_id.clone()),
+                    (Some(k), Some(e)) if k == e => Err(err(
+                        ErrorCode::REQUEST_KEY_CONFLICT,
+                        "request key reused with different input",
+                    )),
+                    _ => Err(err(
+                        ErrorCode::BUSY,
+                        format!(
+                            "`{action_ref}` is already running as {}",
+                            existing.record.run_id
+                        ),
                     )
-                    .with_next_action(&["lyra", "restart", &action_ref.to_string()], "Restart explicitly to apply the new input.")),
-                    ActionMode::Task => match (&prep.request_key, &existing.request_key) {
-                        (Some(k), Some(e)) if k == e && same => Ok(existing.record.run_id.clone()),
-                        (Some(k), Some(e)) if k == e => Err(err(ErrorCode::REQUEST_KEY_CONFLICT, "request key reused with different input")),
-                        _ => Err(err(ErrorCode::BUSY, format!("`{action_ref}` is already running as {}", existing.record.run_id)).retryable(true)),
-                    },
-                };
-                let state = existing.record.lifecycle;
-                return match answer {
-                    Ok(run_id) => {
-                        if let Some(r) = r {
-                            r.send(self.ok(InvokeAccepted { run_id, state, reused: true }, ReplyMeta::default()));
-                        }
+                    .retryable(true)),
+                },
+            };
+            let state = existing.record.lifecycle;
+            return match answer {
+                Ok(run_id) => {
+                    if let Some(r) = r {
+                        r.send(self.ok(
+                            InvokeAccepted {
+                                run_id,
+                                state,
+                                reused: true,
+                            },
+                            ReplyMeta::default(),
+                        ));
                     }
-                    Err(e) => self.fail_opt(r, e),
-                };
-            }
+                }
+                Err(e) => self.fail_opt(r, e),
+            };
         }
         if self.session.as_ref().is_some_and(|s| s.stopping) {
-            return self.fail_opt(r, err(ErrorCode::BUSY, "the session is stopping; retry when it has stopped").retryable(true));
+            return self.fail_opt(
+                r,
+                err(
+                    ErrorCode::BUSY,
+                    "the session is stopping; retry when it has stopped",
+                )
+                .retryable(true),
+            );
         }
         let waiting_task = prep.mode == ActionMode::Task && prep.foreground;
         if self.session.is_none() && !waiting_task {
             return self.fail_opt(
                 r,
-                err(ErrorCode::SESSION_REQUIRED, "no active session owns long-running or non-waiting work")
-                    .with_next_action(&["lyra", "up", "--background", "--ttl", "2h"], "Explicitly enable background execution."),
+                err(
+                    ErrorCode::SESSION_REQUIRED,
+                    "no active session owns long-running or non-waiting work",
+                )
+                .with_next_action(
+                    &["lyra", "up", "--background", "--ttl", "2h"],
+                    "Explicitly enable background execution.",
+                ),
             );
         }
         let mut temp_controller = None;
@@ -322,17 +425,29 @@ impl Actor {
             if let Err(e) = self.ensure_session(&prep.launch.client_env) {
                 return self.fail_opt(r, e);
             }
-            let is_controller = self.session.as_ref().is_some_and(|s| s.controllers.contains(client));
+            let is_controller = self
+                .session
+                .as_ref()
+                .is_some_and(|s| s.controllers.contains(client));
             if !is_controller {
                 self.add_temporary_controller(client);
                 temp_controller = Some(client.clone());
             }
         }
         let Some(session_id) = self.session.as_ref().map(|s| s.id.clone()) else {
-            return self.fail_opt(r, err(ErrorCode::INTERNAL, "session missing after creation"));
+            return self.fail_opt(
+                r,
+                err(ErrorCode::INTERNAL, "session missing after creation"),
+            );
         };
         let Ok(storage) = self.storage.clone() else {
-            return self.fail_opt(r, err(ErrorCode::STORAGE_UNAVAILABLE, "run history storage is unavailable; nothing was started"));
+            return self.fail_opt(
+                r,
+                err(
+                    ErrorCode::STORAGE_UNAVAILABLE,
+                    "run history storage is unavailable; nothing was started",
+                ),
+            );
         };
         let run_id = RunId::random();
         let record = RunRecord {
@@ -350,28 +465,48 @@ impl Actor {
             reported_health: ReportedHealth::unknown(),
             exit: None,
             stop_reason: None,
-            cleanup: if prep.cleanup_configured { CleanupState::Pending } else { CleanupState::NotNeeded },
+            cleanup: if prep.cleanup_configured {
+                CleanupState::Pending
+            } else {
+                CleanupState::NotNeeded
+            },
             result: None,
-            log: LogLocation { first_seq: None, last_seq: None, dropped_records: 0, truncated_records: 0 },
+            log: LogLocation {
+                first_seq: None,
+                last_seq: None,
+                dropped_records: 0,
+                truncated_records: 0,
+            },
             git: git_context(self.paths.root.as_path()),
             note: None,
         };
-        let cap = self.accepted().map_or(8 * 1024 * 1024, |s| s.storage.log_bytes_per_run);
-        let log = Arc::new(Mutex::new(RunLog::create(self.paths.run_logs(&run_id), cap)));
+        let cap = self
+            .accepted()
+            .map_or(8 * 1024 * 1024, |s| s.storage.log_bytes_per_run);
+        let log = Arc::new(Mutex::new(RunLog::create(
+            self.paths.run_logs(&run_id),
+            cap,
+        )));
         if let Some(a) = &prep.action_ref {
             self.by_action.insert(a.clone(), run_id.clone());
         }
-        let claim = prep.request_key.clone().map(|key| KeyClaim { scope: prep.scope.clone(), key, fingerprint: prep.fingerprint.clone() });
+        let claim = prep.request_key.clone().map(|key| KeyClaim {
+            scope: prep.scope.clone(),
+            key,
+            fingerprint: prep.fingerprint.clone(),
+        });
         self.runs.insert(
             run_id.clone(),
             ActiveRun {
                 record: record.clone(),
-                mode: prep.mode,
                 fingerprint: prep.fingerprint,
                 request_key: prep.request_key,
                 log,
                 stop_tx: None,
-                phase: Phase::Reserving { waiters: r.into_iter().collect(), launch: Box::new(prep.launch) },
+                phase: Phase::Reserving {
+                    waiters: r.into_iter().collect(),
+                    launch: Box::new(prep.launch),
+                },
                 temp_controller,
                 requested_stop: None,
             },
@@ -381,13 +516,23 @@ impl Actor {
         tokio::spawn(async move {
             let result = async {
                 if let Some(claim) = claim {
-                    match storage.claim_key(claim, run_id.to_string()).await.map_err(|e| e.to_error_info())? {
+                    match storage
+                        .claim_key(claim, run_id.to_string())
+                        .await
+                        .map_err(|e| e.to_error_info())?
+                    {
                         Claim::New => {}
                         Claim::Same { reference } => {
-                            let reference = RunId::parse(reference).map_err(|e| err(ErrorCode::INTERNAL, e.to_string()))?;
+                            let reference = RunId::parse(reference)
+                                .map_err(|e| err(ErrorCode::INTERNAL, e.to_string()))?;
                             return Ok(Reservation::Same { reference });
                         }
-                        Claim::Conflict => return Err(err(ErrorCode::REQUEST_KEY_CONFLICT, "request key was used with a different input or definition")),
+                        Claim::Conflict => {
+                            return Err(err(
+                                ErrorCode::REQUEST_KEY_CONFLICT,
+                                "request key was used with a different input or definition",
+                            ));
+                        }
                     }
                 }
                 storage.insert_run(record).await.map_err(|e| {
@@ -404,10 +549,10 @@ impl Actor {
 
     fn drop_pending(&mut self, run_id: &RunId) -> Option<ActiveRun> {
         let run = self.runs.remove(run_id)?;
-        if let Some(a) = &run.record.action_ref {
-            if self.by_action.get(a) == Some(run_id) {
-                self.by_action.remove(a);
-            }
+        if let Some(a) = &run.record.action_ref
+            && self.by_action.get(a) == Some(run_id)
+        {
+            self.by_action.remove(a);
         }
         if let Some(c) = &run.temp_controller {
             self.release_temp_controller(c);
@@ -416,7 +561,10 @@ impl Actor {
     }
 
     fn release_temp_controller(&mut self, client: &ClientId) {
-        let still_waiting = self.runs.values().any(|r| r.temp_controller.as_ref() == Some(client));
+        let still_waiting = self
+            .runs
+            .values()
+            .any(|r| r.temp_controller.as_ref() == Some(client));
         if !still_waiting {
             if let Some(s) = self.session.as_mut() {
                 s.temporary.remove(client);
@@ -428,22 +576,33 @@ impl Actor {
     pub(super) fn reserved(&mut self, run_id: RunId, result: Result<Reservation, ErrorInfo>) {
         match result {
             Err(e) => {
-                if let Some(run) = self.drop_pending(&run_id) {
-                    if let Phase::Reserving { waiters, .. } = run.phase {
-                        for w in waiters {
-                            w.send(self.fail(e.clone()));
-                        }
+                if let Some(run) = self.drop_pending(&run_id)
+                    && let Phase::Reserving { waiters, .. } = run.phase
+                {
+                    for w in waiters {
+                        w.send(self.fail(e.clone()));
                     }
                 }
                 self.end_session_if_idle();
                 self.state_changed();
             }
             Ok(Reservation::Same { reference }) => {
-                let Some(run) = self.drop_pending(&run_id) else { return };
-                let Phase::Reserving { waiters, .. } = run.phase else { return };
-                let known = self.runs.get(&reference).map(|r| r.record.lifecycle).or_else(|| {
-                    self.recent.iter().find(|(r, _)| r.run_id == reference).map(|(r, _)| r.lifecycle)
-                });
+                let Some(run) = self.drop_pending(&run_id) else {
+                    return;
+                };
+                let Phase::Reserving { waiters, .. } = run.phase else {
+                    return;
+                };
+                let known = self
+                    .runs
+                    .get(&reference)
+                    .map(|r| r.record.lifecycle)
+                    .or_else(|| {
+                        self.recent
+                            .iter()
+                            .find(|(r, _)| r.run_id == reference)
+                            .map(|(r, _)| r.lifecycle)
+                    });
                 self.end_session_if_idle();
                 self.state_changed();
                 let ctx = self.ctx();
@@ -451,12 +610,33 @@ impl Actor {
                 tokio::spawn(async move {
                     let state = match (known, storage) {
                         (Some(l), _) => Some(l),
-                        (None, Ok(s)) => s.get_run(reference.clone()).await.ok().flatten().map(|r| r.lifecycle),
+                        (None, Ok(s)) => s
+                            .get_run(reference.clone())
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|r| r.lifecycle),
                         (None, Err(_)) => None,
                     };
                     let reply = match state {
-                        Some(state) => reply_ok(ctx, InvokeAccepted { run_id: reference, state, reused: true }, ReplyMeta::default()),
-                        None => reply_fail(ctx, err(ErrorCode::OUTCOME_UNKNOWN, format!("request key maps to {reference}, whose record is no longer available"))),
+                        Some(state) => reply_ok(
+                            ctx,
+                            InvokeAccepted {
+                                run_id: reference,
+                                state,
+                                reused: true,
+                            },
+                            ReplyMeta::default(),
+                        ),
+                        None => reply_fail(
+                            ctx,
+                            err(
+                                ErrorCode::OUTCOME_UNKNOWN,
+                                format!(
+                                    "request key maps to {reference}, whose record is no longer available"
+                                ),
+                            ),
+                        ),
                     };
                     for w in waiters {
                         w.send(reply.clone());
@@ -468,17 +648,29 @@ impl Actor {
     }
 
     fn launch(&mut self, run_id: RunId) {
-        let Some(run) = self.runs.get_mut(&run_id) else { return };
-        let Phase::Reserving { waiters, launch } = std::mem::replace(&mut run.phase, Phase::Live) else { return };
+        let Some(run) = self.runs.get_mut(&run_id) else {
+            return;
+        };
+        let Phase::Reserving { waiters, launch } = std::mem::replace(&mut run.phase, Phase::Live)
+        else {
+            return;
+        };
         let state = run.record.lifecycle;
         let reply = super::reply_ok(
             super::ReplyContext {
-                workspace: Some(lyra_protocol::reply::WorkspaceRef { id: self.paths.id.clone(), root: self.paths.root.clone() }),
+                workspace: Some(lyra_protocol::reply::WorkspaceRef {
+                    id: self.paths.id.clone(),
+                    root: self.paths.root.clone(),
+                }),
                 host_epoch: Some(self.epoch.clone()),
                 catalog_revision: Some(self.catalog_revision),
                 state_revision: Some(self.state_revision),
             },
-            InvokeAccepted { run_id: run_id.clone(), state, reused: false },
+            InvokeAccepted {
+                run_id: run_id.clone(),
+                state,
+                reused: false,
+            },
             ReplyMeta::default(),
         );
         for w in waiters {
@@ -492,8 +684,16 @@ impl Actor {
         }
         let root = self.paths.root.as_path().to_path_buf();
         let (state_dir, cache_dir, plugin_dir) = match &launch.plugin {
-            Some((id, dir)) => (self.paths.plugin_state(id), self.paths.plugin_cache(id), Some(dir.to_string())),
-            None => (self.paths.state_dir.join("exec"), self.paths.cache_dir.join("exec"), None),
+            Some((id, dir)) => (
+                self.paths.plugin_state(id),
+                self.paths.plugin_cache(id),
+                Some(dir.to_string()),
+            ),
+            None => (
+                self.paths.state_dir.join("exec"),
+                self.paths.cache_dir.join("exec"),
+                None,
+            ),
         };
         let artifact_dir = self.paths.artifacts(&run_id);
         let inputs = self.paths.temp_inputs();
@@ -501,10 +701,31 @@ impl Actor {
         let config_file = inputs.join(format!("{run_id}.config.json"));
         let prepared = (|| -> Result<env::ChildEnv, ErrorInfo> {
             for d in [&state_dir, &cache_dir, &artifact_dir] {
-                std::fs::DirBuilder::new().recursive(true).mode(0o700).create(d).map_err(|e| err(ErrorCode::STORAGE_UNAVAILABLE, format!("cannot create {}: {e}", d.display())))?;
+                std::fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(d)
+                    .map_err(|e| {
+                        err(
+                            ErrorCode::STORAGE_UNAVAILABLE,
+                            format!("cannot create {}: {e}", d.display()),
+                        )
+                    })?;
             }
-            write_private_json(&input_file, &Value::Object(launch.input.clone())).map_err(|e| err(ErrorCode::STORAGE_UNAVAILABLE, format!("cannot write input file: {e}")))?;
-            write_private_json(&config_file, &Value::Object(launch.config.clone())).map_err(|e| err(ErrorCode::STORAGE_UNAVAILABLE, format!("cannot write config file: {e}")))?;
+            write_private_json(&input_file, &Value::Object(launch.input.clone())).map_err(|e| {
+                err(
+                    ErrorCode::STORAGE_UNAVAILABLE,
+                    format!("cannot write input file: {e}"),
+                )
+            })?;
+            write_private_json(&config_file, &Value::Object(launch.config.clone())).map_err(
+                |e| {
+                    err(
+                        ErrorCode::STORAGE_UNAVAILABLE,
+                        format!("cannot write config file: {e}"),
+                    )
+                },
+            )?;
             let host = HostVars {
                 workspace_root: self.paths.root.to_string(),
                 plugin_dir,
@@ -515,7 +736,13 @@ impl Actor {
                 input_file: input_file.to_string_lossy().into_owned(),
                 config_file: config_file.to_string_lossy().into_owned(),
             };
-            env::compose(&launch.client_env, &root, &launch.env_files, &launch.action_env, &host)
+            env::compose(
+                &launch.client_env,
+                &root,
+                &launch.env_files,
+                &launch.action_env,
+                &host,
+            )
         })();
         let env = match prepared {
             Ok(env) => env,
@@ -523,14 +750,23 @@ impl Actor {
                 let _ = std::fs::remove_file(&input_file);
                 let _ = std::fs::remove_file(&config_file);
                 if let Ok(mut log) = run.log.lock() {
-                    log.push_line(LogStream::Host, lyra_protocol::view::LogLevel::Error, &e.message, false);
+                    log.push_line(
+                        LogStream::Host,
+                        lyra_protocol::view::LogLevel::Error,
+                        &e.message,
+                        false,
+                    );
                     log.flush();
                 }
                 self.finalize(&run_id, None, Some(e), CleanupState::NotNeeded);
                 return;
             }
         };
-        let cwd = if launch.cwd.starts_with('/') { PathBuf::from(&launch.cwd) } else { root.join(&launch.cwd) };
+        let cwd = if launch.cwd.starts_with('/') {
+            PathBuf::from(&launch.cwd)
+        } else {
+            root.join(&launch.cwd)
+        };
         let spec = CommandSpec {
             run_id: run_id.clone(),
             argv: launch.argv,
@@ -544,7 +780,12 @@ impl Actor {
         };
         let (stop_tx, stop_rx) = tokio::sync::mpsc::channel(4);
         run.stop_tx = Some(stop_tx);
-        tokio::spawn(runner::supervise(spec, run.log.clone(), self.runner_tx.clone(), stop_rx));
+        tokio::spawn(runner::supervise(
+            spec,
+            run.log.clone(),
+            self.runner_tx.clone(),
+            stop_rx,
+        ));
     }
 
     fn save_async(&self, record: RunRecord) {
@@ -559,8 +800,10 @@ impl Actor {
 
     pub(super) fn runner_event(&mut self, run_id: RunId, ev: RunnerEvent) {
         match ev {
-            RunnerEvent::Spawned { .. } => {
-                let Some(run) = self.runs.get_mut(&run_id) else { return };
+            RunnerEvent::Spawned => {
+                let Some(run) = self.runs.get_mut(&run_id) else {
+                    return;
+                };
                 if run.record.lifecycle == Lifecycle::Starting {
                     run.record.lifecycle = Lifecycle::Running;
                 }
@@ -569,30 +812,46 @@ impl Actor {
                 self.state_changed();
             }
             RunnerEvent::TimedOut => {
-                let Some(run) = self.runs.get_mut(&run_id) else { return };
+                let Some(run) = self.runs.get_mut(&run_id) else {
+                    return;
+                };
                 if !matches!(run.record.lifecycle, Lifecycle::Stopping { .. }) {
-                    run.record.lifecycle = Lifecycle::Stopping { reason: StopReason::Timeout };
+                    run.record.lifecycle = Lifecycle::Stopping {
+                        reason: StopReason::Timeout,
+                    };
                     run.record.stop_reason = Some(StopReason::Timeout);
                     run.requested_stop = Some(StopReason::Timeout);
                     self.state_changed();
                 }
             }
             RunnerEvent::Logs { records } => {
-                if let Some(run) = self.runs.get_mut(&run_id) {
-                    if let (Some(first), Some(last)) = (records.first(), records.last()) {
-                        run.record.log.first_seq.get_or_insert(first.log_seq);
-                        run.record.log.last_seq = Some(last.log_seq);
-                    }
+                if let Some(run) = self.runs.get_mut(&run_id)
+                    && let (Some(first), Some(last)) = (records.first(), records.last())
+                {
+                    run.record.log.first_seq.get_or_insert(first.log_seq);
+                    run.record.log.last_seq = Some(last.log_seq);
                 }
                 self.broadcast_logs(&run_id, records);
             }
-            RunnerEvent::Finished { exit, spawn_error, cleanup } => self.finalize(&run_id, exit, spawn_error, cleanup),
+            RunnerEvent::Finished(f) => self.finalize(&run_id, f.exit, f.spawn_error, f.cleanup),
         }
     }
 
-    fn finalize(&mut self, run_id: &RunId, exit: Option<ExitInfo>, spawn_error: Option<ErrorInfo>, cleanup: CleanupState) {
-        let Some(run) = self.runs.get_mut(run_id) else { return };
-        let outcome = outcome_for(run.requested_stop, &exit, spawn_error.is_some() || exit.is_none());
+    fn finalize(
+        &mut self,
+        run_id: &RunId,
+        exit: Option<ExitInfo>,
+        spawn_error: Option<ErrorInfo>,
+        cleanup: CleanupState,
+    ) {
+        let Some(run) = self.runs.get_mut(run_id) else {
+            return;
+        };
+        let outcome = outcome_for(
+            run.requested_stop,
+            &exit,
+            spawn_error.is_some() || exit.is_none(),
+        );
         let r = &mut run.record;
         r.lifecycle = Lifecycle::Finished { outcome };
         r.ended_at = Some(Timestamp::now());
@@ -623,28 +882,38 @@ impl Actor {
             Err(e) => {
                 let msg = e.to_string();
                 tokio::spawn(async move {
-                    let _ = tx.send(Msg::FinalSaved { run_id, error: Some(msg) }).await;
+                    let _ = tx
+                        .send(Msg::FinalSaved {
+                            run_id,
+                            error: Some(msg),
+                        })
+                        .await;
                 });
             }
         }
     }
 
     pub(super) fn final_saved(&mut self, run_id: RunId, error: Option<String>) {
-        let Some(mut run) = self.runs.remove(&run_id) else { return };
-        if let Some(a) = &run.record.action_ref {
-            if self.by_action.get(a) == Some(&run_id) {
-                self.by_action.remove(a);
-            }
+        let Some(mut run) = self.runs.remove(&run_id) else {
+            return;
+        };
+        if let Some(a) = &run.record.action_ref
+            && self.by_action.get(a) == Some(&run_id)
+        {
+            self.by_action.remove(a);
         }
         if let Some(e) = error {
-            let note = format!("execution finished, but the final record was not confirmed in storage: {e}");
+            let note = format!(
+                "execution finished, but the final record was not confirmed in storage: {e}"
+            );
             run.record.note = Some(match run.record.note.take() {
                 Some(n) => format!("{n}; {note}"),
                 None => note,
             });
             self.storage_warning(&crate::storage::StorageError::Unavailable(e));
         }
-        self.recent.push_front((run.record.clone(), run.log.clone()));
+        self.recent
+            .push_front((run.record.clone(), run.log.clone()));
         self.recent.truncate(RECENT_RUNS);
         if let Some(c) = &run.temp_controller {
             self.release_temp_controller(c);
@@ -656,7 +925,9 @@ impl Actor {
     /// Moves one run to `stopping`; other runs and actions are unaffected (§5.4).
     pub(crate) fn stop_run(&mut self, run_id: &RunId, reason: StopReason) -> Option<Lifecycle> {
         let run = self.runs.get_mut(run_id)?;
-        if !run.record.lifecycle.is_active() || matches!(run.record.lifecycle, Lifecycle::Stopping { .. }) {
+        if !run.record.lifecycle.is_active()
+            || matches!(run.record.lifecycle, Lifecycle::Stopping { .. })
+        {
             return Some(run.record.lifecycle);
         }
         run.record.lifecycle = Lifecycle::Stopping { reason };
@@ -677,7 +948,12 @@ impl Actor {
             RunTarget::Run { run_id } => run_id.clone(),
             RunTarget::Action { action_ref } => match self.by_action.get(action_ref) {
                 Some(id) => id.clone(),
-                None => return r.send(self.fail(err(ErrorCode::NOT_FOUND, format!("`{action_ref}` has no active run")))),
+                None => {
+                    return r.send(self.fail(err(
+                        ErrorCode::NOT_FOUND,
+                        format!("`{action_ref}` has no active run"),
+                    )));
+                }
             },
         };
         if let Some(state) = self.stop_run(&run_id, StopReason::User) {
@@ -685,7 +961,13 @@ impl Actor {
             return r.send(self.ok(StopAccepted { run_id, state }, ReplyMeta::default()));
         }
         if let Some((rec, _)) = self.recent.iter().find(|(rec, _)| rec.run_id == run_id) {
-            return r.send(self.ok(StopAccepted { run_id, state: rec.lifecycle }, ReplyMeta::default()));
+            return r.send(self.ok(
+                StopAccepted {
+                    run_id,
+                    state: rec.lifecycle,
+                },
+                ReplyMeta::default(),
+            ));
         }
         let ctx = self.ctx();
         let storage = self.storage.clone();
@@ -695,17 +977,26 @@ impl Actor {
                 Err(_) => None,
             };
             r.send(match found {
-                Some(rec) => reply_ok(ctx, StopAccepted { run_id, state: rec.lifecycle }, ReplyMeta::default()),
+                Some(rec) => reply_ok(
+                    ctx,
+                    StopAccepted {
+                        run_id,
+                        state: rec.lifecycle,
+                    },
+                    ReplyMeta::default(),
+                ),
                 None => reply_fail(ctx, err(ErrorCode::NOT_FOUND, format!("no run {run_id}"))),
             });
         });
     }
 
     fn known_record(&self, run_id: &RunId) -> Option<RunRecord> {
-        self.runs
-            .get(run_id)
-            .map(|r| r.record.clone())
-            .or_else(|| self.recent.iter().find(|(r, _)| &r.run_id == run_id).map(|(r, _)| r.clone()))
+        self.runs.get(run_id).map(|r| r.record.clone()).or_else(|| {
+            self.recent
+                .iter()
+                .find(|(r, _)| &r.run_id == run_id)
+                .map(|(r, _)| r.clone())
+        })
     }
 
     pub(super) fn run_get(&mut self, p: RunGetParams, r: Responder) {
@@ -718,7 +1009,10 @@ impl Actor {
             let reply = match storage {
                 Ok(s) => match s.get_run(p.run_id.clone()).await {
                     Ok(Some(rec)) => reply_ok(ctx, rec, ReplyMeta::default()),
-                    Ok(None) => reply_fail(ctx, err(ErrorCode::NOT_FOUND, format!("no run {}", p.run_id))),
+                    Ok(None) => reply_fail(
+                        ctx,
+                        err(ErrorCode::NOT_FOUND, format!("no run {}", p.run_id)),
+                    ),
                     Err(e) => reply_fail(ctx, e.to_error_info()),
                 },
                 Err(e) => reply_fail(ctx, e.to_error_info()),
@@ -728,8 +1022,15 @@ impl Actor {
     }
 
     pub(super) fn run_list(&mut self, p: RunListParams, r: Responder) {
-        let limit = p.limit.map_or(DEFAULT_RUNS, |l| (l as usize).clamp(1, MAX_LIMIT));
-        let before = match p.cursor.as_deref().map(|c| decode_cursor(c, "runs")).transpose() {
+        let limit = p
+            .limit
+            .map_or(DEFAULT_RUNS, |l| (l as usize).clamp(1, MAX_LIMIT));
+        let before = match p
+            .cursor
+            .as_deref()
+            .map(|c| decode_cursor(c, "runs"))
+            .transpose()
+        {
             Ok(v) => v.and_then(|v| {
                 let t = Timestamp::from_unix_ms(v.get("t")?.as_i64()?);
                 let id = RunId::parse(v.get("r")?.as_str()?.to_owned()).ok()?;
@@ -740,9 +1041,17 @@ impl Actor {
         let live: Vec<RunRecord> = self.runs.values().map(|r| r.record.clone()).collect();
         let ctx = self.ctx();
         let Ok(storage) = self.storage.clone() else {
-            return r.send(self.fail(err(ErrorCode::STORAGE_UNAVAILABLE, "run history is unavailable")));
+            return r.send(self.fail(err(
+                ErrorCode::STORAGE_UNAVAILABLE,
+                "run history is unavailable",
+            )));
         };
-        let filter = RunFilter { action_ref: p.action_ref, outcome: p.outcome, before, limit: limit + 1 };
+        let filter = RunFilter {
+            action_ref: p.action_ref,
+            outcome: p.outcome,
+            before,
+            limit: limit + 1,
+        };
         tokio::spawn(async move {
             let reply = match storage.list_runs(filter).await {
                 Ok(mut runs) => {
@@ -754,7 +1063,15 @@ impl Actor {
                     let more = runs.len() > limit;
                     runs.truncate(limit);
                     let next = more.then(|| runs.last().map(|l| encode_cursor(&json!({"k": "runs", "t": l.started_at.unix_ms(), "r": l.run_id})))).flatten();
-                    reply_ok(ctx, RunList { runs }, ReplyMeta { truncated: more, next_cursor: next, ..ReplyMeta::default() })
+                    reply_ok(
+                        ctx,
+                        RunList { runs },
+                        ReplyMeta {
+                            truncated: more,
+                            next_cursor: next,
+                            ..ReplyMeta::default()
+                        },
+                    )
                 }
                 Err(e) => reply_fail(ctx, e.to_error_info()),
             };
@@ -763,17 +1080,33 @@ impl Actor {
     }
 
     fn log_for(&self, run_id: &RunId) -> Option<SharedLog> {
-        self.runs
-            .get(run_id)
-            .map(|r| r.log.clone())
-            .or_else(|| self.recent.iter().find(|(r, _)| &r.run_id == run_id).map(|(_, l)| l.clone()))
+        self.runs.get(run_id).map(|r| r.log.clone()).or_else(|| {
+            self.recent
+                .iter()
+                .find(|(r, _)| &r.run_id == run_id)
+                .map(|(_, l)| l.clone())
+        })
     }
 
     pub(super) fn log_read(&mut self, p: LogReadParams, r: Responder) {
-        let limit = p.limit.map_or(DEFAULT_LOGS, |l| (l as usize).clamp(1, MAX_LIMIT));
-        let budget = p.max_bytes.map_or(DEFAULT_BUDGET, |b| (b as usize).clamp(1024, lyra_protocol::limits::MAX_REPLY_BUDGET_BYTES));
-        let before = match p.cursor.as_deref().map(|c| decode_cursor(c, "logs")).transpose() {
-            Ok(v) => v.map(|v| (v.get("r").and_then(Value::as_str).map(str::to_owned), v.get("b").and_then(Value::as_u64))),
+        let limit = p
+            .limit
+            .map_or(DEFAULT_LOGS, |l| (l as usize).clamp(1, MAX_LIMIT));
+        let budget = p.max_bytes.map_or(DEFAULT_BUDGET, |b| {
+            (b as usize).clamp(1024, lyra_protocol::limits::MAX_REPLY_BUDGET_BYTES)
+        });
+        let before = match p
+            .cursor
+            .as_deref()
+            .map(|c| decode_cursor(c, "logs"))
+            .transpose()
+        {
+            Ok(v) => v.map(|v| {
+                (
+                    v.get("r").and_then(Value::as_str).map(str::to_owned),
+                    v.get("b").and_then(Value::as_u64),
+                )
+            }),
             Err(e) => return r.send(self.fail(e)),
         };
         let ctx = self.ctx();
@@ -783,7 +1116,11 @@ impl Actor {
             RunTarget::Run { run_id } => (Some(run_id.clone()), self.log_for(run_id)),
             RunTarget::Action { action_ref } => match self.by_action.get(action_ref) {
                 Some(id) => (Some(id.clone()), self.log_for(id)),
-                None => match self.recent.iter().find(|(rec, _)| rec.action_ref.as_ref() == Some(action_ref)) {
+                None => match self
+                    .recent
+                    .iter()
+                    .find(|(rec, _)| rec.action_ref.as_ref() == Some(action_ref))
+                {
                     Some((rec, l)) => (Some(rec.run_id.clone()), Some(l.clone())),
                     None => (None, None),
                 },
@@ -799,7 +1136,11 @@ impl Actor {
                 Some(id) => Some(id),
                 None => match (storage, action_ref) {
                     (Ok(s), Some(a)) => s
-                        .list_runs(RunFilter { action_ref: Some(a), limit: 1, ..RunFilter::default() })
+                        .list_runs(RunFilter {
+                            action_ref: Some(a),
+                            limit: 1,
+                            ..RunFilter::default()
+                        })
                         .await
                         .ok()
                         .and_then(|v| v.into_iter().next())
@@ -808,16 +1149,28 @@ impl Actor {
                 },
             };
             let Some(run_id) = run_id else {
-                return r.send(reply_fail(ctx, err(ErrorCode::NOT_FOUND, "no run found for this target")));
+                return r.send(reply_fail(
+                    ctx,
+                    err(ErrorCode::NOT_FOUND, "no run found for this target"),
+                ));
             };
-            if let Some((Some(cursor_run), _)) = &before {
-                if cursor_run != run_id.as_str() {
-                    return r.send(reply_fail(ctx, err(ErrorCode::INVALID_ARGUMENT, "cursor belongs to another run")));
-                }
+            if let Some((Some(cursor_run), _)) = &before
+                && cursor_run != run_id.as_str()
+            {
+                return r.send(reply_fail(
+                    ctx,
+                    err(ErrorCode::INVALID_ARGUMENT, "cursor belongs to another run"),
+                ));
             }
-            let log = log.unwrap_or_else(|| Arc::new(Mutex::new(RunLog::open_existing(logs_dir.join(run_id.as_str())))));
+            let log = log.unwrap_or_else(|| {
+                Arc::new(Mutex::new(RunLog::open_existing(
+                    logs_dir.join(run_id.as_str()),
+                )))
+            });
             let reply = tokio::task::spawn_blocking(move || {
-                let Ok(mut log) = log.lock() else { return reply_fail(ctx, err(ErrorCode::INTERNAL, "log unavailable")) };
+                let Ok(mut log) = log.lock() else {
+                    return reply_fail(ctx, err(ErrorCode::INTERNAL, "log unavailable"));
+                };
                 let upper = before.and_then(|(_, b)| b);
                 let mut items = log.read_before(upper, limit);
                 // Keep the newest records that fit the byte budget; continue older with the cursor.
@@ -837,9 +1190,28 @@ impl Actor {
                     (Some(f), Some(first)) => f.log_seq > first,
                     _ => false,
                 };
-                let next = more.then(|| items.first().map(|f| encode_cursor(&json!({"k": "logs", "r": run_id, "b": f.log_seq})))).flatten();
-                let page = LogPage { run_id, items, first_available_seq: first, last_available_seq: log.last_available() };
-                reply_ok(ctx, page, ReplyMeta { truncated: more, next_cursor: next, ..ReplyMeta::default() })
+                let next = more
+                    .then(|| {
+                        items.first().map(|f| {
+                            encode_cursor(&json!({"k": "logs", "r": run_id, "b": f.log_seq}))
+                        })
+                    })
+                    .flatten();
+                let page = LogPage {
+                    run_id,
+                    items,
+                    first_available_seq: first,
+                    last_available_seq: log.last_available(),
+                };
+                reply_ok(
+                    ctx,
+                    page,
+                    ReplyMeta {
+                        truncated: more,
+                        next_cursor: next,
+                        ..ReplyMeta::default()
+                    },
+                )
             })
             .await
             .unwrap_or_else(|e| Err(RpcError::new(RpcError::INTERNAL_ERROR, e.to_string())));
