@@ -1,0 +1,8 @@
+# Local-only reference documents. Never commit or publish them.
+/docs/LYRA_IMPLEMENTATION_SPEC.md
+/docs/LYRA_DELIVERY_PLAN.md
+
+/target/
+.DS_Store
+*.swp
+/scratch/
