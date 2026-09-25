@@ -1,0 +1,22 @@
+[package]
+name = "lyra-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+crossterm = "0.29.0"
+lyra-client = { version = "0.1.0", path = "../lyra-client" }
+lyra-protocol = { version = "0.1.0", path = "../lyra-protocol" }
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
+serde = "1.0.229"
+serde_json = "1.0.151"
+time = { version = "0.3.55", features = ["local-offset"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "process", "io-util"] }
+unicode-segmentation = "1.13.3"
+unicode-width = "0.2.2"
+
+[lints]
+workspace = true
