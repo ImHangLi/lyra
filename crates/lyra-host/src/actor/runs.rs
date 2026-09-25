@@ -49,6 +49,7 @@ pub struct Launch {
     stop_signal: StopSignal,
     grace: Duration,
     cleanup: Option<Vec<String>>,
+    terminal: TerminalMode,
     input: Map<String, Value>,
     config: Map<String, Value>,
     plugin: Option<(PluginId, AbsolutePath)>,
@@ -285,12 +286,6 @@ impl Actor {
                 )
             }
         };
-        if action.terminal == TerminalMode::Pty {
-            return Err(err(
-                ErrorCode::EXECUTION_FAILED,
-                "PTY actions are not available in this build yet",
-            ));
-        }
         let schema = &action.input_schema.0;
         let effective = schema.effective_input(&p.input);
         let validator = self.validator(action)?;
@@ -322,6 +317,7 @@ impl Actor {
                 stop_signal: action.stop_signal,
                 grace: Duration::from_millis(action.stop_grace_ms),
                 cleanup: action.cleanup.as_ref().map(|c| c.as_slice().to_vec()),
+                terminal: action.terminal,
                 input: effective,
                 config: lp.plugin.config.clone(),
                 plugin: Some((lp.plugin.id.clone(), lp.dir.clone())),
@@ -369,6 +365,7 @@ impl Actor {
                     stop_signal: StopSignal::Term,
                     grace: Duration::from_millis(lyra_protocol::limits::DEFAULT_STOP_GRACE_MS),
                     cleanup: None,
+                    terminal: TerminalMode::Pipe,
                     input: Map::new(),
                     config: Map::new(),
                     plugin: None,
@@ -874,12 +871,22 @@ impl Actor {
         };
         let (stop_tx, stop_rx) = tokio::sync::mpsc::channel(4);
         run.stop_tx = Some(stop_tx);
-        tokio::spawn(runner::supervise(
-            spec,
-            run.log.clone(),
-            self.runner_tx.clone(),
-            stop_rx,
-        ));
+        match launch.terminal {
+            TerminalMode::Pipe => {
+                tokio::spawn(runner::supervise(
+                    spec,
+                    run.log.clone(),
+                    self.runner_tx.clone(),
+                    stop_rx,
+                ));
+            }
+            TerminalMode::Pty => {
+                let log = run.log.clone();
+                if let Some(h) = crate::pty::start(spec, log, self.runner_tx.clone(), stop_rx) {
+                    self.pty_started(run_id, h);
+                }
+            }
+        }
     }
 
     fn save_async(&self, record: RunRecord) {
@@ -931,6 +938,7 @@ impl Actor {
             RunnerEvent::ProtocolError { error, view_hint } => {
                 self.protocol_error(&run_id, error, view_hint)
             }
+            RunnerEvent::Terminal(ev) => self.terminal_event(&run_id, ev),
             RunnerEvent::Finished(f) => self.finalize(&run_id, f.exit, f.spawn_error, f.cleanup),
         }
     }

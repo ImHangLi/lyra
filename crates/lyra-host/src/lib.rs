@@ -6,6 +6,7 @@ mod actor;
 mod env;
 mod logs;
 mod plugin_runner;
+mod pty;
 mod runner;
 mod server;
 pub mod storage;

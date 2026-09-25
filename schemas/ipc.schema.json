@@ -2895,6 +2895,77 @@
       "pattern": "^u_[0-9a-f]{32}$",
       "type": "string"
     },
+    "TerminalColor": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "index": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "indexed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "index"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "b": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "g": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "rgb",
+              "type": "string"
+            },
+            "r": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "r",
+            "g",
+            "b"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "TerminalCursor": {
       "additionalProperties": false,
       "properties": {
@@ -2943,7 +3014,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A named key such as `enter`, `esc`, `ctrl-c`, `up`.",
+          "description": "A named key: enter, tab, escape, backspace, delete, up, down, left, right, ctrl-c,\nctrl-d, ctrl-z, ctrl-right-bracket.",
           "properties": {
             "key": {
               "type": "string"
@@ -3002,6 +3073,18 @@
       "enum": [
         "pipe",
         "pty"
+      ],
+      "type": "string"
+    },
+    "TerminalModifier": {
+      "enum": [
+        "bold",
+        "dim",
+        "italic",
+        "underline",
+        "reverse",
+        "hidden",
+        "strikethrough"
       ],
       "type": "string"
     },
@@ -3072,11 +3155,19 @@
           ]
         },
         "lines": {
-          "description": "Visible screen rows as plain text; styles are not included in this form.",
+          "description": "Screen rows as plain text without control sequences, from `row_start` on.",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "row_start": {
+          "default": 0,
+          "description": "Screen row of `lines[0]`.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
         },
         "rows": {
           "format": "uint16",
@@ -3089,6 +3180,16 @@
         },
         "screen_revision": {
           "$ref": "#/$defs/ScreenRevision"
+        },
+        "styles": {
+          "description": "Style runs for the returned rows when `include_style` was set; cells without a run\nuse the terminal default style.",
+          "items": {
+            "$ref": "#/$defs/TerminalStyleRow"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [
@@ -3100,6 +3201,103 @@
         "cursor",
         "alternate_screen",
         "exited"
+      ],
+      "type": "object"
+    },
+    "TerminalSnapshotParams": {
+      "additionalProperties": false,
+      "description": "`terminal.snapshot`: one consistent read of the virtual screen (§13.2).",
+      "properties": {
+        "include_style": {
+          "default": false,
+          "description": "Include per-row style runs for the returned rows.",
+          "type": "boolean"
+        },
+        "max_bytes": {
+          "description": "Reply byte budget; rows past it are omitted and `meta.truncated` is set.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "row_count": {
+          "description": "Rows to return; default all remaining rows.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "row_start": {
+          "description": "First screen row to return (0-based); default 0.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "type": "object"
+    },
+    "TerminalStyleRow": {
+      "additionalProperties": false,
+      "properties": {
+        "row": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/TerminalStyleRun"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "row",
+        "runs"
+      ],
+      "type": "object"
+    },
+    "TerminalStyleRun": {
+      "additionalProperties": false,
+      "properties": {
+        "bg": {
+          "$ref": "#/$defs/TerminalColor"
+        },
+        "cell_count": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fg": {
+          "$ref": "#/$defs/TerminalColor"
+        },
+        "modifiers": {
+          "items": {
+            "$ref": "#/$defs/TerminalModifier"
+          },
+          "type": "array"
+        },
+        "start_cell": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_cell",
+        "cell_count",
+        "fg",
+        "bg",
+        "modifiers"
       ],
       "type": "object"
     },
@@ -3800,7 +3998,7 @@
     },
     "terminal.snapshot": {
       "params": {
-        "$ref": "#/$defs/TerminalRunParams"
+        "$ref": "#/$defs/TerminalSnapshotParams"
       },
       "result": {
         "$ref": "#/$defs/TerminalSnapshot"

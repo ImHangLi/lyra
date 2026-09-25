@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use lyra_protocol::error::{ErrorCode, ErrorInfo};
-use lyra_protocol::ids::{ClientId, RunId, SubscriptionId};
+use lyra_protocol::ids::{ClientId, RunId, ScreenRevision, SubscriptionId};
 use lyra_protocol::ipc::*;
 use lyra_protocol::reply::ReplyMeta;
 use lyra_protocol::run::LogRecord;
@@ -234,6 +234,39 @@ impl Actor {
         self.deliver(
             StreamKind::Progress,
             |s| s.refs.is_empty() || s.refs.iter().any(|r| keys.iter().flatten().any(|k| k == r)),
+            &line,
+        );
+    }
+
+    /// Screen-changed notice for subscribers that selected this PTY run (by run ID or
+    /// action ref). Notices are coalesced upstream to the latest revision.
+    pub(crate) fn broadcast_terminal(&mut self, run_id: &RunId, screen_revision: ScreenRevision) {
+        if !self
+            .subs
+            .values()
+            .any(|s| s.kinds.contains(&StreamKind::Terminal))
+        {
+            return;
+        }
+        let action = self
+            .runs
+            .get(run_id)
+            .and_then(|r| r.record.action_ref.clone());
+        let keys = [
+            Some(run_id.to_string()),
+            action.as_ref().map(ToString::to_string),
+        ];
+        let line = self.frame(
+            Some(run_id.clone()),
+            action.as_ref().map(|a| a.to_item_ref()),
+            StreamEvent::Terminal {
+                run_id: run_id.clone(),
+                screen_revision,
+            },
+        );
+        self.deliver(
+            StreamKind::Terminal,
+            |s| s.refs.iter().any(|r| keys.iter().flatten().any(|k| k == r)),
             &line,
         );
     }
