@@ -19,6 +19,7 @@ pub mod schemas;
 pub mod strict_json;
 pub mod time;
 pub mod view;
+pub mod workspace;
 
 /// The single supported API version for manifests, LPP/1, LIPC/1 and CLI replies.
 pub const API_VERSION: u64 = 1;
