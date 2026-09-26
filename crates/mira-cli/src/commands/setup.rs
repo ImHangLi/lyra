@@ -1,17 +1,16 @@
-//! `mira setup`: read-only static discovery for the setup skill (§10.2, §16.1).
-//! Selects the workspace (§4.1), then reports bounded facts. Never executes project code.
+//! `mira setup` (§10.2, §16.1): selects the workspace (§4.1), installs the agent skills, and
+//! tells the agent what to do next. The agent reads the repository itself; Mira never runs
+//! project code here.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
-use mira_discovery::{Ambiguity, CacheReport, Fact, ScanStats, Truncation};
 use mira_protocol::reply::{PublicReply, ReplyContext, ReplyMeta, WorkspaceRef};
 use mira_protocol::workspace::{self, SelectError, SelectionReason};
 use mira_protocol::{AbsolutePath, ErrorCode, ErrorInfo};
 use serde::Serialize;
 
-use super::skills::{AgentKind, install_into};
+use super::skills::{self, AgentKind, install_into};
 use crate::output::{self, Mode};
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -31,14 +30,21 @@ struct SetupReport {
     /// Direct child directories that look like projects; set only when no root was selected.
     candidates: Vec<AbsolutePath>,
     setup_state: Option<SetupState>,
-    facts: Vec<Fact>,
-    ambiguities: Vec<Ambiguity>,
-    truncated: Vec<Truncation>,
-    scan: Option<ScanStats>,
-    cache: Option<CacheReport>,
+    /// The installed agent skills; absent when no root was selected.
+    skills: Option<skills::Report>,
 }
 
-pub fn run(mode: Mode, project: Option<&Path>, refresh: bool) -> ExitCode {
+/// Claude Code when it is installed, else the generic `.agents/skills` layout.
+fn default_agent(agent: Option<AgentKind>) -> AgentKind {
+    agent.unwrap_or(if on_path("claude") {
+        AgentKind::Claude
+    } else {
+        AgentKind::Generic
+    })
+}
+
+/// `mira setup --json`: install the skills and report the selected root and its state.
+pub fn run(mode: Mode, project: Option<&Path>, agent: Option<AgentKind>) -> ExitCode {
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
         Err(e) => {
@@ -64,29 +70,12 @@ pub fn run(mode: Mode, project: Option<&Path>, refresh: bool) -> ExitCode {
                 searched: Some(searched),
                 candidates,
                 setup_state: None,
-                facts: Vec::new(),
-                ambiguities: Vec::new(),
-                truncated: Vec::new(),
-                scan: None,
-                cache: None,
+                skills: None,
             };
             let reply = PublicReply::success(ReplyContext::default(), report, ReplyMeta::default());
             return output::emit(mode, &reply, render);
         }
         Err(e) => return output::fail(mode, ReplyContext::default(), e.to_error_info()),
-    };
-
-    let root = selected.root.as_path();
-    let outcome = mira_discovery::discover(root, refresh);
-    let mut discovery = outcome.discovery;
-    if selected.reason == SelectionReason::ProjectManifest
-        && let Some(a) = mira_discovery::parent_monorepo(root)
-    {
-        discovery.ambiguities.push(a);
-    }
-    let meta = ReplyMeta {
-        truncated: !discovery.truncated.is_empty(),
-        ..ReplyMeta::default()
     };
     let ctx = ReplyContext {
         workspace: Some(WorkspaceRef {
@@ -94,6 +83,19 @@ pub fn run(mode: Mode, project: Option<&Path>, refresh: bool) -> ExitCode {
             root: selected.root.clone(),
         }),
         ..ReplyContext::default()
+    };
+    let installed = match install_into(selected.root.as_path(), default_agent(agent)) {
+        Ok(r) => r,
+        Err(e) => {
+            return output::fail(
+                mode,
+                ctx,
+                ErrorInfo::new(
+                    ErrorCode::STORAGE_UNAVAILABLE,
+                    format!("cannot install the agent skills: {e}"),
+                ),
+            );
+        }
     };
     let report = SetupReport {
         setup_state: Some(if selected.is_setup() {
@@ -108,25 +110,11 @@ pub fn run(mode: Mode, project: Option<&Path>, refresh: bool) -> ExitCode {
         selected_root: Some(selected.root),
         reason: Some(selected.reason),
         candidates: Vec::new(),
-        facts: discovery.facts,
-        ambiguities: discovery.ambiguities,
-        truncated: discovery.truncated,
-        scan: Some(discovery.scan),
-        cache: Some(outcome.cache),
+        skills: Some(installed),
     };
-    let reply = PublicReply::success(ctx, report, meta);
+    let reply = PublicReply::success(ctx, report, ReplyMeta::default());
     output::emit(mode, &reply, render)
 }
-
-fn json_name<T: Serialize>(v: &T) -> String {
-    serde_json::to_value(v)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
-}
-
-/// Facts listed in text mode; JSON always carries all of them.
-const TEXT_FACTS: usize = 40;
 
 fn render(r: &SetupReport) -> String {
     let Some(root) = &r.selected_root else {
@@ -147,86 +135,17 @@ fn render(r: &SetupReport) -> String {
         Some(SetupState::Configured) => "configured",
         _ => "not set up",
     };
-    let reason = r.reason.as_ref().map(json_name).unwrap_or_default();
-    let mut s = format!("project {root} ({reason}, {state})");
-
-    let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
-    for f in &r.facts {
-        *kinds.entry(json_name(&f.kind)).or_default() += 1;
-    }
-    let summary: Vec<String> = kinds.iter().map(|(k, n)| format!("{k} {n}")).collect();
-    s.push_str(&format!(
-        "\nfacts: {} ({})",
-        r.facts.len(),
-        summary.join(", ")
-    ));
-    for f in r.facts.iter().take(TEXT_FACTS) {
-        let at = match f.source.lines {
-            Some(l) => format!("{}:{}", f.source.path, l.start),
-            None => f.source.path.clone(),
-        };
-        let owner = f
-            .owner
-            .as_deref()
-            .map(|o| format!(" [{o}]"))
-            .unwrap_or_default();
-        let detail = f
-            .detail
-            .as_deref()
-            .map(|d| format!(" = {d}"))
-            .unwrap_or_default();
-        s.push_str(&format!(
-            "\n  {at}  {}{owner} {}{detail}",
-            json_name(&f.kind),
-            f.value
-        ));
-    }
-    if r.facts.len() > TEXT_FACTS {
-        s.push_str(&format!(
-            "\n  ... {} more; use --json for all facts",
-            r.facts.len() - TEXT_FACTS
-        ));
-    }
-    if !r.ambiguities.is_empty() {
-        s.push_str("\nambiguities:");
-        for a in &r.ambiguities {
-            s.push_str(&format!(
-                "\n  {}: {} ({})",
-                json_name(&a.kind),
-                a.message,
-                a.sources.join(", ")
-            ));
-        }
-    }
-    if r.truncated.is_empty() {
-        s.push_str("\ntruncated: none");
-    } else {
-        s.push_str("\ntruncated (discovery is incomplete):");
-        for t in &r.truncated {
-            let limit = t.limit.map(|l| format!(" limit {l}")).unwrap_or_default();
-            s.push_str(&format!(
-                "\n  {}{limit}: {} omitted ({})",
-                json_name(&t.reason),
-                t.omitted_count,
-                t.omitted.join(", ")
-            ));
-        }
-    }
-    if let Some(c) = &r.cache {
-        let status = json_name(&c.status);
-        let write = json_name(&c.write);
-        s.push_str(&format!("\ncache: {status}, {write} ({})", c.path));
-        if let Some(n) = &c.note {
-            s.push_str(&format!("\n  {n}"));
-        }
+    let mut s = format!("project {root} ({state})");
+    if let Some(k) = &r.skills {
+        s.push_str(&format!("\nskills:\n  {}", k.targets.join("\n  ")));
     }
     s
 }
 
 /// The instruction a person gives their agent after `mira setup`. No apostrophes, so it can
 /// be quoted with single quotes in a shell.
-const AGENT_PROMPT: &str = "Set up Mira for this repository. Follow the mira skill: run \
-`mira setup --json`, read the docs and scripts, create plugins for the real dev commands, \
+const AGENT_PROMPT: &str = "Set up Mira for this repository. Follow the mira skill: read the \
+README, docs, and scripts, create plugins for the real dev commands, \
 validate and apply them, run `mira doctor`, verify one tool, and tell me what is ready and \
 what is not.";
 
@@ -267,40 +186,6 @@ fn copy_to_clipboard(text: &str) -> bool {
     child.wait().is_ok_and(|s| s.success()) && wrote
 }
 
-/// A one-line summary of what discovery found, for people.
-fn found_summary(facts: &[Fact]) -> String {
-    use mira_discovery::FactKind as K;
-    let count = |kinds: &[K]| facts.iter().filter(|f| kinds.contains(&f.kind)).count();
-    let mut parts = Vec::new();
-    let commands = count(&[
-        K::PackageScript,
-        K::PythonScript,
-        K::MakeTarget,
-        K::JustRecipe,
-        K::TaskfileTask,
-    ]);
-    if commands > 0 {
-        parts.push(format!("{commands} command(s)"));
-    }
-    let services = count(&[K::ComposeService]);
-    if services > 0 {
-        parts.push(format!("{services} Compose service(s)"));
-    }
-    let docs = count(&[K::Doc]);
-    if docs > 0 {
-        parts.push(format!("{docs} doc(s)"));
-    }
-    let env = count(&[K::EnvExampleVar]);
-    if env > 0 {
-        parts.push(format!("{env} env var(s) in examples"));
-    }
-    if parts.is_empty() {
-        "no scripts, Compose files, or docs found".into()
-    } else {
-        format!("found {}", parts.join(", "))
-    }
-}
-
 /// `mira setup` for people: install the agent skills, then print the one command that lets
 /// the agent create the plugins. Never runs project code and never starts an agent.
 pub fn guided(project: Option<&Path>, agent: Option<AgentKind>) -> ExitCode {
@@ -337,11 +222,7 @@ pub fn guided(project: Option<&Path>, agent: Option<AgentKind>) -> ExitCode {
     };
     let root = selected.root.as_path();
     let (has_claude, has_codex) = (on_path("claude"), on_path("codex"));
-    let kind = agent.unwrap_or(if has_claude {
-        AgentKind::Claude
-    } else {
-        AgentKind::Generic
-    });
+    let kind = default_agent(agent);
     let skills = match install_into(root, kind) {
         Ok(r) => r,
         Err(e) => {
@@ -375,8 +256,6 @@ pub fn guided(project: Option<&Path>, agent: Option<AgentKind>) -> ExitCode {
         println!("{out}");
         return ExitCode::SUCCESS;
     }
-    let facts = mira_discovery::discover(root, false).discovery.facts;
-    out.push_str(&format!("\n  ✓ {}", found_summary(&facts)));
     out.push_str("\n\nGive your agent this prompt. It saves the repo's commands as plugins:\n");
     let quoted = format!("'{AGENT_PROMPT}'");
     let mut runners = Vec::new();

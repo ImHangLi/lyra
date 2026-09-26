@@ -55,7 +55,7 @@ Set it up in one step. Mira never guesses commands; your coding agent writes the
 It installs the Mira skills for your agent and prints the one command to run
 (for example `claude '...'`). When the agent is done, run `mira` again.
 
-Agents: run `mira setup --json` for read-only project facts; see `mira --help`.
+Agents: run `mira setup --json`, then follow the mira skill; see `mira --help`.
 ",
         message = e.message
     )

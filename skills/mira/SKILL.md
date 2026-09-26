@@ -13,7 +13,7 @@ Every command prints exactly one JSON reply with `--json` (the default without a
 
 1. `mira status --json` — current session, active runs, warnings. `NEEDS_PROJECT` means pass `--project PATH`.
 2. `mira catalog --json` — the tools, 30 per page; continue with `--after "$(meta.next_cursor)"`. Remember `workspace.id` and `catalog_revision`; later use `mira catalog --if-revision N --if-workspace W --json` and reuse your copy when `meta.not_modified` is true. The cache is valid only for the same workspace and query.
-3. `NOT_SETUP` → follow [setup](references/setup.md) before anything else.
+3. `NOT_SETUP` → follow [setup](references/setup.md) before anything else: read the repository's docs, scripts, task files, Compose files, and CI config yourself, and never run project code to learn what it does.
 4. Pick a tool: `mira catalog --search "words" --json`, then `mira describe PLUGIN.ITEM --json`. Add `--include-schema` only when the inputs are unclear.
 
 ## Run work

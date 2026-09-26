@@ -2,10 +2,10 @@
 
 Goal: a small set of ordinary plugins that run this project's real commands, validated and applied, so the human can open `mira` and use them immediately.
 
-1. **Workspace.** Use the directory the user named. Otherwise `mira setup --json` picks it (`data.selected_root`, `data.reason`). If `selected_root` is null, ask the user once, listing `data.candidates`. Never scan outside the project.
+1. **Workspace.** Use the directory the user named. Otherwise `mira setup --json` picks it (`data.selected_root`, `data.reason`) and installs the agent skills (`data.skills`). If `selected_root` is null, ask the user once, listing `data.candidates`. Never read outside the project.
 2. **Existing state.** If `.mira/workspace.json` exists, read `mira catalog --json` first and extend it; never overwrite `.mira/local.json` (personal overrides).
-3. **Facts.** `mira setup --json` returns static facts only (`kind`, `value`, `source.path`, `source.lines`, `certainty`), plus `ambiguities` and `truncated`. Nothing was executed. Treat `hint` facts as leads, not truth.
-4. **Meaning.** Read the README/CONTRIBUTING files and the real scripts the facts point to. Decide what each command does from its source, not from its name. A `test` or `migrate` target can have side effects.
+3. **Read the repository.** Mira does not scan the project; read the files yourself. Places to look: README and CONTRIBUTING files and `docs/`; `package.json` scripts and `pyproject.toml` scripts; `Makefile`, `justfile`, `Taskfile.yml`; Compose files (`compose.yaml`, `docker-compose*.yml`); CI config (`.github/workflows/`, `.gitlab-ci.yml`); env examples (`.env.example`). In a monorepo, also check the workspace members. Never run project code to find out what it does.
+4. **Meaning.** Decide what each command does from its source, not from its name. A `test` or `migrate` target can have side effects.
 5. **Plugins.** Create a few tools that are useful on day one: the dev server(s), required dependencies (e.g. Compose services the docs say to start), and the common checks. Usually one `dev` plugin with command actions is enough. See the mira-extend skill for the manifest format. Do not change Mira itself.
 6. **Per action, decide:** `mode` (`task` ends, `process` keeps running), `cwd`, whether it needs a real terminal (`terminal: "pty"` only for interactive programs), the stop signal and grace, and a `cleanup` command for resources the process starts outside its own process group (for example detached containers). Never use `down -v` or any data-deleting cleanup by default.
    - **Checks must not change files.** Many lint and format configs fix files by default (for example ruff `fix = true`). Use the check-only form (`--no-fix`, `--check`) unless the action is clearly titled as a fixer.
@@ -19,8 +19,8 @@ Goal: a small set of ordinary plugins that run this project's real commands, val
    ```
    Then run `mira doctor --json`: `validate` checks the manifest, but only `doctor` reports executables that are not installed. Delete the draft directory after a successful apply.
 
-   Add ignore rules for personal and generated files to the project's `.gitignore` without rewriting it: `.mira/local.json`, `.mira/.generated/`, `.mira/.drafts/`. Commit `.mira/workspace.json` and `.mira/plugins/`. The installed skills (`.agents/skills/mira*`, `.claude/skills/mira*`) are per-machine copies: ask whether the team wants them committed; if so, exclude them from the project's linters.
+   Add ignore rules for personal and generated files to the project's `.gitignore` without rewriting it: `.mira/local.json`, `.mira/.drafts/`. Commit `.mira/workspace.json` and `.mira/plugins/`. The installed skills (`.agents/skills/mira*`, `.claude/skills/mira*`) are per-machine copies: ask whether the team wants them committed; if so, exclude them from the project's linters.
 8. **Verify.** Run one quick task (`mira run dev.check`) and, if the user agrees, start the main service and read its logs. A dev server can move to another port when its default is taken: read the real URL from the log before you check it. Stop what you started unless the user wants it running.
 9. **Report** in a few lines: the tools created (refs), what was verified to start, what was not verified (missing credentials, services not tried), and how to stop anything still running. Tell the user to open `mira` for the TUI.
 
-Ask the user only for credentials, real ambiguity, or preferences you cannot infer. Do not ask which framework or package manager they use when the facts already say it.
+Ask the user only for credentials, real ambiguity, or preferences you cannot infer. Do not ask which framework or package manager they use when the repository already shows it.
