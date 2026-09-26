@@ -18,6 +18,7 @@ use serde_json::{Map, Value};
 
 use super::ctx::{Ctx, block_on};
 use super::inspect::lifecycle_text;
+use super::runref::{resolve_run_id, resolve_target};
 use crate::output::{self, Mode, invalid_argument};
 
 const POLL: Duration = Duration::from_millis(100);
@@ -64,16 +65,6 @@ fn parse_key(k: Option<String>) -> Result<Option<RequestKey>, ErrorInfo> {
     k.map(RequestKey::parse)
         .transpose()
         .map_err(|e| invalid_argument(e.to_string()))
-}
-
-pub fn parse_target(s: &str) -> Result<RunTarget, ErrorInfo> {
-    if s.starts_with("r_") {
-        RunId::parse(s.to_owned())
-            .map(|run_id| RunTarget::Run { run_id })
-            .map_err(|e| invalid_argument(e.to_string()))
-    } else {
-        parse_action(s).map(|action_ref| RunTarget::Action { action_ref })
-    }
 }
 
 /// `30s`, `30m`, `2h`, `1d`, or `none`.
@@ -407,13 +398,13 @@ async fn stop_target(
 
 pub fn stop(ctx: &Ctx, target: &str, wait: bool) -> ExitCode {
     block_on(async {
-        let target = match parse_target(target) {
-            Ok(t) => t,
-            Err(e) => return ctx.fail(ReplyContext::default(), e),
-        };
         let mut client = match connect(ctx).await {
             Ok(c) => c,
             Err(code) => return code,
+        };
+        let target = match resolve_target(&mut client, target).await {
+            Ok(t) => t,
+            Err(e) => return ctx.fail(client.context(), e),
         };
         match stop_target(ctx, &mut client, target, wait).await {
             Ok(reply) => ctx.emit(&reply, |d| match d {
@@ -785,9 +776,9 @@ pub fn runs(
             Err(code) => return code,
         };
         if let Some(run) = run {
-            let run_id = match RunId::parse(run) {
+            let run_id = match resolve_run_id(&mut client, &run).await {
                 Ok(r) => r,
-                Err(e) => return ctx.fail(client.context(), invalid_argument(e.to_string())),
+                Err(e) => return ctx.fail(client.context(), e),
             };
             return match client
                 .call::<_, RunRecord>(Method::RunGet, &RunGetParams { run_id })
@@ -853,13 +844,13 @@ pub fn logs(
     follow: bool,
 ) -> ExitCode {
     block_on(async {
-        let target = match parse_target(target) {
-            Ok(t) => t,
-            Err(e) => return ctx.fail(ReplyContext::default(), e),
-        };
         let mut client = match connect(ctx).await {
             Ok(c) => c,
             Err(code) => return code,
+        };
+        let target = match resolve_target(&mut client, target).await {
+            Ok(t) => t,
+            Err(e) => return ctx.fail(client.context(), e),
         };
         let p = LogReadParams {
             target: target.clone(),

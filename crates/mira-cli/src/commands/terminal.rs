@@ -7,16 +7,13 @@
 use std::process::ExitCode;
 
 use mira_client::ConnectOptions;
-use mira_protocol::ids::{RunId, ScreenRevision};
+use mira_protocol::ids::ScreenRevision;
 use mira_protocol::ipc::*;
 use mira_protocol::reply::{PublicReply, ReplyContext};
 
 use super::ctx::{Ctx, block_on};
+use super::runref::resolve_run;
 use crate::output::invalid_argument;
-
-fn parse_run(s: &str) -> Result<RunId, mira_protocol::ErrorInfo> {
-    RunId::parse(s.to_owned()).map_err(|e| invalid_argument(format!("{e}: `{s}`")))
-}
 
 /// Text form: one status line, then the screen rows without trailing blank rows.
 pub fn screen_text(s: &TerminalSnapshot) -> String {
@@ -58,13 +55,13 @@ pub fn screen_text(s: &TerminalSnapshot) -> String {
 
 pub fn terminal(ctx: &Ctx, run: &str, max_bytes: Option<u32>) -> ExitCode {
     block_on(async {
-        let run_id = match parse_run(run) {
-            Ok(r) => r,
-            Err(e) => return ctx.fail(ReplyContext::default(), e),
-        };
         let mut client = match ctx.client(&ConnectOptions::cli()).await {
             Ok(c) => c,
             Err((c, e)) => return ctx.fail(c, e),
+        };
+        let run_id = match resolve_run(&mut client, run).await {
+            Ok(r) => r,
+            Err(e) => return ctx.fail(client.context(), e),
         };
         let p = TerminalSnapshotParams {
             run_id,
@@ -91,7 +88,6 @@ pub fn input(
 ) -> ExitCode {
     block_on(async {
         let prepared = (|| {
-            let run_id = parse_run(run)?;
             let input = match (text, key) {
                 (Some(text), None) => TerminalInput::Text { text },
                 (None, Some(key)) => TerminalInput::Key { key },
@@ -101,15 +97,19 @@ pub fn input(
                 .map(ScreenRevision::new)
                 .transpose()
                 .map_err(|e| invalid_argument(e.to_string()))?;
-            Ok((run_id, input, expected))
+            Ok((input, expected))
         })();
-        let (run_id, input, expected_screen_revision) = match prepared {
+        let (input, expected_screen_revision) = match prepared {
             Ok(v) => v,
             Err(e) => return ctx.fail(ReplyContext::default(), e),
         };
         let mut client = match ctx.client(&ConnectOptions::cli()).await {
             Ok(c) => c,
             Err((c, e)) => return ctx.fail(c, e),
+        };
+        let run_id = match resolve_run(&mut client, run).await {
+            Ok(r) => r,
+            Err(e) => return ctx.fail(client.context(), e),
         };
         let p = TerminalInputParams {
             run_id,

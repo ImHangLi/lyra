@@ -102,6 +102,7 @@ enum Command {
     },
     /// Stop one managed run (by run ID or action ref).
     Stop {
+        /// A run ID, a unique prefix of one (such as r_fb60aacf), or an action ref.
         #[arg(value_name = "RUN_OR_ACTION")]
         target: String,
         /// Wait until the run and its cleanup finished.
@@ -143,6 +144,7 @@ enum Command {
     },
     /// Recent runs, or one run's details.
     Runs {
+        /// Show one run: its ID or a unique prefix of it (such as r_fb60aacf).
         #[arg(value_name = "RUN")]
         run: Option<String>,
         #[arg(long, value_name = "REF")]
@@ -158,6 +160,8 @@ enum Command {
     },
     /// Bounded run output: the tail of the current or latest run by default.
     Logs {
+        /// A run ID, a unique prefix of one (such as r_fb60aacf), or an action ref for its
+        /// current or latest run.
         #[arg(value_name = "RUN_OR_ACTION")]
         target: String,
         #[arg(long, value_name = "CURSOR")]
@@ -238,11 +242,13 @@ enum Command {
     /// Read the screen of an interactive (PTY) run as plain text with its screen revision.
     ///
     /// This is the current virtual screen, not a log; `mira logs RUN` holds the transcript.
+    /// RUN is a run ID, a unique prefix of one (such as r_fb60aacf), or an action ref for its
+    /// current or latest run.
     /// Agent flow: `mira up --background`, `mira run ACTION --no-wait` for a PTY action, then
     /// alternate `mira terminal RUN` and `mira input RUN ...` until the program finishes.
     #[command(verbatim_doc_comment)]
     Terminal {
-        #[arg(value_name = "RUN")]
+        #[arg(value_name = "RUN_OR_ACTION")]
         run: String,
         /// Reply byte budget (default 32 KiB); rows past it are cut and meta.truncated is set.
         #[arg(long, value_name = "N")]
@@ -265,7 +271,8 @@ enum Command {
     ///          mira input RUN --text Ada; mira input RUN --key enter
     #[command(verbatim_doc_comment)]
     Input {
-        #[arg(value_name = "RUN")]
+        /// A run ID, a unique prefix of one (such as r_fb60aacf), or an action ref.
+        #[arg(value_name = "RUN_OR_ACTION")]
         run: String,
         /// Given as `--text TEXT` (see the usage above).
         #[arg(
