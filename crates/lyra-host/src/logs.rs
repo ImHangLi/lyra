@@ -348,11 +348,9 @@ impl RunLog {
     /// 8 KiB is emitted early as a continued record so memory stays bounded.
     pub fn push_bytes(&mut self, stream: LogStream, bytes: &[u8]) -> Vec<LogRecord> {
         let idx = usize::from(stream == LogStream::Stderr);
-        let level = if stream == LogStream::Stderr {
-            LogLevel::Warn
-        } else {
-            LogLevel::Info
-        };
+        // Many tools write ordinary progress to stderr; the stream already marks it, so
+        // stderr is not a warning by itself.
+        let level = LogLevel::Info;
         let mut out = Vec::new();
         let mut buf = std::mem::take(&mut self.partial[idx]);
         self.ansi[idx].feed(bytes, &mut buf);
@@ -392,12 +390,12 @@ impl RunLog {
         for (idx, stream) in [(0, LogStream::Stdout), (1, LogStream::Stderr)] {
             let rest = std::mem::take(&mut self.partial[idx]);
             if !rest.is_empty() {
-                let level = if idx == 1 {
-                    LogLevel::Warn
-                } else {
-                    LogLevel::Info
-                };
-                out.extend(self.push_line(stream, level, &String::from_utf8_lossy(&rest), false));
+                out.extend(self.push_line(
+                    stream,
+                    LogLevel::Info,
+                    &String::from_utf8_lossy(&rest),
+                    false,
+                ));
             }
         }
         out
@@ -574,6 +572,9 @@ mod tests {
         let texts: Vec<_> = records.iter().map(|r| r.text.as_str()).collect();
         assert_eq!(texts, ["one", "two"]);
         assert_eq!(log.partial[0], b"thr");
+        let err = log.push_bytes(LogStream::Stderr, b"progress\n");
+        assert_eq!(err[0].level, LogLevel::Info);
+        assert_eq!(err[0].stream, LogStream::Stderr);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
