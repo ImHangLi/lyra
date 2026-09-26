@@ -24,13 +24,6 @@ pub fn current_uid() -> u32 {
     rustix::process::getuid().as_raw()
 }
 
-/// The directory with every host's socket, lock, and owner record for this user.
-pub fn runtime_dir() -> PathBuf {
-    std::env::var_os("LYRA_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(format!("/tmp/lyra-{}", current_uid())))
-}
-
 fn home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -55,7 +48,9 @@ impl WorkspacePaths {
                 )
             }
         };
-        let runtime_dir = runtime_dir();
+        let runtime_dir = std::env::var_os("LYRA_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(format!("/tmp/lyra-{}", current_uid())));
         Self {
             lyra_dir: root.as_path().join(".lyra"),
             state_dir: state_base.join("workspaces").join(wid),

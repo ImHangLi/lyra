@@ -9,7 +9,7 @@ mod app;
 mod clip;
 mod cmdbar;
 mod form;
-pub mod git;
+mod git;
 mod ipc;
 mod logs;
 mod term;
