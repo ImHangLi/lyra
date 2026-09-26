@@ -44,7 +44,11 @@ enum Command {
     Status,
     /// Bounded tool catalog (default 30 items within 32 KiB; continue with --after).
     Catalog {
-        #[arg(long)]
+        /// Search words. An item matches when any word matches its ref, id, title, tags,
+        /// or description. Results rank by exact ref or id, exact title, ref/id/title
+        /// prefix, ref/id/title substring, tag, then description; more matched words rank
+        /// higher; ties keep catalog order.
+        #[arg(long, value_name = "WORDS")]
         search: Option<String>,
         /// Return not_modified when the catalog revision still equals N.
         #[arg(long, value_name = "N")]
