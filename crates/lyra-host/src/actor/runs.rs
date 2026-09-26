@@ -80,6 +80,7 @@ pub struct ActiveRun {
 
 /// A validated invocation, ready to reserve.
 struct Prepared {
+    source: Option<RunSource>,
     action_ref: Option<ActionRef>,
     label: String,
     mode: ActionMode,
@@ -235,6 +236,20 @@ impl Actor {
         }
     }
 
+    /// Invocations started by the host itself (schedules, autostart) rather than a client.
+    pub(crate) fn invoke_from(&mut self, source: RunSource, p: ActionInvokeParams) {
+        match self.prepare_action(&p) {
+            Ok(mut prepared) => {
+                prepared.source = Some(source);
+                self.start(&ClientId::random(), prepared, None);
+            }
+            Err(e) => diag(format!(
+                "{source:?} invocation of {} refused: {}",
+                p.action_ref, e.message
+            )),
+        }
+    }
+
     fn prepare_action(&mut self, p: &ActionInvokeParams) -> Result<Prepared, ErrorInfo> {
         let set = self.accepted()?;
         let (lp, action) = set.action(&p.action_ref).ok_or_else(|| {
@@ -287,6 +302,7 @@ impl Actor {
         let fingerprint = storage
             .fingerprint(&json!({"input": effective, "definition_hash": action.definition_hash}));
         Ok(Prepared {
+            source: None,
             action_ref: Some(p.action_ref.clone()),
             label: action.title.clone(),
             mode: action.mode,
@@ -331,6 +347,7 @@ impl Actor {
                 .map_err(|e| err(ErrorCode::INTERNAL, e))?;
             let fingerprint = storage.fingerprint(&json!({"exec": argv.as_slice()}));
             Ok(Prepared {
+                source: None,
                 action_ref: None,
                 label: p.label.clone(),
                 mode: ActionMode::Task,
@@ -481,7 +498,9 @@ impl Actor {
             label: prep.label.clone(),
             definition_hash: prep.definition_hash.clone(),
             catalog_revision: self.catalog_revision,
-            source: source_of(self.client_kind(client)),
+            source: prep
+                .source
+                .unwrap_or_else(|| source_of(self.client_kind(client))),
             started_at: Timestamp::now(),
             ended_at: None,
             lifecycle: Lifecycle::Starting,

@@ -715,6 +715,9 @@ pub struct StatusData {
     /// On-disk configuration problems (invalid-on-disk, incomplete apply). Spec gap filler:
     /// §10.4 assigns disk configuration warnings to `status`.
     pub config_warnings: Vec<Warning>,
+    /// Interval schedules with a persisted switch, and their state in this session.
+    #[serde(default)]
+    pub schedules: Vec<ScheduleData>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

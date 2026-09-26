@@ -66,6 +66,9 @@ pub fn status(ctx: &Ctx) -> ExitCode {
                         lifecycle_text(&r.lifecycle)
                     ));
                 }
+                for sc in &s.schedules {
+                    out.push_str(&format!("\nschedule: {}", super::schedule::text(sc)));
+                }
                 for w in s.storage_warnings.iter().chain(&s.config_warnings) {
                     out.push_str(&format!("\nwarning[{}]: {}", w.code, w.message));
                 }

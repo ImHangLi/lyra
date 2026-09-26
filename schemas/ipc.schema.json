@@ -2304,6 +2304,14 @@
           },
           "type": "array"
         },
+        "schedules": {
+          "default": [],
+          "description": "Interval schedules with a persisted switch, and their state in this session.",
+          "items": {
+            "$ref": "#/$defs/ScheduleData"
+          },
+          "type": "array"
+        },
         "session": {
           "anyOf": [
             {

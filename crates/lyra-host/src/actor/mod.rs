@@ -7,6 +7,7 @@ mod artifacts;
 mod configure;
 mod plugin;
 mod runs;
+mod schedule;
 mod session;
 mod streams;
 mod views;
@@ -118,6 +119,11 @@ pub enum Msg {
         revision: ViewRevision,
         error: Option<String>,
     },
+    ScheduleSaved {
+        params: ScheduleSetParams,
+        saved: Result<(), ErrorInfo>,
+        responder: Responder,
+    },
     ConfigDone {
         result: Result<configure::Loaded, configure::LoadFailure>,
         responder: Option<Responder>,
@@ -170,6 +176,7 @@ pub struct Actor {
     views: views::ViewStore,
     artifacts: artifacts::Artifacts,
     cfg: configure::ConfigCtl,
+    schedules: schedule::Schedules,
 }
 
 fn load_config(paths: &WorkspacePaths) -> ConfigState {
@@ -250,6 +257,7 @@ impl Actor {
             views: views::ViewStore::default(),
             artifacts: artifacts::Artifacts::default(),
             cfg: configure::ConfigCtl::new(&paths_for_cfg),
+            schedules: schedule::Schedules::default(),
         }
     }
 
@@ -323,6 +331,7 @@ impl Actor {
     pub async fn run(mut self) {
         self.init_catalog_revision().await;
         self.init_views().await;
+        self.load_schedules().await;
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         loop {
             tokio::select! {
@@ -342,6 +351,7 @@ impl Actor {
                     self.flush_progress();
                     self.views_tick();
                     self.config_tick();
+                    self.schedule_tick();
                     if self.idle_since.is_some_and(|t| t.elapsed() >= IDLE_EXIT) {
                         self.flush_views_now().await;
                         break;
@@ -408,6 +418,12 @@ impl Actor {
                 revision,
                 error,
             } => self.view_saved(view_ref, revision, error),
+            Msg::ScheduleSaved {
+                params,
+                saved,
+                responder,
+                ..
+            } => self.schedule_saved(params, saved, responder),
             Msg::ConfigDone {
                 result,
                 responder,
@@ -514,6 +530,7 @@ impl Actor {
             Method::ViewAction => self.view_action(client, parse!(p), r),
             Method::ArtifactList => self.artifact_list(parse!(p), r),
             Method::ArtifactRead => self.artifact_read(parse!(p), r),
+            Method::ScheduleSet => self.schedule_set(client, parse!(p), r),
             Method::ConfigApply => self.config_apply(parse!(p), r),
             Method::ConfigReload => {
                 let _: Empty = parse!(p);
@@ -582,6 +599,7 @@ impl Actor {
             runs,
             storage_warnings,
             config_warnings,
+            schedules: self.schedule_data(),
         }
     }
 
