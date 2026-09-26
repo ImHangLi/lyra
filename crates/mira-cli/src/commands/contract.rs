@@ -102,7 +102,11 @@ pub fn validate(mode: Mode, path: &Path) -> ExitCode {
         Err(issues) => PublicReply::failure(ReplyContext::default(), issues.to_error_info()),
     };
     output::emit(mode, &reply, |r| {
-        let kind = if r.kind == "workspace" { "project" } else { r.kind };
+        let kind = if r.kind == "workspace" {
+            "project"
+        } else {
+            r.kind
+        };
         let mut s = format!("valid {kind} at {}", r.path);
         for p in &r.plugins {
             s.push_str(&format!(

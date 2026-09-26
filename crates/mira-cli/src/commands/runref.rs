@@ -49,7 +49,12 @@ pub fn no_run(s: &str) -> ErrorInfo {
     .with_next_action(&["mira", "runs"], "List recent runs and their IDs.")
 }
 
-async fn list(client: &mut Client, action_ref: Option<ActionRef>, cursor: Option<String>, limit: u32) -> Result<PublicReply<RunList>, ErrorInfo> {
+async fn list(
+    client: &mut Client,
+    action_ref: Option<ActionRef>,
+    cursor: Option<String>,
+    limit: u32,
+) -> Result<PublicReply<RunList>, ErrorInfo> {
     client
         .call(
             Method::RunListM,
@@ -149,14 +154,14 @@ mod tests {
 
     #[test]
     fn a_prefix_matches_one_none_or_many() {
-        let a = id("r_fb60aacf00000000000000000000000a");
-        let b = id("r_fb60aacf00000000000000000000000b");
-        let c = id("r_0123456789abcdef0123456789abcdef");
+        let a = id("r_fb60aacf5a8647da941eb0044d0caeaa");
+        let b = id("r_fb60aacf5a8647da941eb0044d0caeab");
+        let c = id("r_0123456789ab4def8123456789abcdef");
         let ids = [a.clone(), b.clone(), c.clone(), a.clone()];
         assert_eq!(match_prefix("r_0123", &ids), PrefixMatch::One(c));
         assert_eq!(match_prefix("r_fb60aacf", &ids), PrefixMatch::Many(2));
         assert_eq!(
-            match_prefix("r_fb60aacf00000000000000000000000a", &ids),
+            match_prefix("r_fb60aacf5a8647da941eb0044d0caeaa", &ids),
             PrefixMatch::One(a)
         );
         assert_eq!(match_prefix("r_ffff", &ids), PrefixMatch::None);

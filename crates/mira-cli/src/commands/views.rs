@@ -90,7 +90,10 @@ fn source_text(s: &ViewSnapshot) -> String {
         .map(|t| format!(", {}", crate::human::clock(t)))
         .unwrap_or_default();
     if s.freshness == Freshness::Stale {
-        let why = s.freshness_reason.as_deref().unwrap_or("it may be out of date");
+        let why = s
+            .freshness_reason
+            .as_deref()
+            .unwrap_or("it may be out of date");
         return format!("stale: {why}{at}");
     }
     match (&s.source_run_id, s.source_kind) {

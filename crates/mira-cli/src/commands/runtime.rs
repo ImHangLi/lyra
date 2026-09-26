@@ -198,7 +198,10 @@ fn run_summary(r: &RunRecord) -> String {
     if let Some(n) = &r.note {
         s.push_str(&format!("\n  note: {}", human::note_text(n)));
     }
-    s.push_str(&format!("\n  output: mira logs {}", human::short_run(&r.run_id)));
+    s.push_str(&format!(
+        "\n  output: mira logs {}",
+        human::short_run(&r.run_id)
+    ));
     s
 }
 
@@ -225,7 +228,9 @@ async fn failure_text(client: &mut Client, rec: &RunRecord, e: &ErrorInfo) -> St
         (Some(StopReason::ProtocolError), Some(note)) => {
             format!("{target} stopped: {}", human::note_text(note))
         }
-        (Some(StopReason::ProtocolError), None) => format!("{target} stopped: invalid plugin output"),
+        (Some(StopReason::ProtocolError), None) => {
+            format!("{target} stopped: invalid plugin output")
+        }
         _ => e.message.clone(),
     };
     if let Some(c) = human::cleanup_failure(&rec.cleanup) {
@@ -1069,7 +1074,9 @@ pub fn logs(ctx: &Ctx, target: &str, args: LogArgs) -> ExitCode {
             Err(e) => return ctx.fail(client.context(), e.to_error_info()),
         };
         // New records follow the unfiltered tail, so remember where it ended.
-        let last_seen = page.data().and_then(|pg| pg.items.last().map(|r| r.log_seq));
+        let last_seen = page
+            .data()
+            .and_then(|pg| pg.items.last().map(|r| r.log_seq));
         let page = page.map(|mut pg| {
             filter.apply(&mut pg.items);
             pg

@@ -52,7 +52,7 @@ pub fn duration(ms: u64) -> String {
     }
     if ms < 10_000 {
         let tenths = ms / 100;
-        return if tenths % 10 == 0 {
+        return if tenths.is_multiple_of(10) {
             format!("{}s", tenths / 10)
         } else {
             format!("{}.{}s", tenths / 10, tenths % 10)
@@ -72,7 +72,7 @@ pub fn duration(ms: u64) -> String {
 /// A schedule interval: `every 2s`, `every 5m`, `every 24h`, `every 1h30m`.
 pub fn interval(every_ms: u64) -> String {
     let s = every_ms / 1000;
-    let text = if every_ms % 1000 != 0 || s == 0 {
+    let text = if !every_ms.is_multiple_of(1000) || s == 0 {
         format!("{every_ms}ms")
     } else {
         let (h, m, sec) = (s / 3600, (s % 3600) / 60, s % 60);
@@ -111,7 +111,10 @@ pub fn session_line(s: Option<&SessionInfo>) -> String {
     }
     match (s.mode, s.expires_at) {
         (SessionMode::Background, Some(t)) => {
-            let left = t.unix_ms().saturating_sub(Timestamp::now().unix_ms()).max(0) as u64;
+            let left = t
+                .unix_ms()
+                .saturating_sub(Timestamp::now().unix_ms())
+                .max(0) as u64;
             let left = if left < 60_000 {
                 "under 1m".to_owned()
             } else {
@@ -150,7 +153,9 @@ pub fn note_text(note: &str) -> String {
     {
         Some((_, detail)) => {
             let detail = detail.strip_suffix(" at ``").unwrap_or(detail);
-            let detail = detail.strip_prefix("invalid MPP/1 frame: ").unwrap_or(detail);
+            let detail = detail
+                .strip_prefix("invalid MPP/1 frame: ")
+                .unwrap_or(detail);
             format!("invalid plugin output: {detail}")
         }
         None => note.to_owned(),
@@ -206,7 +211,10 @@ mod tests {
                 "cleanup exited with status 4",
             ),
         };
-        assert_eq!(cleanup_failure(&c).as_deref(), Some("cleanup failed (exit 4)"));
+        assert_eq!(
+            cleanup_failure(&c).as_deref(),
+            Some("cleanup failed (exit 4)")
+        );
         assert_eq!(cleanup_failure(&CleanupState::NotNeeded), None);
     }
 }
