@@ -1,7 +1,8 @@
 //! Pipe command runner (§5.4, §7.1, §11.4): one supervised process group per run.
 //!
 //! The runner only reports OS facts (spawn, exit, signals, cleanup). The actor decides the
-//! run outcome. stdout/stderr are drained continuously into the run log.
+//! run outcome. stdout/stderr are drained continuously into the run log; for LPP/1 plugins
+//! stdout carries frames instead (see [`crate::plugin_runner`]).
 
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
@@ -9,19 +10,21 @@ use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
 use lyra_protocol::error::{ErrorCode, ErrorInfo};
-use lyra_protocol::ids::RunId;
+use lyra_protocol::ids::{RunId, ViewId};
+use lyra_protocol::lpp::PluginEvent;
 use lyra_protocol::manifest::{StopSignal, TimeoutPolicy};
 use lyra_protocol::run::{CleanupState, ExitInfo, LogRecord, LogStream};
 use lyra_protocol::time::Timestamp;
 use lyra_protocol::view::LogLevel;
 use rustix::process::{Pid, Signal, kill_process_group};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep_until};
 
 use crate::env::ChildEnv;
 use crate::logs::{FLUSH_EVERY, SharedLog};
+use crate::plugin_runner::{FrameOut, FrameReader, Protocol};
 
 const CLEANUP_TIMEOUT: Duration = Duration::from_millis(lyra_protocol::limits::CLEANUP_TIMEOUT_MS);
 /// After the main process exits, keep draining pipes held by leftover group members this long.
@@ -32,6 +35,8 @@ pub struct CommandSpec {
     pub run_id: RunId,
     pub argv: Vec<String>,
     pub cwd: PathBuf,
+    /// Where `cleanup` runs; the action cwd (plugins themselves run in the plugin dir).
+    pub cleanup_cwd: PathBuf,
     pub env: ChildEnv,
     pub timeout: TimeoutPolicy,
     pub stop_signal: StopSignal,
@@ -39,6 +44,8 @@ pub struct CommandSpec {
     pub cleanup: Option<Vec<String>>,
     /// Temporary input/config files removed after the child and cleanup finish.
     pub temp_files: Vec<PathBuf>,
+    /// Set for LPP/1 plugin runs: stdin gets the invocation, stdout carries frames.
+    pub protocol: Option<Protocol>,
 }
 
 /// Why the actor asks a run to stop; forwarded to cleanup as `LYRA_STOP_REASON`.
@@ -46,13 +53,24 @@ pub struct CommandSpec {
 pub enum StopKind {
     Cancelled,
     SessionClosed,
+    /// The host stops the run itself (protocol error).
+    Failed,
 }
 
 #[derive(Debug)]
 pub enum RunnerEvent {
     Spawned,
     TimedOut,
-    Logs { records: Vec<LogRecord> },
+    Logs {
+        records: Vec<LogRecord>,
+    },
+    /// A validated non-log LPP frame, in receive order.
+    Frame(Box<PluginEvent>),
+    /// The first LPP protocol error of this run; later stdout is discarded.
+    ProtocolError {
+        error: ErrorInfo,
+        view_hint: Option<ViewId>,
+    },
     Finished(Box<FinishedRun>),
 }
 
@@ -92,13 +110,13 @@ fn signal_group(pid: u32, sig: Signal) {
     }
 }
 
-fn command(argv: &[String], cwd: &PathBuf, env: &ChildEnv) -> Command {
+fn command(argv: &[String], cwd: &PathBuf, env: &ChildEnv, stdin: Stdio) -> Command {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..])
         .current_dir(cwd)
         .env_clear()
         .envs(&env.0)
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
@@ -123,9 +141,83 @@ struct Batcher {
     log: SharedLog,
     events: EventSink,
     pending: Vec<LogRecord>,
+    /// LPP/1 frame reader; `None` means stdout is plain log output.
+    frames: Option<FrameReader>,
+    /// Frame events waiting for delivery. Delivery awaits the actor (backpressure).
+    outbox: Vec<RunnerEvent>,
 }
 
 impl Batcher {
+    fn stdout(&mut self, bytes: &[u8]) {
+        match self.frames.as_mut() {
+            None => self.push(LogStream::Stdout, bytes),
+            Some(reader) => {
+                let outs = reader.push(bytes);
+                self.frame_outs(outs);
+            }
+        }
+    }
+    fn stdout_eof(&mut self) {
+        if let Some(out) = self.frames.as_mut().and_then(FrameReader::finish) {
+            self.frame_outs(vec![out]);
+        }
+    }
+    fn partial_pending(&self) -> bool {
+        self.frames
+            .as_ref()
+            .is_some_and(FrameReader::partial_pending)
+    }
+    fn partial_deadline(&self) -> Instant {
+        self.frames
+            .as_ref()
+            .map_or(Instant::now() + FAR, FrameReader::partial_deadline)
+    }
+    fn partial_timeout(&mut self) {
+        if let Some(out) = self.frames.as_mut().and_then(FrameReader::partial_timeout) {
+            self.frame_outs(vec![out]);
+        }
+    }
+    fn frame_outs(&mut self, outs: Vec<FrameOut>) {
+        for out in outs {
+            match out {
+                FrameOut::Log {
+                    level,
+                    text,
+                    fields,
+                } => {
+                    if let Ok(mut log) = self.log.lock() {
+                        self.pending.extend(log.push_line_fields(
+                            LogStream::Plugin,
+                            level,
+                            &text,
+                            false,
+                            Some(fields),
+                        ));
+                    }
+                }
+                FrameOut::Event(ev) => {
+                    // Keep log records ordered before the frame that followed them.
+                    self.send();
+                    self.outbox.push(RunnerEvent::Frame(Box::new(ev)));
+                }
+                FrameOut::Error { error, view_hint } => {
+                    self.note(&format!(
+                        "protocol error [{}]: {}",
+                        error.code, error.message
+                    ));
+                    self.send();
+                    self.outbox
+                        .push(RunnerEvent::ProtocolError { error, view_hint });
+                }
+            }
+        }
+    }
+    /// Delivers frame events without dropping any; waits while the actor queue is full.
+    async fn deliver(&mut self) {
+        for ev in std::mem::take(&mut self.outbox) {
+            let _ = self.events.send((self.run_id.clone(), ev)).await;
+        }
+    }
     fn push(&mut self, stream: LogStream, bytes: &[u8]) {
         if let Ok(mut log) = self.log.lock() {
             self.pending.extend(log.push_bytes(stream, bytes));
@@ -188,9 +280,15 @@ async fn drive(
     let status = loop {
         tokio::select! {
             status = child.wait() => break status.ok(),
-            n = read_opt(&mut pipes.out, &mut buf) => match n {
-                Some(n) if n > 0 => batch.push(LogStream::Stdout, &buf[..n]),
-                _ => pipes.out = None,
+            n = read_opt(&mut pipes.out, &mut buf) => {
+                match n {
+                    Some(n) if n > 0 => batch.stdout(&buf[..n]),
+                    _ => {
+                        pipes.out = None;
+                        batch.stdout_eof();
+                    }
+                }
+                batch.deliver().await;
             },
             n = read_opt(&mut pipes.err, &mut ebuf) => match n {
                 Some(n) if n > 0 => batch.push(LogStream::Stderr, &ebuf[..n]),
@@ -216,6 +314,10 @@ async fn drive(
                 signal_group(pid, Signal::KILL);
                 kill_at = Instant::now() + FAR;
             }
+            _ = sleep_until(batch.partial_deadline()), if batch.partial_pending() => {
+                batch.partial_timeout();
+                batch.deliver().await;
+            }
             _ = flush.tick() => batch.tick(),
         }
     };
@@ -223,9 +325,15 @@ async fn drive(
     let drain_until = Instant::now() + DRAIN_AFTER_EXIT;
     while pipes.out.is_some() || pipes.err.is_some() {
         tokio::select! {
-            n = read_opt(&mut pipes.out, &mut buf) => match n {
-                Some(n) if n > 0 => batch.push(LogStream::Stdout, &buf[..n]),
-                _ => pipes.out = None,
+            n = read_opt(&mut pipes.out, &mut buf) => {
+                match n {
+                    Some(n) if n > 0 => batch.stdout(&buf[..n]),
+                    _ => {
+                        pipes.out = None;
+                        batch.stdout_eof();
+                    }
+                }
+                batch.deliver().await;
             },
             n = read_opt(&mut pipes.err, &mut ebuf) => match n {
                 Some(n) if n > 0 => batch.push(LogStream::Stderr, &ebuf[..n]),
@@ -239,6 +347,11 @@ async fn drive(
             }
         }
     }
+    // A frame still open when the pipes are abandoned is truncated.
+    if pipes.out.is_some() {
+        batch.stdout_eof();
+        batch.deliver().await;
+    }
     batch.finish();
     (status, timed_out, stop_kind)
 }
@@ -250,7 +363,7 @@ async fn run_cleanup(spec: &CommandSpec, reason: &str, batch: &mut Batcher) -> C
     let mut env = spec.env.clone();
     env.0.insert("LYRA_STOP_REASON".into(), reason.into());
     batch.note(&format!("cleanup: running {}", argv[0]));
-    let mut child = match command(argv, &spec.cwd, &env).spawn() {
+    let mut child = match command(argv, &spec.cleanup_cwd, &env, Stdio::null()).spawn() {
         Ok(c) => c,
         Err(e) => {
             return CleanupState::Failed {
@@ -314,6 +427,8 @@ pub async fn supervise(
         log,
         events: events.clone(),
         pending: Vec::new(),
+        frames: spec.protocol.as_ref().map(|p| FrameReader::new(p.mode)),
+        outbox: Vec::new(),
     };
     let signal = match spec.stop_signal {
         StopSignal::Term => Signal::TERM,
@@ -326,7 +441,12 @@ pub async fn supervise(
             cleanup,
         }))
     };
-    let mut child = match command(&spec.argv, &spec.cwd, &spec.env).spawn() {
+    let stdin = if spec.protocol.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    };
+    let mut child = match command(&spec.argv, &spec.cwd, &spec.env, stdin).spawn() {
         Ok(c) => c,
         Err(e) => {
             let err = ErrorInfo::new(
@@ -348,6 +468,15 @@ pub async fn supervise(
     let _ = events
         .send((spec.run_id.clone(), RunnerEvent::Spawned))
         .await;
+    // LPP/1: exactly one invocation line, then EOF. A writer task keeps a plugin that does
+    // not read stdin from blocking the supervisor.
+    if let (Some(p), Some(mut stdin)) = (&spec.protocol, child.stdin.take()) {
+        let line = p.invocation_line.clone();
+        tokio::spawn(async move {
+            let _ = stdin.write_all(&line).await;
+            let _ = stdin.shutdown().await;
+        });
+    }
     let mut pipes = Pipes {
         out: child.stdout.take(),
         err: child.stderr.take(),
@@ -371,9 +500,12 @@ pub async fn supervise(
         (true, _, _) => "timed_out",
         (_, Some(StopKind::SessionClosed), _) => "session_closed",
         (_, Some(StopKind::Cancelled), _) => "cancelled",
+        (_, Some(StopKind::Failed), _) => "failed",
         (_, None, Some(s)) if s.success() => "completed",
         _ => "failed",
     };
+    // Cleanup output is plain log output even for plugins.
+    batch.frames = None;
     let cleanup = run_cleanup(&spec, reason, &mut batch).await;
     batch.finish();
     remove_temp(&spec.temp_files);

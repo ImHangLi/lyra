@@ -3,3 +3,4 @@ pub mod ctx;
 pub mod inspect;
 pub mod runtime;
 pub mod setup;
+pub mod views;

@@ -3,9 +3,12 @@
 //! Requests arrive as messages; storage commits and runner facts come back as messages.
 //! The actor never awaits a child process, a file scan, or a storage commit inline.
 
+mod artifacts;
+mod plugin;
 mod runs;
 mod session;
 mod streams;
+mod views;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
@@ -30,7 +33,7 @@ use crate::diag;
 use crate::logs::SharedLog;
 use crate::runner::RunnerEvent;
 use crate::server::{error_line, result_line};
-use crate::storage::{Storage, StorageError};
+use crate::storage::{Claim, Storage, StorageError};
 
 use runs::ActiveRun;
 pub use runs::Reservation;
@@ -103,6 +106,17 @@ pub enum Msg {
         run_id: RunId,
         error: Option<String>,
     },
+    ViewBlock {
+        result: Result<(u64, u64), StorageError>,
+    },
+    ViewClaimed {
+        result: Result<Claim, StorageError>,
+    },
+    ViewSaved {
+        view_ref: ViewRef,
+        revision: ViewRevision,
+        error: Option<String>,
+    },
     Shutdown,
 }
 
@@ -145,6 +159,8 @@ pub struct Actor {
     event_seq: EventSeq,
     storage_warnings: Vec<Warning>,
     idle_since: Option<Instant>,
+    views: views::ViewStore,
+    artifacts: artifacts::Artifacts,
 }
 
 fn load_config(paths: &WorkspacePaths) -> ConfigState {
@@ -221,6 +237,8 @@ impl Actor {
             event_seq: EventSeq::ZERO,
             storage_warnings,
             idle_since: Some(Instant::now()),
+            views: views::ViewStore::default(),
+            artifacts: artifacts::Artifacts::default(),
         }
     }
 
@@ -293,6 +311,7 @@ impl Actor {
 
     pub async fn run(mut self) {
         self.init_catalog_revision().await;
+        self.init_views().await;
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         loop {
             tokio::select! {
@@ -300,6 +319,7 @@ impl Actor {
                 msg = self.rx.recv() => match msg {
                     Some(Msg::Shutdown) | None => {
                         self.shutdown().await;
+                        self.flush_views_now().await;
                         break;
                     }
                     Some(m) => self.handle(m),
@@ -307,7 +327,10 @@ impl Actor {
                 Some((run_id, ev)) = self.runner_rx.recv() => self.runner_event(run_id, ev),
                 _ = tick.tick() => {
                     self.session_tick();
+                    self.flush_progress();
+                    self.views_tick();
                     if self.idle_since.is_some_and(|t| t.elapsed() >= IDLE_EXIT) {
+                        self.flush_views_now().await;
                         break;
                     }
                 }
@@ -323,7 +346,11 @@ impl Actor {
         while !self.runs.is_empty() && Instant::now() < deadline {
             tokio::select! {
                 Some((run_id, ev)) = self.runner_rx.recv() => self.runner_event(run_id, ev),
-                Some(m) = self.rx.recv() => { if let Msg::FinalSaved { .. } = m { self.handle(m) } }
+                Some(m) = self.rx.recv() => {
+                    if matches!(m, Msg::FinalSaved { .. } | Msg::ViewSaved { .. } | Msg::ViewBlock { .. } | Msg::ViewClaimed { .. }) {
+                        self.handle(m)
+                    }
+                }
                 _ = tokio::time::sleep(Duration::from_millis(50)) => {}
             }
         }
@@ -361,6 +388,13 @@ impl Actor {
             }
             Msg::Reserved { run_id, result } => self.reserved(run_id, result),
             Msg::FinalSaved { run_id, error } => self.final_saved(run_id, error),
+            Msg::ViewBlock { result } => self.view_block(result),
+            Msg::ViewClaimed { result } => self.view_claimed(result),
+            Msg::ViewSaved {
+                view_ref,
+                revision,
+                error,
+            } => self.view_saved(view_ref, revision, error),
             Msg::Shutdown => {}
         }
     }
@@ -455,6 +489,11 @@ impl Actor {
             Method::RunGet => self.run_get(parse!(p), r),
             Method::RunListM => self.run_list(parse!(p), r),
             Method::LogRead => self.log_read(parse!(p), r),
+            Method::ViewRead => self.view_read(parse!(p), r),
+            Method::ViewPublish => self.view_publish(parse!(p), r),
+            Method::ViewAction => self.view_action(client, parse!(p), r),
+            Method::ArtifactList => self.artifact_list(parse!(p), r),
+            Method::ArtifactRead => self.artifact_read(parse!(p), r),
             Method::StreamSubscribe => self.subscribe(client, parse!(p), r),
             Method::StreamUnsubscribe => self.unsubscribe(client, parse!(p), r),
             other => r.send(Err(RpcError::new(

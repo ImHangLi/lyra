@@ -21,7 +21,7 @@ use crate::output::{self, Mode, invalid_argument};
 
 const POLL: Duration = Duration::from_millis(100);
 
-fn env() -> Result<ClientEnv, ErrorInfo> {
+pub(crate) fn env() -> Result<ClientEnv, ErrorInfo> {
     ClientEnv::capture().map_err(|m| ErrorInfo::new(ErrorCode::INVALID_ARGUMENT, m))
 }
 
@@ -98,7 +98,7 @@ pub fn parse_ttl(s: &str) -> Result<TimeoutWire, ErrorInfo> {
     Ok(TimeoutWire::After { ms })
 }
 
-async fn connect(ctx: &Ctx) -> Result<Client, ExitCode> {
+pub(crate) async fn connect(ctx: &Ctx) -> Result<Client, ExitCode> {
     ctx.client(&ConnectOptions::cli())
         .await
         .map_err(|(c, e)| ctx.fail(c, e))
@@ -139,6 +139,13 @@ fn run_text(r: &RunRecord) -> String {
             (None, Some(sig)) => s.push_str(&format!("  signal {sig}")),
             _ => {}
         }
+    }
+    if let Some(res) = &r.result {
+        s.push_str(&format!(
+            "\n  result ({}): {}",
+            if res.ok { "ok" } else { "failed" },
+            res.summary
+        ));
     }
     if let Some(n) = &r.note {
         s.push_str(&format!("\n  note: {n}"));
@@ -185,16 +192,38 @@ fn final_reply(reply: PublicReply<RunRecord>) -> PublicReply<RunRecord> {
     if let Some(n) = &rec.note {
         details.insert("note".into(), Value::String(n.clone()));
     }
-    let info = ErrorInfo::new(code, format!("{target} {what}{}", exit.unwrap_or_default()))
-        .with_details(details)
-        .with_next_action(
-            &["lyra", "logs", rec.run_id.as_str()],
-            "Read the run's output.",
+    if let Some(reason) = rec.stop_reason {
+        details.insert(
+            "stop_reason".into(),
+            serde_json::to_value(reason).unwrap_or(Value::Null),
         );
+    }
+    // The plugin's self-reported result stays visible, but never as success. Error details
+    // stay bounded: the result data remains readable with `lyra runs RUN`.
+    if let Some(res) = &rec.result {
+        details.insert(
+            "result".into(),
+            serde_json::json!({"ok": res.ok, "summary": res.summary, "error": res.error}),
+        );
+    }
+    let reported = rec
+        .result
+        .as_ref()
+        .map(|r| format!(": {}", r.summary))
+        .unwrap_or_default();
+    let info = ErrorInfo::new(
+        code,
+        format!("{target} {what}{}{reported}", exit.unwrap_or_default()),
+    )
+    .with_details(details)
+    .with_next_action(
+        &["lyra", "logs", rec.run_id.as_str()],
+        "Read the run's output.",
+    );
     PublicReply::failure(ctx, info)
 }
 
-async fn run_and_wait(
+pub(crate) async fn run_and_wait(
     ctx: &Ctx,
     client: &mut Client,
     method: Method,

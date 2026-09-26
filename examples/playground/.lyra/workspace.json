@@ -1,7 +1,7 @@
 {
   "api": 1,
   "name": "Lyra Playground",
-  "plugins": ["plugins/dev", "plugins/demo", "plugins/file-check", "plugins/agent-updates"],
+  "plugins": ["plugins/dev", "plugins/demo", "plugins/file-check", "plugins/agent-updates", "plugins/bad-frames"],
   "autostart": [],
   "ui": {"theme": "terminal", "mouse": false},
   "meta": {}

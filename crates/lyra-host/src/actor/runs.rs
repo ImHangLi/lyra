@@ -20,10 +20,12 @@ use lyra_protocol::run::*;
 use lyra_protocol::time::Timestamp;
 use serde_json::{Map, Value, json};
 
+use super::plugin::{self, LppRun};
 use super::{Actor, MAX_LIMIT, Msg, RECENT_RUNS, Responder, reply_fail, reply_ok};
 use crate::diag;
 use crate::env::{self, HostVars};
 use crate::logs::{RunLog, SharedLog};
+use crate::plugin_runner::Protocol;
 use crate::runner::{self, CommandSpec, RunnerEvent, StopKind};
 use crate::storage::{Claim, KeyClaim, KeyScope, RunFilter};
 
@@ -50,6 +52,8 @@ pub struct Launch {
     input: Map<String, Value>,
     config: Map<String, Value>,
     plugin: Option<(PluginId, AbsolutePath)>,
+    /// LPP/1 plugin runs: the local action ID and mode for the invocation.
+    protocol: Option<(ActionId, ActionMode)>,
 }
 
 pub enum Phase {
@@ -70,6 +74,8 @@ pub struct ActiveRun {
     pub phase: Phase,
     pub temp_controller: Option<ClientId>,
     pub requested_stop: Option<StopReason>,
+    /// LPP/1 state; `None` for command runs.
+    pub lpp: Option<Box<LppRun>>,
 }
 
 /// A validated invocation, ready to reserve.
@@ -84,6 +90,7 @@ struct Prepared {
     foreground: bool,
     cleanup_configured: bool,
     launch: Launch,
+    lpp: Option<LppRun>,
 }
 
 fn err(code: ErrorCode, msg: impl Into<String>) -> ErrorInfo {
@@ -150,11 +157,11 @@ fn outcome_for(stop: Option<StopReason>, exit: &Option<ExitInfo>, spawn_failed: 
     }
 }
 
-fn encode_cursor(v: &Value) -> String {
+pub(super) fn encode_cursor(v: &Value) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string())
 }
 
-fn decode_cursor(s: &str, kind: &str) -> Result<Value, ErrorInfo> {
+pub(super) fn decode_cursor(s: &str, kind: &str) -> Result<Value, ErrorInfo> {
     let bad = || err(ErrorCode::INVALID_ARGUMENT, "invalid cursor");
     if s.len() > lyra_protocol::limits::MAX_CURSOR_BYTES {
         return Err(bad());
@@ -242,13 +249,24 @@ impl Actor {
                 format!("plugin `{}` is disabled", lp.plugin.id),
             ));
         }
-        let argv = match &action.run {
-            Runner::Command { argv } => argv.as_slice().to_vec(),
+        let (argv, protocol, lpp) = match &action.run {
+            Runner::Command { argv } => (argv.as_slice().to_vec(), None, None),
             Runner::Plugin => {
-                return Err(err(
-                    ErrorCode::EXECUTION_FAILED,
-                    "structured plugin actions are not available in this build yet",
-                ));
+                let entry = lp.plugin.entry.as_ref().ok_or_else(|| {
+                    err(
+                        ErrorCode::EXECUTION_FAILED,
+                        format!("plugin `{}` declares no entry to run", lp.plugin.id),
+                    )
+                })?;
+                (
+                    entry.as_slice().to_vec(),
+                    Some((action.id.clone(), action.mode)),
+                    Some(LppRun::new(
+                        action.mode,
+                        lp.plugin.id.clone(),
+                        action.output_schema.as_ref().map(|s| s.0.clone()),
+                    )),
+                )
             }
         };
         if action.terminal == TerminalMode::Pty {
@@ -290,7 +308,9 @@ impl Actor {
                 input: effective,
                 config: lp.plugin.config.clone(),
                 plugin: Some((lp.plugin.id.clone(), lp.dir.clone())),
+                protocol,
             },
+            lpp,
         })
     }
 
@@ -334,7 +354,9 @@ impl Actor {
                     input: Map::new(),
                     config: Map::new(),
                     plugin: None,
+                    protocol: None,
                 },
+                lpp: None,
             })
         })();
         match prepared {
@@ -509,6 +531,7 @@ impl Actor {
                 },
                 temp_controller,
                 requested_stop: None,
+                lpp: prep.lpp.map(Box::new),
             },
         );
         self.state_changed();
@@ -699,7 +722,15 @@ impl Actor {
         let inputs = self.paths.temp_inputs();
         let input_file = inputs.join(format!("{run_id}.input.json"));
         let config_file = inputs.join(format!("{run_id}.config.json"));
-        let prepared = (|| -> Result<env::ChildEnv, ErrorInfo> {
+        let action_cwd: PathBuf = if launch.cwd.starts_with('/') {
+            PathBuf::from(&launch.cwd)
+        } else {
+            root.join(&launch.cwd)
+        }
+        .components()
+        .filter(|c| !matches!(c, std::path::Component::CurDir))
+        .collect();
+        let prepared = (|| -> Result<(env::ChildEnv, Option<Protocol>), ErrorInfo> {
             for d in [&state_dir, &cache_dir, &artifact_dir] {
                 std::fs::DirBuilder::new()
                     .recursive(true)
@@ -736,16 +767,53 @@ impl Actor {
                 input_file: input_file.to_string_lossy().into_owned(),
                 config_file: config_file.to_string_lossy().into_owned(),
             };
-            env::compose(
+            let env = env::compose(
                 &launch.client_env,
                 &root,
                 &launch.env_files,
                 &launch.action_env,
                 &host,
-            )
+            )?;
+            let protocol = match (&launch.protocol, &launch.plugin) {
+                (Some((action, mode)), Some((_, dir))) => {
+                    let abs = |p: &Path| {
+                        AbsolutePath::from_path(p).map_err(|e| {
+                            err(
+                                ErrorCode::EXECUTION_FAILED,
+                                format!("path {} is not usable: {e}", p.display()),
+                            )
+                        })
+                    };
+                    let invocation = lyra_protocol::lpp::Invocation {
+                        api: Api1,
+                        run_id: run_id.clone(),
+                        action: action.clone(),
+                        input: launch.input.clone(),
+                        config: launch.config.clone(),
+                        context: lyra_protocol::lpp::InvocationContext {
+                            workspace_id: self.paths.id.clone(),
+                            workspace_root: self.paths.root.clone(),
+                            cwd: abs(&action_cwd)?,
+                            plugin_dir: dir.clone(),
+                            state_dir: abs(&state_dir)?,
+                            cache_dir: abs(&cache_dir)?,
+                            artifact_dir: abs(&artifact_dir)?,
+                        },
+                    };
+                    let mut line = serde_json::to_vec(&invocation)
+                        .map_err(|e| err(ErrorCode::INTERNAL, e.to_string()))?;
+                    line.push(b'\n');
+                    Some(Protocol {
+                        invocation_line: line,
+                        mode: *mode,
+                    })
+                }
+                _ => None,
+            };
+            Ok((env, protocol))
         })();
-        let env = match prepared {
-            Ok(env) => env,
+        let (env, protocol) = match prepared {
+            Ok(v) => v,
             Err(e) => {
                 let _ = std::fs::remove_file(&input_file);
                 let _ = std::fs::remove_file(&config_file);
@@ -762,21 +830,27 @@ impl Actor {
                 return;
             }
         };
-        let cwd = if launch.cwd.starts_with('/') {
-            PathBuf::from(&launch.cwd)
-        } else {
-            root.join(&launch.cwd)
+        // Plugins run in their plugin dir; `context.cwd` tells them the action cwd.
+        let cwd = match (&protocol, &launch.plugin) {
+            (Some(_), Some((_, dir))) => dir.as_path().to_path_buf(),
+            _ => action_cwd.clone(),
         };
+        if let Some(lpp) = run.lpp.as_mut() {
+            lpp.cwd = action_cwd.clone();
+            lpp.artifact_dir = artifact_dir.clone();
+        }
         let spec = CommandSpec {
             run_id: run_id.clone(),
             argv: launch.argv,
             cwd,
+            cleanup_cwd: action_cwd,
             env,
             timeout: launch.timeout,
             stop_signal: launch.stop_signal,
             grace: launch.grace,
             cleanup: launch.cleanup,
             temp_files: vec![input_file, config_file],
+            protocol,
         };
         let (stop_tx, stop_rx) = tokio::sync::mpsc::channel(4);
         run.stop_tx = Some(stop_tx);
@@ -833,6 +907,10 @@ impl Actor {
                 }
                 self.broadcast_logs(&run_id, records);
             }
+            RunnerEvent::Frame(ev) => self.plugin_event(run_id, *ev),
+            RunnerEvent::ProtocolError { error, view_hint } => {
+                self.protocol_error(&run_id, error, view_hint)
+            }
             RunnerEvent::Finished(f) => self.finalize(&run_id, f.exit, f.spawn_error, f.cleanup),
         }
     }
@@ -847,19 +925,33 @@ impl Actor {
         let Some(run) = self.runs.get_mut(run_id) else {
             return;
         };
-        let outcome = outcome_for(
-            run.requested_stop,
-            &exit,
-            spawn_error.is_some() || exit.is_none(),
-        );
+        let spawn_failed = spawn_error.is_some() || exit.is_none();
+        let mut outcome = outcome_for(run.requested_stop, &exit, spawn_failed);
+        let mut stop_reason = run.requested_stop;
+        let mut verdict_note = None;
+        // Plugin tasks: stop/timeout and spawn failures keep precedence (§7.6).
+        if run.requested_stop.is_none()
+            && !spawn_failed
+            && let Some(v) = run
+                .lpp
+                .as_deref()
+                .and_then(|l| plugin::verdict(l, run.record.result.as_ref(), &exit))
+        {
+            outcome = v.outcome;
+            stop_reason = stop_reason.or(v.stop_reason);
+            verdict_note = v.note;
+        }
         let r = &mut run.record;
         r.lifecycle = Lifecycle::Finished { outcome };
         r.ended_at = Some(Timestamp::now());
         r.exit = exit;
-        r.stop_reason = run.requested_stop;
+        r.stop_reason = stop_reason;
         r.cleanup = cleanup;
         if let Some(e) = spawn_error {
-            r.note = Some(e.message);
+            plugin::append_note(&mut r.note, &e.message);
+        }
+        if let Some(n) = verdict_note {
+            plugin::append_note(&mut r.note, &n);
         }
         if let Ok(log) = run.log.lock() {
             r.log.first_seq = log.first_available();
@@ -870,6 +962,10 @@ impl Actor {
         run.phase = Phase::Finalizing;
         run.stop_tx = None;
         let record = run.record.clone();
+        let failed = outcome != Outcome::Succeeded;
+        if run.lpp.is_some() {
+            self.views_run_ended(run_id, failed);
+        }
         let tx = self.tx.clone();
         let run_id = run_id.clone();
         match self.storage.clone() {
@@ -935,7 +1031,10 @@ impl Actor {
         run.requested_stop = Some(reason);
         let kind = match reason {
             StopReason::SessionClosed | StopReason::TtlExpired => StopKind::SessionClosed,
-            _ => StopKind::Cancelled,
+            StopReason::ProtocolError | StopReason::OutputLimit | StopReason::InternalError => {
+                StopKind::Failed
+            }
+            StopReason::User | StopReason::Timeout => StopKind::Cancelled,
         };
         if let Some(tx) = &run.stop_tx {
             let _ = tx.try_send(kind);

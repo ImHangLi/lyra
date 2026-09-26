@@ -80,9 +80,14 @@ pub struct LogItem {
     )]
     #[schemars(with = "Map<String, Value>")]
     pub fields: Option<Map<String, Value>>,
-    /// Set by the host when stored; never accepted from producers.
-    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
+    /// Set by the host when stored and returned by `view.read`. Producers must omit it:
+    /// frame validation rejects a producer-supplied value.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Timestamp")]
     pub recorded_at: Option<Timestamp>,
 }
 
@@ -199,6 +204,12 @@ pub fn validate_log_item(item: &LogItem, p: &str, issues: &mut Issues) {
         issues.push(Issue::schema(
             format!("{p}/text"),
             "log item text exceeds 8 KiB",
+        ));
+    }
+    if item.recorded_at.is_some() {
+        issues.push(Issue::schema(
+            format!("{p}/recorded_at"),
+            "recorded_at is set by the host; producers use producer_at",
         ));
     }
 }

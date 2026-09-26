@@ -239,6 +239,18 @@ impl RunLog {
         text: &str,
         continued_from_previous: bool,
     ) -> Vec<LogRecord> {
+        self.push_line_fields(stream, level, text, continued_from_previous, None)
+    }
+
+    /// Like [`Self::push_line`], with optional structured fields on the first record.
+    pub fn push_line_fields(
+        &mut self,
+        stream: LogStream,
+        level: LogLevel,
+        text: &str,
+        continued_from_previous: bool,
+        mut fields: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Vec<LogRecord> {
         let parts = chunks(text);
         let n = parts.len();
         if n > 1 {
@@ -257,7 +269,7 @@ impl RunLog {
                 text: part.to_owned(),
                 continued: continued_from_previous || i > 0,
                 truncated: n > 1 && i + 1 < n,
-                fields: None,
+                fields: fields.take().filter(|f| !f.is_empty()),
             };
             out.push(record.clone());
             self.append(record);

@@ -1,0 +1,63 @@
+{
+  "api": 1,
+  "id": "bad-frames",
+  "name": "Bad Frames",
+  "description": "Fault fixture for LPP/1: emits valid, split, or deliberately broken output chosen by the input case.",
+  "tags": ["test", "protocol"],
+  "entry": {"argv": ["python3", "main.py"]},
+  "actions": [
+    {
+      "id": "emit",
+      "title": "Emit a case",
+      "description": "Write the output named by `case` to stdout.",
+      "mode": "task",
+      "run": {"kind": "plugin"},
+      "timeout": {"kind": "after", "ms": 60000},
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "case": {
+            "type": "string",
+            "enum": [
+              "byte-split", "chunk-split", "many-per-chunk", "crlf", "status-progress",
+              "invalid-json", "half-frame", "truncated-eof", "oversized", "bom", "empty-line",
+              "duplicate-result", "frame-after-result", "no-result", "exit1-after-success",
+              "failure-result", "bad-output",
+              "good-table", "bad-table-type", "bad-table-missing-column", "bad-table-duplicate-row",
+              "log-a", "log-a-again", "log-a-changed",
+              "artifact-managed", "artifact-escape", "artifact-symlink-escape", "artifact-external"
+            ]
+          }
+        },
+        "required": ["case"],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {"case": {"type": "string"}},
+        "required": ["case"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "slow",
+      "title": "Slow success",
+      "description": "Sleeps past its 2 s timeout, then reports success too late.",
+      "mode": "task",
+      "run": {"kind": "plugin"},
+      "timeout": {"kind": "after", "ms": 2000}
+    },
+    {
+      "id": "proc",
+      "title": "Process that sends a result",
+      "description": "A process action that illegally sends a result frame.",
+      "mode": "process",
+      "run": {"kind": "plugin"}
+    }
+  ],
+  "views": [
+    {"id": "grid", "title": "Grid", "kind": "table", "persistence": "last"},
+    {"id": "feed", "title": "Feed", "kind": "log", "persistence": "last"},
+    {"id": "note", "title": "Note", "kind": "text", "persistence": "last"}
+  ]
+}
