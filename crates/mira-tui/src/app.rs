@@ -187,6 +187,8 @@ pub enum Cmd {
     PrevTab,
     /// Go to one tab by number (`1`, `2`, `3`).
     GoTab(u8),
+    /// Open the view the last row action wrote (`o`).
+    OpenWritten,
 }
 
 pub struct Binding {
@@ -233,6 +235,19 @@ pub struct Notice {
     about: Option<(ActionRef, RunId)>,
     /// The run's [`stage`] when the notice was last checked.
     seen: Option<u8>,
+    /// A finished run succeeded: the notice reads with a check mark.
+    pub ok: bool,
+    /// A view the finished row action wrote; `o` opens it while the notice shows.
+    pub open: Option<ViewRef>,
+}
+
+/// A row action started from a table view, followed until its run ends.
+struct RowRun {
+    view_ref: ViewRef,
+    action: ActionId,
+    run_id: Option<RunId>,
+    /// Other views of the same plugin that changed while it ran.
+    wrote: Vec<ViewRef>,
 }
 
 pub enum Quit {
@@ -322,6 +337,7 @@ pub struct App {
     /// The last non-empty screen line of active PTY runs whose log is still empty.
     pub screens: HashMap<RunId, String>,
     screen_at: Option<Instant>,
+    row_run: Option<RowRun>,
     io: Io,
 }
 
@@ -381,6 +397,7 @@ impl App {
             term: Terminals::new(io.paths.clone()),
             screens: HashMap::new(),
             screen_at: None,
+            row_run: None,
             io,
         }
     }
@@ -491,6 +508,11 @@ impl App {
             {
                 self.invoke(a, input);
             }
+        }
+        if let Some(id) = self.row_run.as_ref().and_then(|r| r.run_id.as_ref())
+            && !self.active.values().any(|r| &r.run_id == id)
+        {
+            let _ = self.io.read.send(Read::RunGet(id.clone()));
         }
         self.session = session;
         if let Some(a) = self.selected_ref() {
@@ -672,7 +694,10 @@ impl App {
                     }
                 }
             }
-            Event::Run(Ok(rec)) => self.record(*rec),
+            Event::Run(Ok(rec)) => {
+                self.row_run_ended(&rec);
+                self.record(*rec)
+            }
             Event::Run(Err(_)) => {}
             Event::Recent(Ok(list)) => {
                 for rec in list.runs {
@@ -746,11 +771,19 @@ impl App {
                 }
             }
             Event::ViewActed(r, action, res) => match res {
-                Ok(acc) => self.info(format!(
-                    "started {}.{action} for the selected row ({}); select that action to see its logs",
-                    r.plugin, acc.run_id
-                )),
+                Ok(acc) => {
+                    self.info(format!("running {action} for this row…"));
+                    if let Some(rr) = &mut self.row_run
+                        && rr.view_ref == r
+                        && rr.action == action
+                    {
+                        rr.run_id = Some(acc.run_id.clone());
+                    }
+                    // A quick run can end before any state event names it.
+                    let _ = self.io.read.send(Read::RunGet(acc.run_id));
+                }
                 Err(e) if e.code == mira_protocol::ErrorCode::VIEW_CHANGED => {
+                    self.row_run = None;
                     if let Some(p) = self.view_panes.get_mut(&r) {
                         p.accept_current();
                     }
@@ -760,7 +793,10 @@ impl App {
                         e.message
                     ));
                 }
-                Err(e) => self.error_info(&format!("{}.{action} did not start", r.plugin), &e),
+                Err(e) => {
+                    self.row_run = None;
+                    self.error_info(&format!("{action} did not start"), &e)
+                }
             },
             Event::ScheduleSet(a, res) => {
                 self.pending.remove(&a);
@@ -832,6 +868,13 @@ impl App {
                 view_ref,
                 view_revision,
             } => {
+                if let Some(rr) = &mut self.row_run
+                    && rr.view_ref.plugin == view_ref.plugin
+                    && rr.view_ref != view_ref
+                    && !rr.wrote.contains(&view_ref)
+                {
+                    rr.wrote.push(view_ref.clone());
+                }
                 // Only opened views keep a panel; others read when they are selected.
                 if self
                     .view_panes
@@ -919,7 +962,12 @@ impl App {
         self.poll_views();
         self.poll_screen();
         if self.notice.as_ref().is_some_and(|n| {
-            n.at.elapsed().as_secs() >= if n.error { NOTICE_SECS } else { INFO_SECS }
+            n.at.elapsed().as_secs()
+                >= if n.error || n.open.is_some() {
+                    NOTICE_SECS
+                } else {
+                    INFO_SECS
+                }
         }) {
             self.notice = None;
         }
@@ -984,6 +1032,8 @@ impl App {
             at: Instant::now(),
             about: None,
             seen: None,
+            ok: false,
+            open: None,
         });
     }
 
@@ -996,6 +1046,84 @@ impl App {
         self.settle_notice();
     }
 
+    /// Shows the result of a finished row action run, with `o` for a view it wrote.
+    fn row_run_ended(&mut self, rec: &RunRecord) {
+        if rec.lifecycle.is_active()
+            || self
+                .row_run
+                .as_ref()
+                .is_none_or(|r| r.run_id.as_ref() != Some(&rec.run_id))
+        {
+            return;
+        }
+        let Some(rr) = self.row_run.take() else {
+            return;
+        };
+        let succeeded = matches!(
+            rec.lifecycle,
+            Lifecycle::Finished {
+                outcome: mira_protocol::run::Outcome::Succeeded
+            }
+        );
+        let ok = rec.result.as_ref().map_or(succeeded, |r| r.ok && succeeded);
+        let summary = rec
+            .result
+            .as_ref()
+            .map(|r| r.summary.trim().trim_end_matches('.').to_owned())
+            .filter(|s| !s.is_empty());
+        if !ok {
+            let why = summary
+                .or_else(|| {
+                    rec.result
+                        .as_ref()
+                        .and_then(|r| r.error.as_ref())
+                        .map(|e| e.message.clone())
+                })
+                .unwrap_or_else(|| "see its logs".into());
+            self.error(format!("{} failed: {why}", rr.action));
+            return;
+        }
+        let text = summary.unwrap_or_else(|| format!("{} finished", rr.action));
+        let open = rr
+            .wrote
+            .iter()
+            .find(|v| self.views.iter().any(|x| &x.view_ref == *v))
+            .cloned();
+        let text = match open.as_ref().and_then(|v| self.view_title(v)) {
+            Some(title) => format!("{text} · o opens {title}"),
+            None => text,
+        };
+        self.info(text);
+        if let Some(n) = &mut self.notice {
+            n.ok = true;
+            n.open = open;
+        }
+    }
+
+    fn view_title(&self, r: &ViewRef) -> Option<String> {
+        self.views
+            .iter()
+            .find(|v| &v.view_ref == r)
+            .map(|v| v.title.clone())
+    }
+
+    /// Selects the view `r` and gives it the focus, clearing a filter that hides it.
+    fn open_view(&mut self, r: &ViewRef) {
+        let Some(vi) = self.views.iter().position(|v| &v.view_ref == r) else {
+            return;
+        };
+        if !self.visible.contains(&Entry::View(vi)) {
+            self.filter.clear();
+            self.refilter(None);
+        }
+        if let Some(pos) = self.visible.iter().position(|e| *e == Entry::View(vi)) {
+            self.notice = None;
+            self.selected = pos;
+            self.on_select();
+            self.focus = Focus::Logs;
+        }
+    }
+
     pub fn error(&mut self, text: impl Into<String>) {
         self.notice = Some(Notice {
             text: text.into(),
@@ -1003,6 +1131,8 @@ impl App {
             at: Instant::now(),
             about: None,
             seen: None,
+            ok: false,
+            open: None,
         });
     }
 
@@ -1372,10 +1502,13 @@ impl App {
             self.error("select a row first");
             return;
         };
-        self.info(format!(
-            "running {}.{action} for row {row} of revision {expected}...",
-            view_ref.plugin
-        ));
+        self.info(format!("running {action} for this row…"));
+        self.row_run = Some(RowRun {
+            view_ref: view_ref.clone(),
+            action: action.clone(),
+            run_id: None,
+            wrote: Vec::new(),
+        });
         let _ = self.io.control.send(Control::ViewAction {
             view_ref,
             action,
@@ -1615,6 +1748,14 @@ impl App {
     fn global_bindings(&self, v: &mut Vec<Binding>) {
         if self.focus == Focus::List && !self.filter.is_empty() && self.selected_view().is_some() {
             v.push(bind("Esc", "clear filter", Cmd::Escape));
+        }
+        if let Some(title) = self
+            .notice
+            .as_ref()
+            .and_then(|n| n.open.as_ref())
+            .and_then(|r| self.view_title(r))
+        {
+            v.insert(0, bind("o", format!("open {title}"), Cmd::OpenWritten));
         }
         v.push(bind(":", "command", Cmd::Command));
         v.push(hidden(
@@ -2067,6 +2208,7 @@ impl App {
             (KeyCode::Char('m'), _) => Cmd::Mouse,
             (KeyCode::Char('Y'), _) => Cmd::CopyAll,
             (KeyCode::Char('H'), _) => Cmd::History,
+            (KeyCode::Char('o'), _) => Cmd::OpenWritten,
             (KeyCode::Char(']'), _) => Cmd::NextTab,
             (KeyCode::Char('['), _) => Cmd::PrevTab,
             (KeyCode::Char(c @ '1'..='3'), _) => Cmd::GoTab(c as u8 - b'1'),
@@ -2311,6 +2453,11 @@ impl App {
             Cmd::Attach => {
                 if let Some((a, run_id)) = self.attach_target() {
                     self.term.open(a, run_id, self.io.events.clone());
+                }
+            }
+            Cmd::OpenWritten => {
+                if let Some(r) = self.notice.as_ref().and_then(|n| n.open.clone()) {
+                    self.open_view(&r);
                 }
             }
             Cmd::Detach | Cmd::Forward => {}
