@@ -446,6 +446,18 @@ fn kind_glyph(k: ViewKind) -> &'static str {
     }
 }
 
+/// The word a sidebar view row shows for a state its tone also shows, so the state never
+/// depends on color alone.
+fn view_flag(app: &App, v: &ViewItem) -> Option<&'static str> {
+    let p = app.view_panes.get(&v.view_ref)?;
+    if p.error.is_some() {
+        return Some("error");
+    }
+    let m = p.meta.as_ref()?;
+    p.revision()?;
+    (m.freshness == Freshness::Stale).then_some("stale")
+}
+
 fn view_tone(app: &App, v: &ViewItem) -> Option<Tone> {
     let p = app.view_panes.get(&v.view_ref)?;
     if p.error.is_some() {
@@ -642,7 +654,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     let mut sel_row = 0usize;
     let mut last_group: Option<String> = None;
     for (vi, &entry) in app.visible.iter().enumerate() {
-        let (group, title, glyph, gstyle) = match entry {
+        let (group, title, glyph, gstyle, flag) = match entry {
             Entry::Action(i) => {
                 let item = &app.items[i];
                 let m = item_mark(app, item);
@@ -651,16 +663,20 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                     Cow::Borrowed(item.title.as_str()),
                     m.glyph,
                     m.style(t),
+                    None,
                 )
             }
             Entry::View(i) => {
                 let v = &app.views[i];
-                let st = view_tone(app, v).map_or(t.muted(), |c| t.fg(c));
+                let tone = view_tone(app, v);
+                let st = tone.map_or(t.muted(), |c| t.fg(c));
+                let flag = view_flag(app, v).map(|w| (w, tone.map_or(t.muted(), |c| t.word(c))));
                 (
                     v.view_ref.plugin.to_string().to_uppercase(),
                     Cow::Borrowed(v.title.as_str()),
                     kind_glyph(v.kind),
                     st,
+                    flag,
                 )
             }
             Entry::OneOff(i) => {
@@ -671,6 +687,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                     Cow::Owned(o.title()),
                     m.glyph,
                     m.style(t),
+                    None,
                 )
             }
         };
@@ -691,7 +708,13 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         let age = entry_time(app, entry)
             .map(|ts| rel_age(secs_since(ts)))
             .unwrap_or_default();
-        let aw = cells(&age);
+        // A state word (`stale`, `error`) goes before the age.
+        let (flag, flag_st) = match flag {
+            Some((w, st)) if age.is_empty() => (w.to_owned(), st),
+            Some((w, st)) => (format!("{w} "), st),
+            None => (String::new(), Style::default()),
+        };
+        let aw = cells(&age) + cells(&flag);
         // ` ` glyph(2) ` ` title … age ` `
         let title_w = w.saturating_sub(4 + 1 + aw + usize::from(aw > 0));
         let title = ellipsize(&display(&title), title_w);
@@ -705,6 +728,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                 Span::styled(" ", s),
                 Span::styled(title, s),
                 Span::styled(" ".repeat(gap), s),
+                Span::styled(flag, s),
                 Span::styled(age, s),
                 Span::styled(" ", s),
             ])
@@ -720,6 +744,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                 Span::raw(" "),
                 Span::styled(title, tstyle),
                 Span::raw(" ".repeat(gap)),
+                Span::styled(flag, flag_st),
                 Span::styled(age, t.muted()),
                 Span::raw(" "),
             ])
