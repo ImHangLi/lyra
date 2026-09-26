@@ -934,6 +934,7 @@ dependencies = [
  "lyra-host",
  "lyra-protocol",
  "lyra-tui",
+ "rustix",
  "serde",
  "serde_json",
  "tokio",
