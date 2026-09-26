@@ -34,6 +34,8 @@ const BRANCH_SECS: u64 = 3;
 const VIEW_POLL_MS: u128 = 1000;
 /// The screen of a silent PTY run is read again at most this often.
 const SCREEN_POLL_MS: u128 = 1000;
+/// One-off (`mira exec`) runs listed besides the ones still running.
+pub const ONEOFF_KEEP: usize = 10;
 
 pub struct Item {
     pub action_ref: ActionRef,
@@ -53,11 +55,94 @@ pub struct ViewItem {
     pub kind: ViewKind,
 }
 
-/// One row of the tool list: an action or a view of some plugin.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// One row of the tool list: an action or a view of some plugin, or a one-off run.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Entry {
     Action(usize),
     View(usize),
+    OneOff(usize),
+}
+
+/// What stays selected when the list changes.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Key {
+    Item(ItemRef),
+    Run(RunId),
+}
+
+impl std::fmt::Display for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Key::Item(r) => r.fmt(f),
+            Key::Run(r) => r.fmt(f),
+        }
+    }
+}
+
+/// A one-off `mira exec` run (no action), from any client of this workspace.
+pub struct OneOff {
+    pub run_id: RunId,
+    /// The `exec --label`; `None` until the run record is read.
+    pub label: Option<String>,
+    pub lifecycle: Lifecycle,
+    pub started_at: Timestamp,
+    pub ended_at: Option<Timestamp>,
+    pub exit: Option<ExitInfo>,
+    pub cleanup: Option<CleanupState>,
+    pub source: Option<mira_protocol::run::RunSource>,
+    /// A stop was sent and not answered yet.
+    pub stopping: bool,
+    /// The log panel, made when the run is first selected.
+    pub pane: Option<LogPane>,
+}
+
+impl OneOff {
+    fn new(run_id: RunId, lifecycle: Lifecycle, started_at: Timestamp) -> Self {
+        Self {
+            run_id,
+            label: None,
+            lifecycle,
+            started_at,
+            ended_at: None,
+            exit: None,
+            cleanup: None,
+            source: None,
+            stopping: false,
+            pane: None,
+        }
+    }
+
+    /// The label, or a placeholder until the run record is read.
+    pub fn title(&self) -> String {
+        self.label
+            .clone()
+            .unwrap_or_else(|| format!("exec {}", &self.run_id.as_str()[..10]))
+    }
+
+    fn apply(&mut self, rec: &RunRecord) {
+        self.label = Some(rec.label.clone());
+        self.lifecycle = rec.lifecycle;
+        self.started_at = rec.started_at;
+        self.ended_at = rec.ended_at;
+        self.exit = rec.exit.clone();
+        self.cleanup = Some(rec.cleanup.clone());
+        self.source = Some(rec.source);
+    }
+}
+
+/// Orders one-off runs newest first and keeps the newest [`ONEOFF_KEEP`] plus every run
+/// that is still active.
+pub fn keep_oneoffs(list: &mut Vec<OneOff>) {
+    list.sort_by(|a, b| {
+        b.started_at
+            .cmp(&a.started_at)
+            .then_with(|| b.run_id.cmp(&a.run_id))
+    });
+    let mut n = 0;
+    list.retain(|o| {
+        n += 1;
+        n <= ONEOFF_KEEP || o.lifecycle.is_active()
+    });
 }
 
 pub enum Inputs {
@@ -306,6 +391,10 @@ pub struct App {
     pub attached_to: Option<SessionId>,
     pub active: HashMap<ActionRef, RunSummary>,
     pub adhoc_runs: usize,
+    /// One-off runs, newest first (see [`keep_oneoffs`]).
+    pub oneoffs: Vec<OneOff>,
+    /// A one-off run shows its Details tab instead of its logs.
+    pub oneoff_details: bool,
     pub storage_warnings: Vec<Warning>,
     pub config_warnings: Vec<Warning>,
     pub last: HashMap<ActionRef, LastRun>,
@@ -373,6 +462,8 @@ impl App {
             attached_to: None,
             active: HashMap::new(),
             adhoc_runs: 0,
+            oneoffs: Vec::new(),
+            oneoff_details: false,
             storage_warnings: Vec::new(),
             config_warnings: Vec::new(),
             last: HashMap::new(),
@@ -456,6 +547,7 @@ impl App {
     fn apply_runs(&mut self, session: Option<SessionInfo>, runs: Vec<RunSummary>) {
         let old = std::mem::take(&mut self.active);
         self.adhoc_runs = 0;
+        let mut adhoc: Vec<RunSummary> = Vec::new();
         for r in runs {
             match r.action_ref.clone() {
                 Some(a) => {
@@ -465,9 +557,13 @@ impl App {
                     }
                     self.active.insert(a, r);
                 }
-                None => self.adhoc_runs += 1,
+                None => {
+                    self.adhoc_runs += 1;
+                    adhoc.push(r);
+                }
             }
         }
+        self.apply_oneoffs(adhoc);
         for (a, r) in old {
             if self.active.get(&a).is_some_and(|n| n.run_id == r.run_id) {
                 continue;
@@ -520,6 +616,68 @@ impl App {
         }
         self.settle_notice();
         self.request_status();
+    }
+
+    /// Tracks the active one-off runs: a new one is listed and its record read for the
+    /// label; one that left the active set is read again for its outcome.
+    fn apply_oneoffs(&mut self, active: Vec<RunSummary>) {
+        let keep = self.selected_key();
+        let mut changed = false;
+        for o in &mut self.oneoffs {
+            if o.lifecycle.is_active() && !active.iter().any(|r| r.run_id == o.run_id) {
+                // Ended: the final record brings the outcome.
+                let _ = self.io.read.send(Read::RunGet(o.run_id.clone()));
+            }
+        }
+        for r in active {
+            match self.oneoffs.iter_mut().find(|o| o.run_id == r.run_id) {
+                Some(o) => {
+                    if o.lifecycle != r.lifecycle {
+                        o.stopping &= !matches!(r.lifecycle, Lifecycle::Stopping { .. });
+                    }
+                    o.lifecycle = r.lifecycle;
+                }
+                None => {
+                    let _ = self.io.read.send(Read::RunGet(r.run_id.clone()));
+                    self.oneoffs
+                        .push(OneOff::new(r.run_id, r.lifecycle, r.started_at));
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            keep_oneoffs(&mut self.oneoffs);
+            self.relist(keep);
+        }
+    }
+
+    /// Lists the entries again after the one-off runs changed, keeping `keep` selected.
+    fn relist(&mut self, keep: Option<Key>) {
+        self.refilter(keep.clone());
+        if self.selected_key() != keep {
+            self.on_select();
+        }
+    }
+
+    /// A run record of a one-off run: fills in its label and outcome. `listed` adds a run
+    /// that is not listed yet (from the startup history).
+    fn oneoff_record(&mut self, rec: &RunRecord, listed: bool) {
+        if let Some(o) = self.oneoffs.iter_mut().find(|o| o.run_id == rec.run_id) {
+            o.apply(rec);
+            if !rec.lifecycle.is_active() {
+                o.stopping = false;
+            }
+            return;
+        }
+        if !listed {
+            return;
+        }
+        let keep = self.selected_key();
+        let mut o = OneOff::new(rec.run_id.clone(), rec.lifecycle, rec.started_at);
+        o.apply(rec);
+        self.oneoffs.push(o);
+        keep_oneoffs(&mut self.oneoffs);
+        self.relist(keep);
     }
 
     /// Schedules come only with full status; read it at most once a second.
@@ -678,10 +836,41 @@ impl App {
                 }
             }
             Event::Tail(a, res) => self.tail(&a, res),
+            Event::RunTail(run_id, res) => {
+                let Some(p) = self
+                    .oneoffs
+                    .iter_mut()
+                    .find(|o| o.run_id == run_id)
+                    .and_then(|o| o.pane.as_mut())
+                else {
+                    return;
+                };
+                match res {
+                    Ok(LogChunk { page, older_cursor }) => p.apply_tail(page, older_cursor),
+                    Err(e) => {
+                        p.loading = false;
+                        if e.code != mira_protocol::ErrorCode::NOT_FOUND {
+                            p.error = Some(e.message);
+                        }
+                    }
+                }
+            }
+            Event::RunStopped(run_id, res) => {
+                let o = self.oneoffs.iter_mut().find(|o| o.run_id == run_id);
+                let label = o.as_ref().map_or_else(|| run_id.to_string(), |o| o.title());
+                if let (Some(o), Err(_)) = (o, &res) {
+                    o.stopping = false;
+                }
+                match res {
+                    Ok(_) => self.info(format!("stopping {label}")),
+                    Err(e) => self.error_info(&format!("{label} did not stop"), &e),
+                }
+            }
             Event::Older(run_id, res) => {
                 if let Some(p) = self
                     .panes
                     .values_mut()
+                    .chain(self.oneoffs.iter_mut().filter_map(|o| o.pane.as_mut()))
                     .find(|p| p.run_id.as_ref() == Some(&run_id))
                 {
                     match res {
@@ -700,6 +889,15 @@ impl App {
             }
             Event::Run(Err(_)) => {}
             Event::Recent(Ok(list)) => {
+                // One-off runs of this session (or still running) are listed too.
+                let session = self.session.as_ref().map(|s| &s.id).cloned();
+                for rec in list.runs.iter().filter(|r| {
+                    r.action_ref.is_none()
+                        && (r.lifecycle.is_active()
+                            || (session.is_some() && r.session_id == session))
+                }) {
+                    self.oneoff_record(rec, true);
+                }
                 for rec in list.runs {
                     if let Some(a) = rec.action_ref.clone()
                         && !self.last.contains_key(&a)
@@ -865,6 +1063,14 @@ impl App {
                 for p in self.panes.values_mut() {
                     p.append(&run_id, &records);
                 }
+                if let Some(p) = self
+                    .oneoffs
+                    .iter_mut()
+                    .find(|o| o.run_id == run_id)
+                    .and_then(|o| o.pane.as_mut())
+                {
+                    p.append(&run_id, &records);
+                }
             }
             StreamEvent::View {
                 view_ref,
@@ -901,6 +1107,7 @@ impl App {
 
     fn record(&mut self, rec: RunRecord) {
         let Some(a) = rec.action_ref.clone() else {
+            self.oneoff_record(&rec, false);
             return;
         };
         if self.active.get(&a).is_some_and(|r| r.run_id == rec.run_id) {
@@ -950,6 +1157,14 @@ impl App {
     }
 
     fn reload_selected_tail(&mut self) {
+        if let Some(i) = self.selected_oneoff_index() {
+            let o = &mut self.oneoffs[i];
+            if let Some(p) = &mut o.pane {
+                p.loading = true;
+                let _ = self.io.read.send(Read::RunTail(o.run_id.clone()));
+            }
+            return;
+        }
         let Some(a) = self.selected_ref() else {
             return;
         };
@@ -1178,15 +1393,35 @@ impl App {
     pub fn selected_item(&self) -> Option<&Item> {
         match self.selected_entry()? {
             Entry::Action(i) => self.items.get(i),
-            Entry::View(_) => None,
+            _ => None,
         }
     }
 
     pub fn selected_view(&self) -> Option<&ViewItem> {
         match self.selected_entry()? {
             Entry::View(i) => self.views.get(i),
-            Entry::Action(_) => None,
+            _ => None,
         }
+    }
+
+    pub fn selected_oneoff_index(&self) -> Option<usize> {
+        match self.selected_entry()? {
+            Entry::OneOff(i) if i < self.oneoffs.len() => Some(i),
+            _ => None,
+        }
+    }
+
+    pub fn selected_oneoff(&self) -> Option<&OneOff> {
+        self.selected_oneoff_index().map(|i| &self.oneoffs[i])
+    }
+
+    /// The selected one-off run can be stopped now.
+    pub fn oneoff_stoppable(&self) -> bool {
+        self.selected_oneoff().is_some_and(|o| {
+            self.control_lost.is_none()
+                && !o.stopping
+                && matches!(o.lifecycle, Lifecycle::Starting | Lifecycle::Running)
+        })
     }
 
     pub fn selected_ref(&self) -> Option<ActionRef> {
@@ -1198,22 +1433,31 @@ impl App {
             .and_then(|v| self.view_panes.get(&v.view_ref))
     }
 
-    fn entry_key(&self, e: Entry) -> Option<ItemRef> {
+    fn entry_key(&self, e: Entry) -> Option<Key> {
         match e {
-            Entry::Action(i) => self.items.get(i).map(|x| x.action_ref.to_item_ref()),
-            Entry::View(i) => self.views.get(i).map(|x| x.view_ref.to_item_ref()),
+            Entry::Action(i) => self
+                .items
+                .get(i)
+                .map(|x| Key::Item(x.action_ref.to_item_ref())),
+            Entry::View(i) => self
+                .views
+                .get(i)
+                .map(|x| Key::Item(x.view_ref.to_item_ref())),
+            Entry::OneOff(i) => self.oneoffs.get(i).map(|o| Key::Run(o.run_id.clone())),
         }
     }
 
-    fn selected_key(&self) -> Option<ItemRef> {
+    fn selected_key(&self) -> Option<Key> {
         self.selected_entry().and_then(|e| self.entry_key(e))
     }
 
     /// Lists the entries that match the filter, best match first (see [`rank`]); without a
     /// filter, every entry in plugin order. Matches stay grouped under their plugin: plugins
     /// are ordered by their best match, entries within a plugin by their own rank, so each
-    /// plugin heading appears once. `keep` stays selected if it still matches.
-    fn refilter(&mut self, keep: Option<ItemRef>) {
+    /// plugin heading appears once. One-off runs come first, newest first; while a filter
+    /// is set, the matching ones come after the tools so the best tool match stays first.
+    /// `keep` stays selected if it still matches.
+    fn refilter(&mut self, keep: Option<Key>) {
         let words: Vec<String> = self
             .filter
             .to_lowercase()
@@ -1252,7 +1496,17 @@ impl App {
         }
         // A stable sort keeps the list order among equal matches.
         out.sort_by_key(|(pi, k, _)| (best.get(pi).copied(), *pi, *k));
-        self.visible = out.into_iter().map(|(_, _, e)| e).collect();
+        let oneoffs = self.oneoffs.iter().enumerate().filter(|(_, o)| {
+            let title = o.title();
+            rank(&words, &title, o.run_id.as_str(), &title, &[], &[], "").is_some()
+        });
+        let oneoffs: Vec<Entry> = oneoffs.map(|(i, _)| Entry::OneOff(i)).collect();
+        let tools = out.into_iter().map(|(_, _, e)| e);
+        self.visible = if words.is_empty() {
+            oneoffs.into_iter().chain(tools).collect()
+        } else {
+            tools.chain(oneoffs).collect()
+        };
         self.selected = keep
             .and_then(|k| {
                 self.visible
@@ -1273,6 +1527,17 @@ impl App {
             .is_some_and(|(a, _)| Some(a) != sel.as_ref())
         {
             self.notice = None;
+        }
+        if let Some(i) = self.selected_oneoff_index() {
+            let o = &mut self.oneoffs[i];
+            if o.pane.is_none() {
+                let mut p = LogPane::new();
+                p.run_id = Some(o.run_id.clone());
+                p.loading = true;
+                o.pane = Some(p);
+                let _ = self.io.read.send(Read::RunTail(o.run_id.clone()));
+            }
+            return;
         }
         if let Some(v) = self.selected_view() {
             let r = v.view_ref.clone();
@@ -1312,7 +1577,7 @@ impl App {
         }
         match self.panes.get_mut(a) {
             None => {
-                let mut p = LogPane::new(a.clone());
+                let mut p = LogPane::new();
                 p.run_id = want.clone();
                 p.loading = true;
                 self.panes.insert(a.clone(), p);
@@ -1330,11 +1595,18 @@ impl App {
         }
     }
 
+    /// The log panel of the selected action or one-off run.
     pub fn selected_pane(&self) -> Option<&LogPane> {
+        if let Some(o) = self.selected_oneoff() {
+            return o.pane.as_ref();
+        }
         self.selected_ref().and_then(|a| self.panes.get(&a))
     }
 
     pub fn selected_pane_mut(&mut self) -> Option<&mut LogPane> {
+        if let Some(i) = self.selected_oneoff_index() {
+            return self.oneoffs[i].pane.as_mut();
+        }
         let a = self.selected_ref()?;
         self.panes.get_mut(&a)
     }
@@ -1605,6 +1877,9 @@ impl App {
         if self.selected_view().is_some() {
             return self.view_bindings();
         }
+        if self.selected_oneoff().is_some() {
+            return self.oneoff_bindings();
+        }
         let mut v = Vec::new();
         // The log keys act on the Logs tab only.
         let output = self.tab == Tab::Output;
@@ -1624,16 +1899,8 @@ impl App {
                 if output {
                     v.push(bind("j/k", "scroll", Cmd::Down));
                 }
-                if pane.is_some() {
-                    v.push(bind("j/k", "scroll", Cmd::Down));
-                    v.push(hidden("PgUp/PgDn", "page", Cmd::PageUp));
-                    v.push(hidden("g/Home", "oldest", Cmd::Top));
-                    let follow = if pane.is_some_and(LogPane::is_pinned) {
-                        "follow"
-                    } else {
-                        "bottom"
-                    };
-                    v.push(bind("G/End", follow, Cmd::Bottom));
+                if let Some(p) = pane {
+                    scroll_keys(&mut v, p);
                 }
                 if pane.is_none_or(|p| p.anchor.is_none())
                     && self
@@ -1710,39 +1977,97 @@ impl App {
         if self.focus == Focus::Logs
             && let Some(p) = pane
         {
-            let n = p.selection_text().map_or(1, |(_, n)| n);
-            let what = if n == 1 {
-                "copy".to_owned()
-            } else {
-                format!("copy {n} lines")
-            };
-            v.push(bind("y", what, Cmd::Copy));
-            if p.anchor.is_none() {
-                v.push(bind("v", "select", Cmd::Select));
-            } else {
-                v.push(bind("Esc", "unselect", Cmd::Escape));
-            }
-            v.push(bind("/", "find", Cmd::Search));
-            if self.log_query.is_some() {
-                v.push(bind("n/N", "next/prev", Cmd::NextMatch));
-            }
-            if !p.wrap {
-                v.push(bind("h/l", "pan", Cmd::Right));
-            }
-            v.push(bind(
-                "w",
-                if p.wrap { "no wrap" } else { "wrap" },
-                Cmd::Wrap,
-            ));
+            self.pane_keys(&mut v, p);
         }
+        self.list_keys(&mut v);
+        self.global_bindings(&mut v);
+        v
+    }
+
+    /// Copy, select, find, pan, and wrap keys of a log panel with lines.
+    fn pane_keys(&self, v: &mut Vec<Binding>, p: &LogPane) {
+        let n = p.selection_text().map_or(1, |(_, n)| n);
+        let what = if n == 1 {
+            "copy".to_owned()
+        } else {
+            format!("copy {n} lines")
+        };
+        v.push(bind("y", what, Cmd::Copy));
+        if p.anchor.is_none() {
+            v.push(bind("v", "select", Cmd::Select));
+        } else {
+            v.push(bind("Esc", "unselect", Cmd::Escape));
+        }
+        v.push(bind("/", "find", Cmd::Search));
+        if self.log_query.is_some() {
+            v.push(bind("n/N", "next/prev", Cmd::NextMatch));
+        }
+        if !p.wrap {
+            v.push(bind("h/l", "pan", Cmd::Right));
+        }
+        v.push(bind(
+            "w",
+            if p.wrap { "no wrap" } else { "wrap" },
+            Cmd::Wrap,
+        ));
+    }
+
+    /// Search and filter keys while the list has the focus.
+    fn list_keys(&self, v: &mut Vec<Binding>) {
         if self.focus == Focus::List {
-            if !self.items.is_empty() {
+            if !self.items.is_empty() || !self.oneoffs.is_empty() {
                 v.push(bind("/", "search", Cmd::Search));
             }
             if !self.filter.is_empty() {
                 v.push(bind("Esc", "clear filter", Cmd::Escape));
             }
         }
+    }
+
+    /// Keys for a selected one-off run. A one-off run is never run again from here:
+    /// its record does not keep the command line.
+    fn oneoff_bindings(&self) -> Vec<Binding> {
+        let mut v = Vec::new();
+        let pane = self
+            .selected_pane()
+            .filter(|p| !p.records.is_empty() && !self.oneoff_details);
+        // First, so the footer keeps it at narrow widths.
+        if self.oneoff_stoppable() {
+            v.push(bind("s", "stop", Cmd::Toggle));
+        }
+        match self.focus {
+            Focus::List => {
+                if self.visible.len() > 1 {
+                    v.push(bind("j/k", "move", Cmd::Down));
+                    v.push(hidden("PgUp/PgDn", "page", Cmd::PageUp));
+                    v.push(hidden("g/Home", "first", Cmd::Top));
+                    v.push(hidden("G/End", "last", Cmd::Bottom));
+                }
+                v.push(bind("Enter", "logs", Cmd::Open));
+            }
+            Focus::Logs => {
+                if pane.is_none_or(|p| p.anchor.is_none()) {
+                    v.push(bind("Esc", "back", Cmd::Escape));
+                }
+                if let Some(p) = pane {
+                    scroll_keys(&mut v, p);
+                }
+            }
+        }
+        v.push(hidden("[ ]", "previous or next tab", Cmd::NextTab));
+        v.push(hidden("1 2", "Logs or Details tab", Cmd::GoTab(0)));
+        let to = if self.focus == Focus::List {
+            "logs"
+        } else {
+            "tools"
+        };
+        v.push(bind("Tab", to, Cmd::Focus));
+        if self.focus == Focus::Logs
+            && let Some(p) = pane
+        {
+            self.pane_keys(&mut v, p);
+        }
+        self.list_keys(&mut v);
         self.global_bindings(&mut v);
         v
     }
@@ -2248,6 +2573,9 @@ impl App {
         if self.selected_view().is_some() && self.exec_view(cmd) {
             return;
         }
+        if self.selected_oneoff().is_some() && self.exec_oneoff(cmd) {
+            return;
+        }
         match cmd {
             Cmd::Command => {
                 self.modal = Modal::Command {
@@ -2429,6 +2757,37 @@ impl App {
         }
     }
 
+    /// Commands that act on a selected one-off run. Returns false for the ones shared with
+    /// actions (log keys, focus, search) and global ones.
+    fn exec_oneoff(&mut self, cmd: Cmd) -> bool {
+        let Some(i) = self.selected_oneoff_index() else {
+            return false;
+        };
+        match (cmd, self.focus) {
+            (Cmd::Open, Focus::List) => self.focus = Focus::Logs,
+            (Cmd::Open, Focus::Logs) => {}
+            (Cmd::Toggle, _) => {
+                if self.oneoff_stoppable() {
+                    let o = &mut self.oneoffs[i];
+                    o.stopping = true;
+                    let _ = self.io.control.send(Control::StopRun(o.run_id.clone()));
+                }
+            }
+            (Cmd::NextTab | Cmd::PrevTab, _) => self.oneoff_details = !self.oneoff_details,
+            (Cmd::GoTab(n), _) => {
+                if n < 2 {
+                    self.oneoff_details = n == 1;
+                }
+            }
+            (Cmd::Escape, Focus::Logs) => match self.oneoffs[i].pane.as_mut() {
+                Some(p) if p.anchor.is_some() => p.anchor = None,
+                _ => self.focus = Focus::List,
+            },
+            _ => return false,
+        }
+        true
+    }
+
     /// Commands that act on a selected view. Returns false for global ones.
     fn exec_view(&mut self, cmd: Cmd) -> bool {
         let Some(v) = self.selected_view() else {
@@ -2554,7 +2913,7 @@ impl App {
                 };
                 self.on_select();
             }
-            Focus::Logs if self.tab == Tab::Output => {
+            Focus::Logs if self.tab == Tab::Output && self.selected_oneoff().is_none() => {
                 self.output_top = match cmd {
                     Cmd::Up => self.output_top.saturating_sub(1),
                     Cmd::Down => self.output_top + 1,
@@ -2595,6 +2954,15 @@ impl App {
             }
         }
     }
+}
+
+/// Scroll keys of a log panel with lines.
+fn scroll_keys(v: &mut Vec<Binding>, p: &LogPane) {
+    v.push(bind("j/k", "scroll", Cmd::Down));
+    v.push(hidden("PgUp/PgDn", "page", Cmd::PageUp));
+    v.push(hidden("g/Home", "oldest", Cmd::Top));
+    let follow = if p.is_pinned() { "follow" } else { "bottom" };
+    v.push(bind("G/End", follow, Cmd::Bottom));
 }
 
 /// How well one catalog entry matches the filter words, like `mira` catalog search:
@@ -2985,6 +3353,82 @@ mod tests {
             "Another Mira window is open. 2 runs keep running."
         );
         assert_eq!(close_message(&Close::NoSession, 0), "Nothing was running.");
+    }
+
+    fn exec_run(at_ms: i64, lifecycle: Lifecycle) -> RunSummary {
+        RunSummary {
+            run_id: RunId::random(),
+            action_ref: None,
+            lifecycle,
+            reported_health: mira_protocol::run::ReportedHealth::unknown(),
+            definition_hash: Digest::of_bytes(b"exec"),
+            started_at: Timestamp::from_unix_ms(at_ms),
+        }
+    }
+
+    #[test]
+    fn one_off_runs_keep_the_newest_ten_and_every_running_one() {
+        let done = Lifecycle::Finished {
+            outcome: mira_protocol::run::Outcome::Succeeded,
+        };
+        let mut list: Vec<OneOff> = (0..12)
+            .map(|n| {
+                let r = exec_run(1_000 + n, done);
+                OneOff::new(r.run_id, r.lifecycle, r.started_at)
+            })
+            .collect();
+        let old = exec_run(10, Lifecycle::Running);
+        list.push(OneOff::new(
+            old.run_id.clone(),
+            old.lifecycle,
+            old.started_at,
+        ));
+        keep_oneoffs(&mut list);
+        let starts: Vec<i64> = list.iter().map(|o| o.started_at.unix_ms()).collect();
+        let mut want: Vec<i64> = (2..12).rev().map(|n| 1_000 + n).collect();
+        want.push(10);
+        assert_eq!(starts, want, "newest first; the old running run stays");
+        assert_eq!(list.last().map(|o| &o.run_id), Some(&old.run_id));
+    }
+
+    #[test]
+    fn one_off_runs_list_first_and_keep_the_selection() {
+        let mut a = app();
+        add_action(&mut a, "dev.check", "Check", &[], "");
+        let first = exec_run(1_000, Lifecycle::Running);
+        a.apply_runs(None, vec![first.clone()]);
+        assert_eq!(a.visible, [Entry::OneOff(0), Entry::Action(0)]);
+        // Select the action; a newer run lists above the older one and keeps the choice.
+        key(&mut a, KeyCode::Char('j'));
+        assert_eq!(a.selected_ref().unwrap().to_string(), "dev.check");
+        let second = exec_run(2_000, Lifecycle::Running);
+        a.apply_runs(None, vec![first.clone(), second.clone()]);
+        assert_eq!(
+            a.visible,
+            [Entry::OneOff(0), Entry::OneOff(1), Entry::Action(0)]
+        );
+        assert_eq!(a.oneoffs[0].run_id, second.run_id);
+        assert_eq!(a.selected_ref().unwrap().to_string(), "dev.check");
+        assert_eq!(a.adhoc_runs, 2);
+        // A one-off run shows its keys; `s` stops it while it runs.
+        key(&mut a, KeyCode::Char('k'));
+        assert_eq!(a.selected_oneoff().map(|o| &o.run_id), Some(&first.run_id));
+        let has = |a: &App, k: &str, l: &str| {
+            a.bindings()
+                .iter()
+                .any(|b| b.footer && b.keys == k && b.label == l)
+        };
+        assert!(has(&a, "s", "stop"));
+        assert!(!a.bindings().iter().any(|b| b.cmd == Cmd::Restart));
+        key(&mut a, KeyCode::Char('s'));
+        assert!(a.oneoffs[1].stopping);
+        assert!(!has(&a, "s", "stop"), "one stop at a time");
+        // A filter lists matching tools before one-off runs.
+        a.oneoffs[0].label = Some("check again".into());
+        assert_eq!(
+            search(&mut a, "check"),
+            ["dev.check".to_owned(), second.run_id.to_string()]
+        );
     }
 
     #[test]

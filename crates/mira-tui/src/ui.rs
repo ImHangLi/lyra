@@ -3,6 +3,8 @@
 //! the key footer. Only visible rows are built. State is never shown by color alone: every
 //! state has a glyph and a word (see [`crate::theme::Mark`]).
 
+use std::borrow::Cow;
+
 use mira_protocol::ipc::{SessionMode, SessionState};
 use mira_protocol::manifest::{ActionMode, ViewKind};
 use mira_protocol::run::{CleanupState, Lifecycle, LogStream, Outcome, RunRecord, RunResult};
@@ -14,7 +16,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 
-use crate::app::{App, Binding, Cmd, Entry, Focus, Inputs, Intent, Item, Modal, Tab, ViewItem};
+use crate::app::{
+    App, Binding, Cmd, Entry, Focus, Inputs, Intent, Item, Modal, OneOff, Tab, ViewItem,
+};
 use crate::form::Kind;
 use crate::logs::{LogPane, cells, display, slice_cells};
 use crate::theme::{self, ColorMode, Mark, Theme, Tone};
@@ -411,6 +415,14 @@ fn item_mark(app: &App, item: &Item) -> Mark {
     }
 }
 
+fn oneoff_mark(o: &OneOff) -> Mark {
+    if o.stopping {
+        theme::STOPPING
+    } else {
+        life_mark(o.lifecycle)
+    }
+}
+
 fn kind_glyph(k: ViewKind) -> &'static str {
     match k {
         ViewKind::Table => "▦",
@@ -452,6 +464,10 @@ fn entry_time(app: &App, e: Entry) -> Option<Timestamp> {
                 .get(&v.view_ref)
                 .and_then(|p| p.meta.as_ref())
                 .and_then(|m| m.recorded_at)
+        }
+        Entry::OneOff(i) => {
+            let o = app.oneoffs.get(i)?;
+            Some(o.ended_at.unwrap_or(o.started_at))
         }
     }
 }
@@ -593,7 +609,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     let w = inner.width as usize;
-    if total == 0 {
+    if total == 0 && app.oneoffs.is_empty() {
         let msg = if app.catalog_error.is_some() {
             " Catalog unavailable"
         } else {
@@ -608,15 +624,15 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         rows.push(Line::from(Span::styled(" Esc clears the filter.", t.dim())));
     }
     let mut sel_row = 0usize;
-    let mut last_plugin: Option<String> = None;
+    let mut last_group: Option<String> = None;
     for (vi, &entry) in app.visible.iter().enumerate() {
-        let (plugin, title, glyph, gstyle) = match entry {
+        let (group, title, glyph, gstyle) = match entry {
             Entry::Action(i) => {
                 let item = &app.items[i];
                 let m = item_mark(app, item);
                 (
-                    item.action_ref.plugin.to_string(),
-                    item.title.as_str(),
+                    item.action_ref.plugin.to_string().to_uppercase(),
+                    Cow::Borrowed(item.title.as_str()),
                     m.glyph,
                     m.style(t),
                 )
@@ -625,25 +641,32 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                 let v = &app.views[i];
                 let st = view_tone(app, v).map_or(t.dim(), |c| t.fg(c));
                 (
-                    v.view_ref.plugin.to_string(),
-                    v.title.as_str(),
+                    v.view_ref.plugin.to_string().to_uppercase(),
+                    Cow::Borrowed(v.title.as_str()),
                     kind_glyph(v.kind),
                     st,
                 )
             }
+            Entry::OneOff(i) => {
+                let o = &app.oneoffs[i];
+                let m = oneoff_mark(o);
+                (
+                    "ONE-OFF RUNS".to_owned(),
+                    Cow::Owned(o.title()),
+                    m.glyph,
+                    m.style(t),
+                )
+            }
         };
-        if last_plugin.as_deref() != Some(plugin.as_str()) {
-            if last_plugin.is_some() {
+        if last_group.as_deref() != Some(group.as_str()) {
+            if last_group.is_some() {
                 rows.push(Line::from(""));
             }
             rows.push(Line::from(Span::styled(
-                format!(
-                    " {}",
-                    ellipsize(&plugin.to_uppercase(), w.saturating_sub(2))
-                ),
+                format!(" {}", ellipsize(&group, w.saturating_sub(2))),
                 t.fg(Tone::AccentDeep).add_modifier(Modifier::BOLD),
             )));
-            last_plugin = Some(plugin);
+            last_group = Some(group);
         }
         let selected = vi == app.selected;
         if selected {
@@ -655,7 +678,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         let aw = cells(&age);
         // ` ` glyph(2) ` ` title … age ` `
         let title_w = w.saturating_sub(4 + 1 + aw + usize::from(aw > 0));
-        let title = ellipsize(&display(title), title_w);
+        let title = ellipsize(&display(&title), title_w);
         let gap = w.saturating_sub(4 + cells(&title) + aw + 1);
         let glyph = format!("{glyph:<2}");
         let line = if selected && focus {
@@ -739,13 +762,20 @@ fn chip(t: &Theme, text: &str, tone: Tone) -> Span<'static> {
 }
 
 fn tab_bar(t: &Theme, shown: Tab, info: &str, w: usize) -> Line<'static> {
+    let labels = Tab::ALL.map(Tab::label);
+    let at = Tab::ALL.iter().position(|x| *x == shown).unwrap_or(0);
+    tabs_line(t, &labels, at, info, w)
+}
+
+/// Tab labels with `shown` underlined, then `info` on the right.
+fn tabs_line(t: &Theme, labels: &[&str], shown: usize, info: &str, w: usize) -> Line<'static> {
     let mut spans = Vec::new();
-    for (i, tab) in Tab::ALL.into_iter().enumerate() {
+    for (i, name) in labels.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw("  "));
         }
-        let label = format!(" {} ", tab.label());
-        if tab == shown {
+        let label = format!(" {name} ");
+        if i == shown {
             spans.push(Span::styled(
                 label,
                 t.fg(Tone::Accent)
@@ -771,6 +801,10 @@ fn right_info(mut spans: Vec<Span<'static>>, info: &str, t: &Theme, w: usize) ->
 }
 
 fn draw_main(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
+    if let Some(i) = app.selected_oneoff_index() {
+        draw_oneoff(f, app, t, i, area);
+        return;
+    }
     if app.items.is_empty() && app.views.is_empty() {
         match &app.catalog_error {
             Some(e) => {
@@ -893,6 +927,180 @@ fn draw_main(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
             draw_output_tab(f, app, t, &a, body);
         }
     }
+}
+
+/// The main pane of a one-off `mira exec` run: a card like a tool's, then its logs or
+/// the details of the run.
+fn draw_oneoff(f: &mut Frame, app: &mut App, t: &Theme, i: usize, area: Rect) {
+    let focus = app.focus == Focus::Logs;
+    let block =
+        panel(t, panel_title(t, "One-off run", focus), focus).padding(Padding::horizontal(1));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let w = inner.width as usize;
+    let o = &app.oneoffs[i];
+    let label = display(&o.title());
+    let source = o.source.map(enum_word).unwrap_or_default();
+    let mut how = format!("mira exec --label \"{label}\"");
+    if !source.is_empty() {
+        how.push_str(&format!(" · from {source}"));
+    }
+    let card = vec![
+        Line::from(fit_spans(
+            vec![
+                Span::styled(ellipsize(&label, w / 2), t.bold()),
+                Span::raw("  "),
+                chip(t, "one-off", Tone::Sky),
+            ],
+            w,
+        )),
+        Line::from(Span::styled(ellipsize(&how, w), t.dim())),
+        Line::from(fit_spans(oneoff_status(app, t, o), w)),
+        Line::from(Span::styled(
+            ellipsize("Worked? Ask your agent to save it as a plugin.", w),
+            t.dim().add_modifier(Modifier::ITALIC),
+        )),
+    ];
+    let details = oneoff_details(app, t, o, w);
+    let rule = inner.height >= 16;
+    let [card_area, _, tabs_area, rule_area, body] = Layout::vertical([
+        Constraint::Length(card.len() as u16),
+        Constraint::Length(u16::from(inner.height >= 14)),
+        Constraint::Length(1),
+        Constraint::Length(u16::from(rule)),
+        Constraint::Min(1),
+    ])
+    .areas(inner);
+    f.render_widget(Paragraph::new(card), card_area);
+    if rule {
+        f.render_widget(
+            Paragraph::new(Span::styled("─".repeat(w), t.dim())),
+            rule_area,
+        );
+    }
+    let labels = ["Logs", "Details"];
+    if app.oneoff_details {
+        f.render_widget(Paragraph::new(tabs_line(t, &labels, 1, "", w)), tabs_area);
+        f.render_widget(Paragraph::new(details), body);
+        return;
+    }
+    let offset = app.offset;
+    let Some(p) = app.oneoffs[i].pane.as_mut() else {
+        f.render_widget(Paragraph::new(tabs_line(t, &labels, 0, "", w)), tabs_area);
+        f.render_widget(Paragraph::new(Span::styled("loading…", t.dim())), body);
+        return;
+    };
+    let bw = body.width as usize;
+    p.height = body.height as usize;
+    p.width = bw.saturating_sub(if bw >= 40 { 11 } else { 2 }).max(1);
+    let bar = log_bar(p, None);
+    f.render_widget(Paragraph::new(tabs_line(t, &labels, 0, &bar, w)), tabs_area);
+    draw_records(f, p, t, focus, offset, body);
+}
+
+/// The one-off card's status line: a mark and a word, then details.
+fn oneoff_status(app: &App, t: &Theme, o: &OneOff) -> Vec<Span<'static>> {
+    let mark = oneoff_mark(o);
+    let mut word = if o.stopping {
+        "stopping…".to_owned()
+    } else {
+        match o.lifecycle {
+            Lifecycle::Stopping { reason } => format!("stopping ({})", enum_word(reason)),
+            l => run_word(l).to_owned(),
+        }
+    };
+    let mut details: Vec<String> = Vec::new();
+    match o.ended_at {
+        Some(e) if !o.lifecycle.is_active() => {
+            word = format!("{word} in {}", took(e.unix_ms() - o.started_at.unix_ms()));
+            details.push(ago(e));
+            if let Some(x) = &o.exit {
+                match (x.code, &x.signal) {
+                    (Some(c), _) => details.push(format!("exit {c}")),
+                    (None, Some(s)) => details.push(s.to_string()),
+                    _ => {}
+                }
+            }
+        }
+        _ => details.push(format!(
+            "started {} ({})",
+            ago(o.started_at),
+            app.clock(o.started_at, false)
+        )),
+    }
+    details.push(short_id(o.run_id.as_str()));
+    let mut spans = vec![
+        Span::styled(format!("{} ", mark.glyph), mark.style(t)),
+        Span::styled(word, mark.style(t).add_modifier(Modifier::BOLD)),
+    ];
+    if let Some(c) = o.cleanup.as_ref().and_then(cleanup_word) {
+        spans.push(Span::styled(
+            format!("  {c}"),
+            t.fg(Tone::Rose).add_modifier(Modifier::BOLD),
+        ));
+    }
+    for d in details {
+        spans.push(Span::styled(format!(" · {d}"), t.dim()));
+    }
+    spans
+}
+
+/// The Details tab of a one-off run: its record, field by field.
+fn oneoff_details(app: &App, t: &Theme, o: &OneOff, w: usize) -> Vec<Line<'static>> {
+    let row = |k: &str, v: String| {
+        Line::from(vec![
+            Span::styled(format!("{k:<10}"), t.dim()),
+            Span::raw(ellipsize(&display(&v), w.saturating_sub(10))),
+        ])
+    };
+    let id = o.run_id.to_string();
+    let mut lines = vec![
+        row("label", o.title()),
+        row("run", id.clone()),
+        row(
+            "state",
+            format!("{} {}", oneoff_mark(o).glyph, run_word(o.lifecycle)),
+        ),
+        row(
+            "started",
+            format!(
+                "{} ({})",
+                started_word(app, o.started_at),
+                ago(o.started_at)
+            ),
+        ),
+    ];
+    if let Some(e) = o.ended_at {
+        lines.push(row("ended", started_word(app, e)));
+        lines.push(row("took", took(e.unix_ms() - o.started_at.unix_ms())));
+    } else {
+        lines.push(row(
+            "running",
+            format!("{} so far", rel_age(secs_since(o.started_at))),
+        ));
+    }
+    if let Some(x) = &o.exit {
+        let v = match (x.code, &x.signal) {
+            (Some(c), _) => format!("code {c}"),
+            (None, Some(s)) => format!("signal {s}"),
+            _ => "none".into(),
+        };
+        lines.push(row("exit", v));
+    }
+    if let Some(c) = o.cleanup.as_ref().and_then(cleanup_word) {
+        lines.push(row("cleanup", c));
+    }
+    if let Some(s) = o.source {
+        lines.push(row("from", enum_word(s)));
+    }
+    lines.push(Line::from(""));
+    for hint in [
+        format!("`mira logs {}` prints its output.", short_id(&id)),
+        format!("`mira runs {}` prints the full record.", short_id(&id)),
+    ] {
+        lines.push(Line::from(Span::styled(ellipsize(&hint, w), t.dim())));
+    }
+    lines
 }
 
 /// The card's status line: a mark and a word, then details.
@@ -1077,7 +1285,6 @@ fn draw_logs(
     });
     // A PTY run that prints nothing is often waiting for input: show its screen's last line.
     let waiting = app.silent_pty_run().map(|r| app.screens.get(r).cloned());
-    let sel = t.selected();
     let Some(p) = app.panes.get_mut(a) else {
         f.render_widget(Paragraph::new(tab_bar(t, Tab::Logs, "", w)), tabs_area);
         f.render_widget(Paragraph::new(Span::styled("loading…", t.dim())), body);
@@ -1117,6 +1324,22 @@ fn draw_logs(
         f.render_widget(Paragraph::new(lines), body);
         return;
     }
+    draw_records(f, p, t, focus, offset, body);
+}
+
+/// The lines of a log panel, or why there are none.
+fn draw_records(
+    f: &mut Frame,
+    p: &LogPane,
+    t: &Theme,
+    focus: bool,
+    offset: time::UtcOffset,
+    body: Rect,
+) {
+    let w = body.width as usize;
+    let gutter = if w >= 40 { 11 } else { 2 };
+    let text_w = w.saturating_sub(gutter).max(1);
+    let sel = t.selected();
     if p.records.is_empty() {
         let msg = if let Some(e) = &p.error {
             format!("Cannot read logs: {e}")
@@ -1674,6 +1897,10 @@ fn draw_rail(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     let w = inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
     match app.selected_ref() {
+        None if app.selected_oneoff().is_some() => lines.push(Line::from(Span::styled(
+            " A one-off run has no history.",
+            t.dim(),
+        ))),
         None => lines.push(Line::from(Span::styled(" Views have no runs.", t.dim()))),
         Some(a) => match app.recent.get(&a) {
             Some(r) if !r.is_empty() => {
@@ -1739,7 +1966,7 @@ fn draw_rail(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     }
     let mut active = format!("{} run(s)", app.active.len());
     if app.adhoc_runs > 0 {
-        active.push_str(&format!(" + {} ad-hoc", app.adhoc_runs));
+        active.push_str(&format!(" + {} one-off", app.adhoc_runs));
     }
     lines.push(row("active", active, Style::default()));
     lines.push(row(
@@ -1805,20 +2032,16 @@ fn status_line(app: &App, t: &Theme) -> Option<Line<'static>> {
                 )
             } else if let Some(m) = &app.stream_issue {
                 ("!", m.clone(), Some(Tone::Amber))
-            } else if let Some(wn) = app.storage_warnings.first().or(app.config_warnings.first()) {
+            } else {
+                let wn = app
+                    .storage_warnings
+                    .first()
+                    .or(app.config_warnings.first())?;
                 (
                     "!",
                     format!("warning [{}]: {}", wn.code, wn.message),
                     Some(Tone::Amber),
                 )
-            } else if app.adhoc_runs > 0 {
-                (
-                    "·",
-                    format!("{} ad-hoc run(s) active (see mira status)", app.adhoc_runs),
-                    None,
-                )
-            } else {
-                return None;
             };
             let st = tone.map_or(t.dim(), |c| t.fg(c));
             let text_st = match tone {
@@ -1972,6 +2195,8 @@ fn help_lines(app: &App, t: &Theme, avail: usize) -> (Vec<Line<'static>>, usize)
         },
         "Tabs: [ and ] switch Logs, History, and Output; 1, 2, 3 go straight to one. \
          H opens History; Enter there shows that run's logs.",
+        "ONE-OFF RUNS lists `mira exec` runs from any terminal: Logs and Details tabs \
+         (1, 2); s stops a running one.",
         ": runs one public mira command (not a shell). Forms: Tab moves, Enter runs.",
         "q and Ctrl-C close this window. When it is the last Mira window, its runs stop. \
          b keeps them running for 2h; `mira down` stops them.",
