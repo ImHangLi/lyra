@@ -29,7 +29,6 @@ Your agents do the work. You still have to find it, check it, and explain it aga
 
 | The pain | With Lyra |
 |---|---|
-| **Twelve worktrees, five agents, and something is holding port 3000.** | **`lyra ps` shows every repo on your laptop: what is running, which ports it holds, and how much memory it uses. `lyra down --all` stops it all.** |
 | **Your agent says the tests pass, but you can't see them.** | **You open the same run and its live logs. Either of you can stop it.** |
 | **Every new session learns again how to run this client's repo.** | **Your agent saves the commands as tools in the repo. The next session, and the next engineer after you, reuses them.** |
 | **Six terminal tabs every morning for the server, the database, and the worker.** | **One screen, one key to start each piece. Closing Lyra stops what it started, and your data stays.** |
