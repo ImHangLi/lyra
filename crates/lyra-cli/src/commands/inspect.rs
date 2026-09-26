@@ -41,15 +41,14 @@ pub fn status(ctx: &Ctx) -> ExitCode {
                 let mut out = match &s.session {
                     None => "session: none".to_owned(),
                     Some(se) => format!(
-                        "session: {:?} {:?}, {} controller(s){}",
-                        se.mode,
-                        se.state,
+                        "session: {} {}, {} controller(s){}",
+                        lc(&se.mode),
+                        lc(&se.state),
                         se.controller_count,
                         se.expires_at
                             .map(|t| format!(", expires {t}"))
                             .unwrap_or_default()
-                    )
-                    .to_lowercase(),
+                    ),
                 };
                 if s.runs.is_empty() {
                     out.push_str("\nruns: none active");
