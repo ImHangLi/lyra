@@ -24,12 +24,15 @@ If a tool already does most of it, change that plugin (new input, new action nex
 | Interactive program (prompts, full-screen) | command runner with `"terminal": "pty"` |
 | Structured results: tables, trees, grouped logs, row actions | `"run": {"kind": "plugin"}` + plugin `entry`, speaking MPP/1 on stdout |
 | Messages published by agents or hooks, nothing to execute | a view-only plugin (no actions) and `mira publish` |
+| Filter or combine another tool's logs (errors only, one stream) | a derived log view: `"kind": "log", "source": {"logs": "PLUGIN.ACTION", "grep": "error"}` — manifest only, no process |
 
-Pass argv as a list; there is no implicit shell. If you need a shell, write `["/bin/zsh", "-lc", "…"]` and never splice user input into that string — take input from `MIRA_INPUT_FILE`.
+Pass argv as a list; there is no implicit shell. If you need a shell, write `["/bin/zsh", "-lc", "…"]` and never put a placeholder or user input into that string — take input from `MIRA_INPUT_FILE`.
 
 Saving a command that worked (`mira exec … -- ARGV`): turn it into a command action with a clear `title`, a `description` that says what problem it solves, the right `cwd`, and an `input_schema` for the parts that change between uses.
 
-Command actions do not template `argv`: input reaches the child only as JSON in `MIRA_INPUT_FILE`. When arguments change between uses (a port, a test path), point the action at a small wrapper in the plugin directory that reads the input and runs the command with a list of arguments: see [with_input.py](templates/command/with_input.py) and the `serve-on-port` action in the [command template](templates/command/plugin.json).
+When arguments change between uses (a port, a test path), put `{input.NAME}` in `run.argv`: `["npm", "run", "dev", "--", "--port={input.port}"]`. NAME must be a top-level property of `input_schema`; the host fills in the effective input (defaults included) before it starts the command, and never splits or interprets the value. See the `serve-on-port` action in the [command template](templates/command/plugin.json). Use a small wrapper such as [with_input.py](templates/command/with_input.py) only when the arguments need logic: optional flags, lists, or computed values. `MIRA_INPUT_FILE` always holds the full input JSON.
+
+To show only part of another action's output (errors, one stream), declare a derived log view instead of writing a plugin that follows logs. The host filters the source run's log, so the TUI and `mira view` show the same lines. See [manifest](references/manifest.md#derived-log-view).
 
 ## 3. Write it
 

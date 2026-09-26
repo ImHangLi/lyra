@@ -142,6 +142,10 @@
       ],
       "type": "object"
     },
+    "ItemRef": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}\\.[a-z][a-z0-9-]{0,47}$",
+      "type": "string"
+    },
     "Persistence": {
       "enum": [
         "last",
@@ -233,6 +237,14 @@
       ],
       "type": "object"
     },
+    "SourceStream": {
+      "description": "Which output streams a derived log view keeps.",
+      "enum": [
+        "stdout",
+        "stderr"
+      ],
+      "type": "string"
+    },
     "StopSignal": {
       "enum": [
         "term",
@@ -313,6 +325,10 @@
           },
           "type": "array"
         },
+        "source": {
+          "$ref": "#/$defs/ViewSourceWire",
+          "description": "Log views only: derive the view from another action's run log."
+        },
         "title": {
           "type": "string"
         }
@@ -337,6 +353,28 @@
         "json"
       ],
       "type": "string"
+    },
+    "ViewSourceWire": {
+      "additionalProperties": false,
+      "description": "A log view the host derives from another action's run log; no plugin process runs.",
+      "properties": {
+        "grep": {
+          "description": "Keep only lines that contain this text, ignoring case.",
+          "type": "string"
+        },
+        "logs": {
+          "$ref": "#/$defs/ItemRef",
+          "description": "`PLUGIN.ACTION` whose current run (or latest run) supplies the lines."
+        },
+        "stream": {
+          "$ref": "#/$defs/SourceStream",
+          "description": "Keep only lines from this stream."
+        }
+      },
+      "required": [
+        "logs"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

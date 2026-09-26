@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 
 use crate::error::{ErrorCode, Issue, Issues, pointer_token};
 use crate::hash::canonical_digest;
-use crate::ids::{ActionId, ActionRef, Api1, Digest, PluginId, ViewId};
+use crate::ids::{ActionId, ActionRef, Api1, Digest, ItemRef, PluginId, ViewId};
 use crate::limits::*;
 use crate::schema_profile::SchemaDoc;
 use crate::strict_json;
@@ -183,6 +183,38 @@ pub struct RowActionWire {
     pub bindings: BTreeMap<String, String>,
 }
 
+/// Which output streams a derived log view keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceStream {
+    Stdout,
+    Stderr,
+}
+
+/// A log view the host derives from another action's run log; no plugin process runs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ViewSourceWire {
+    /// `PLUGIN.ACTION` whose current run (or latest run) supplies the lines.
+    pub logs: ItemRef,
+    /// Keep only lines that contain this text, ignoring case.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "String")]
+    pub grep: Option<String>,
+    /// Keep only lines from this stream.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "SourceStream")]
+    pub stream: Option<SourceStream>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ViewDefinitionWire {
@@ -195,6 +227,14 @@ pub struct ViewDefinitionWire {
     pub persistence: Persistence,
     #[serde(default)]
     pub row_actions: Vec<RowActionWire>,
+    /// Log views only: derive the view from another action's run log.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "ViewSourceWire")]
+    pub source: Option<ViewSourceWire>,
     #[serde(default)]
     pub meta: JsonObject,
 }
@@ -525,6 +565,33 @@ pub struct RowAction {
     pub bindings: BTreeMap<String, String>,
 }
 
+/// A validated log source. `logs` is checked against the whole catalog by `config`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ViewSource {
+    pub logs: ActionRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grep: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<SourceStream>,
+}
+
+impl ViewSource {
+    /// True when a log line from `stream` with `text` belongs in the view.
+    pub fn keeps(&self, stream: crate::run::LogStream, text: &str) -> bool {
+        use crate::run::LogStream;
+        let stream_ok = match self.stream {
+            None => true,
+            Some(SourceStream::Stdout) => stream == LogStream::Stdout,
+            Some(SourceStream::Stderr) => stream == LogStream::Stderr,
+        };
+        stream_ok
+            && self
+                .grep
+                .as_deref()
+                .is_none_or(|g| text.to_lowercase().contains(&g.to_lowercase()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ViewDefinition {
     pub id: ViewId,
@@ -533,6 +600,9 @@ pub struct ViewDefinition {
     pub description: String,
     pub persistence: Persistence,
     pub row_actions: Vec<RowAction>,
+    /// Set for log views the host derives from another action's run log.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<ViewSource>,
     pub meta: JsonObject,
     /// Includes the definitions of actions referenced by `row_actions`.
     #[serde(skip)]
@@ -805,6 +875,28 @@ pub fn validate_plugin(w: PluginWire) -> Result<Plugin, Issues> {
                 "row_actions are only allowed on table views",
             ));
         }
+        let source = v.source.as_ref().map(|src| {
+            if v.kind != ViewKind::Log {
+                issues.push(Issue::schema(
+                    format!("{p}/source"),
+                    "source is only allowed on log views",
+                ));
+            }
+            if let Some(g) = &src.grep {
+                check_text(
+                    g,
+                    MAX_NAME_BYTES,
+                    true,
+                    &format!("{p}/source/grep"),
+                    &mut issues,
+                );
+            }
+            ViewSource {
+                logs: src.logs.as_action(),
+                grep: src.grep.clone(),
+                stream: src.stream,
+            }
+        });
         let mut bound = Vec::new();
         for (j, ra) in v.row_actions.iter().enumerate() {
             match w.actions.iter().find(|a| a.id == ra.action) {
@@ -841,6 +933,7 @@ pub fn validate_plugin(w: PluginWire) -> Result<Plugin, Issues> {
                         bindings: r.bindings.clone(),
                     })
                     .collect(),
+                source,
                 meta: v.meta.clone(),
                 definition_hash,
             }),
@@ -915,6 +1008,9 @@ fn validate_action(
         Some(_) => check_schema_doc(&a.input_schema, &format!("{p}/input_schema"), true, issues),
         None => Some(SchemaDoc::empty_object()),
     };
+    if let (RunnerWire::Command { argv }, Some(doc)) = (&a.run, &input_schema) {
+        crate::template::check_argv(argv, doc, &format!("{p}/run/argv"), issues);
+    }
     let output_schema = check_schema_doc(
         &a.output_schema,
         &format!("{p}/output_schema"),

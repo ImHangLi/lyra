@@ -23,9 +23,9 @@
     {
       "id": "serve-on-port",
       "title": "Dev server on a port",
-      "description": "Replace with the service; with_input.py turns the input into arguments.",
+      "description": "Replace with the service; {input.port} in argv becomes the port from the input.",
       "mode": "process",
-      "run": {"kind": "command", "argv": ["python3", ".mira/plugins/example-tools/with_input.py"]},
+      "run": {"kind": "command", "argv": ["npm", "run", "dev", "--", "--port", "{input.port}"]},
       "input_schema": {
         "type": "object",
         "properties": {"port": {"type": "integer", "default": 3000, "minimum": 1024, "maximum": 65535}},

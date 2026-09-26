@@ -7,6 +7,7 @@ mod artifacts;
 mod budget;
 mod configure;
 mod cursor;
+mod derived;
 mod payloads;
 mod plugin;
 mod reads;
@@ -188,6 +189,7 @@ pub struct Actor {
     storage_warnings: Vec<Warning>,
     idle_since: Option<Instant>,
     views: views::ViewStore,
+    derived: derived::DerivedViews,
     artifacts: artifacts::Artifacts,
     payloads: payloads::Payloads,
     cfg: configure::ConfigCtl,
@@ -278,6 +280,7 @@ impl Actor {
             storage_warnings,
             idle_since: Some(Instant::now()),
             views: views::ViewStore::default(),
+            derived: derived::DerivedViews::default(),
             artifacts: artifacts::Artifacts::default(),
             payloads: payloads::Payloads::new(paths_for_cfg.state_dir.join("results")),
             cfg: configure::ConfigCtl::new(&paths_for_cfg),
@@ -356,6 +359,7 @@ impl Actor {
     pub async fn run(mut self) {
         self.init_catalog_revision().await;
         self.init_views().await;
+        self.init_derived_views().await;
         self.load_schedules().await;
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         loop {

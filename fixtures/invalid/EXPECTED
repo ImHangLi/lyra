@@ -14,3 +14,6 @@ timeout-range SCHEMA_INVALID
 unknown-field SCHEMA_INVALID
 unknown-tag SCHEMA_INVALID
 unsupported-api UNSUPPORTED_API
+argv-unknown-input SCHEMA_INVALID
+source-on-table SCHEMA_INVALID
+source-not-action SCHEMA_INVALID
