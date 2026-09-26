@@ -26,7 +26,7 @@ Performance numbers are in [performance.md](performance.md). Real-project record
 | IPC-04 | pass | #31 | 40 subscriptions during heavy churn; state was continuous or reset explicitly |
 | IPC-05 | pass | #31 | A slow subscriber is reset; `stop` and `status` stay fast; the session survives |
 | LIFE-01 | pass | #23, #28 | The last controller closing stops work; an extra controller keeps it running |
-| LIFE-02 | partial | #27 | TTL expiry and non-overlapping ticks work with shortened TTLs. **not-run:** real OS sleep and wake, which is part of the pass condition |
+| LIFE-02 | pass | #27, [below](#real-sleep-and-wake) | TTL expiry and non-overlapping ticks work, including across a real sleep and wake of the verification Mac |
 | LIFE-03 | pass | #23 | Stopping one run leaves the others running |
 | LIFE-04 | pass | #23, #29 | TERM, then KILL after grace, with reaping; a failed cleanup keeps the main result |
 | LIFE-05 | pass | #34 | Compose worktrees and a port conflict: only its own resources are touched, and volumes are kept |
@@ -66,13 +66,20 @@ Performance numbers are in [performance.md](performance.md). Real-project record
 | VALUE-05 | pass | #27 | A deterministic schedule calls no model and stops with the session |
 | VALUE-06 | pass | #31, #34 | Historical, stale, and cleaned data never read as current |
 
+## Real sleep and wake
+
+Checked on v0.2.0, on 2026-09-26, on the verification Mac (M5 Pro, macOS 27.2).
+- Setup: a background session with a 2-minute TTL (expiring at 17:27:55), `dev.heartbeat` scheduled every 2 s, and `dev.web` running.
+- `pmset sleepnow` at 17:26:41. The power log shows sleep at 17:26:46, a 10 s maintenance dark wake at 17:27:05, sleep again at 17:27:15, and a keyboard wake at 17:30:46.
+- **Expiry across sleep:** the TTL passed while the Mac was asleep. On wake, the host stopped the session at once. `dev.web` ended at 17:30:45 with `stop_reason: ttl_expired`, and `lyra status` showed no session 1 s after the wake.
+- **No replay of missed ticks:** the heartbeat ran every 2 s while awake, and 6 times during the 10 s dark wake, when macOS lets processes run. It did not run during deep sleep. After the wake no burst happened: 30 runs before the wake, and the same 30 at wake +1 s, +10 s, +30 s, and +60 s. No two runs overlapped.
+
 ## Remaining limits
 
 - **Real terminals (partial):** before v0.2.0 the TUI ran in real Terminal.app and Ghostty (200x59) windows. A small proxy passed the output through to the window and typed scripted keys. Only the Lyra window was captured.
   - Checked: the home screen, a running service with live logs, the run history, help, search, and the terminal restore on quit. After SIGTERM in Terminal.app, `stty` showed `icanon isig echo`.
   - Not run: native text selection and copy by hand. iTerm2 is not installed.
 - **Not run:**
-  - A real OS sleep and wake. It needs the machine to sleep and a physical wake. The TTL logic was checked with shortened TTLs (LIFE-02).
   - Outline startup. A full Outline install needs several GB of dependencies. Docker itself now works: the FastAPI Compose services start and stop through Lyra with their volumes kept.
 - **Out of scope:** the x86_64 build and M2 hardware. Every target machine is Apple Silicon M3 or later.
 - **Few automated tests:** the owner authorized a small, focused set after the release review; CI runs them (23 at v0.2.0). They cover bounded log tails, escape stripping, env-file errors that hide values, `input --text` parsing, process-group identity, catalog and TUI search ranking, discovery exclusions, and several TUI behaviors. The other evidence is the recorded live runs, CI, and `scripts/check-contract.sh`.
