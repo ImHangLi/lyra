@@ -9,7 +9,7 @@ See it, keep it, reuse it. You and your coding agent run, watch, and extend the 
 - **Bounded, honest history.** Results keep their source run, time, and definition, and say when they are historical or stale.
 - **No AI inside.** The Core runs no models and sends no telemetry. Your existing agent does setup and extension through the bundled skills.
 
-macOS 14+, arm64 and x86_64. Status: MVP. What was verified, and what was not, is in [docs/verification/mvp.md](docs/verification/mvp.md); the demo path is in [docs/demo.md](docs/demo.md).
+macOS on Apple Silicon (arm64). Status: MVP, [v0.1.0](https://github.com/ImHangLi/lyra/releases/tag/v0.1.0). What was verified, and what was not, is in [docs/verification/mvp.md](docs/verification/mvp.md); the demo path is in [docs/demo.md](docs/demo.md).
 
 ## Install
 
