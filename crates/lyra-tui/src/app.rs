@@ -964,7 +964,9 @@ impl App {
     }
 
     /// Lists the entries that match the filter, best match first (see [`rank`]); without a
-    /// filter, every entry in plugin order. `keep` stays selected if it still matches.
+    /// filter, every entry in plugin order. Matches stay grouped under their plugin: plugins
+    /// are ordered by their best match, entries within a plugin by their own rank, so each
+    /// plugin heading appears once. `keep` stays selected if it still matches.
     fn refilter(&mut self, keep: Option<ItemRef>) {
         let words: Vec<String> = self
             .filter
@@ -972,8 +974,8 @@ impl App {
             .split_whitespace()
             .map(str::to_owned)
             .collect();
-        let mut out: Vec<((u8, std::cmp::Reverse<usize>), Entry)> = Vec::new();
-        for p in &self.plugin_order {
+        let mut out: Vec<(usize, (u8, std::cmp::Reverse<usize>), Entry)> = Vec::new();
+        for (pi, p) in self.plugin_order.iter().enumerate() {
             for (n, i) in self.items.iter().enumerate() {
                 if i.action_ref.plugin.as_str() != p {
                     continue;
@@ -981,7 +983,7 @@ impl App {
                 let r = i.action_ref.to_string();
                 let id = i.action_ref.action.to_string();
                 if let Some(k) = rank(&words, &r, &id, &i.title, &i.tags, &[], &i.description) {
-                    out.push((k, Entry::Action(n)));
+                    out.push((pi, k, Entry::Action(n)));
                 }
             }
             for (n, v) in self.views.iter().enumerate() {
@@ -992,13 +994,19 @@ impl App {
                 let id = v.view_ref.view.to_string();
                 let kind = [crate::views::kind_word(v.kind).to_owned()];
                 if let Some(k) = rank(&words, &r, &id, &v.title, &v.tags, &kind, &v.description) {
-                    out.push((k, Entry::View(n)));
+                    out.push((pi, k, Entry::View(n)));
                 }
             }
         }
+        let mut best: HashMap<usize, (u8, std::cmp::Reverse<usize>)> = HashMap::new();
+        for (pi, k, _) in &out {
+            best.entry(*pi)
+                .and_modify(|b| *b = (*b).min(*k))
+                .or_insert(*k);
+        }
         // A stable sort keeps the list order among equal matches.
-        out.sort_by_key(|(k, _)| *k);
-        self.visible = out.into_iter().map(|(_, e)| e).collect();
+        out.sort_by_key(|(pi, k, _)| (best.get(pi).copied(), *pi, *k));
+        self.visible = out.into_iter().map(|(_, _, e)| e).collect();
         self.selected = keep
             .and_then(|k| {
                 self.visible
@@ -2408,6 +2416,28 @@ mod tests {
             .iter()
             .filter_map(|&e| a.entry_key(e).map(|k| k.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn filter_keeps_matches_grouped_under_one_plugin_heading() {
+        let mut a = app();
+        add_action(&mut a, "dev.check", "Check", &[], "Run every check.");
+        add_action(&mut a, "dev.env", "Environment check", &[], "Show env.");
+        add_action(&mut a, "files.check", "Check files", &[], "Check files.");
+        add_action(&mut a, "dev.fail", "Failing check", &[], "Fails.");
+        let found = search(&mut a, "check");
+        assert_eq!(found[0], "dev.check", "the best match stays first");
+        let plugins: Vec<&str> = found.iter().map(|r| r.split('.').next().unwrap()).collect();
+        let mut runs = plugins.clone();
+        runs.dedup();
+        let mut unique = runs.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            runs.len(),
+            unique.len(),
+            "each plugin appears in one block: {found:?}"
+        );
     }
 
     #[test]
