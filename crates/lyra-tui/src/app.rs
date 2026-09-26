@@ -24,7 +24,9 @@ use crate::terminal::Terminals;
 use crate::views::ViewPane;
 
 const MAX_PANES: usize = 8;
+/// Errors stay this long; other notices are transient and go sooner.
 const NOTICE_SECS: u64 = 8;
+const INFO_SECS: u64 = 4;
 /// The header's git branch is read again at most this often (or on a focus change).
 const BRANCH_SECS: u64 = 3;
 /// Open views whose metadata can still change (a save in progress, or a producing run
@@ -181,6 +183,11 @@ pub struct Notice {
     pub text: String,
     pub error: bool,
     at: Instant,
+    /// The run an info notice is about; it goes when that run changes state or ends, or
+    /// when another item is selected.
+    about: Option<(ActionRef, RunId)>,
+    /// The run's [`stage`] when the notice was last checked.
+    seen: Option<u8>,
 }
 
 pub enum Quit {
@@ -416,6 +423,7 @@ impl App {
         if let Some(a) = self.selected_ref() {
             self.sync_pane(&a);
         }
+        self.settle_notice();
         self.request_status();
     }
 
@@ -511,7 +519,7 @@ impl App {
                         } else {
                             format!("started {a} ({})", acc.run_id)
                         };
-                        self.info(what);
+                        self.info_run(&a, &acc.run_id, what);
                         self.viewing.remove(&a);
                         if let Some(p) = self.panes.get_mut(&a)
                             && p.run_id.as_ref() != Some(&acc.run_id)
@@ -530,7 +538,10 @@ impl App {
             Event::Stopped(a, res) => {
                 self.pending.remove(&a);
                 match res {
-                    Ok(s) => self.info(format!("stopping {a} ({})", s.run_id)),
+                    Ok(s) => {
+                        let what = format!("stopping {a} ({})", s.run_id);
+                        self.info_run(&a, &s.run_id, what)
+                    }
                     Err(e) => {
                         self.restart_after.remove(&a);
                         self.error_info(&format!("{a} did not stop"), &e);
@@ -819,11 +830,9 @@ impl App {
     pub fn tick(&mut self) {
         self.refresh_branch(false);
         self.poll_views();
-        if self
-            .notice
-            .as_ref()
-            .is_some_and(|n| n.at.elapsed().as_secs() >= NOTICE_SECS)
-        {
+        if self.notice.as_ref().is_some_and(|n| {
+            n.at.elapsed().as_secs() >= if n.error { NOTICE_SECS } else { INFO_SECS }
+        }) {
             self.notice = None;
         }
     }
@@ -854,7 +863,18 @@ impl App {
             text: text.into(),
             error: false,
             at: Instant::now(),
+            about: None,
+            seen: None,
         });
+    }
+
+    /// An info notice about one run: it goes as soon as the run moves on.
+    fn info_run(&mut self, a: &ActionRef, run_id: &RunId, text: impl Into<String>) {
+        self.info(text);
+        if let Some(n) = &mut self.notice {
+            n.about = Some((a.clone(), run_id.clone()));
+        }
+        self.settle_notice();
     }
 
     pub fn error(&mut self, text: impl Into<String>) {
@@ -862,7 +882,28 @@ impl App {
             text: text.into(),
             error: true,
             at: Instant::now(),
+            about: None,
+            seen: None,
         });
+    }
+
+    /// Clears a run notice whose run changed its lifecycle stage or ended.
+    fn settle_notice(&mut self) {
+        let Some(n) = &mut self.notice else { return };
+        let Some((a, id)) = &n.about else { return };
+        let now = self
+            .active
+            .get(a)
+            .filter(|r| &r.run_id == id)
+            .map(|r| stage(r.lifecycle));
+        let ended = now.is_none()
+            && (n.seen.is_some() || self.last.get(a).is_some_and(|l| &l.run_id == id));
+        let moved = now.is_some() && n.seen.is_some() && n.seen != now;
+        if ended || moved {
+            self.notice = None;
+        } else if now.is_some() {
+            n.seen = now;
+        }
     }
 
     fn error_info(&mut self, what: &str, e: &ErrorInfo) {
@@ -964,6 +1005,15 @@ impl App {
     }
 
     fn on_select(&mut self) {
+        let sel = self.selected_ref();
+        if self
+            .notice
+            .as_ref()
+            .and_then(|n| n.about.as_ref())
+            .is_some_and(|(a, _)| Some(a) != sel.as_ref())
+        {
+            self.notice = None;
+        }
         if let Some(v) = self.selected_view() {
             let r = v.view_ref.clone();
             if !self.view_panes.contains_key(&r) {
@@ -2244,6 +2294,15 @@ fn rank(
     Some((*best, std::cmp::Reverse(tiers.len())))
 }
 
+/// Lifecycle stages a run notice outlives: a started run stays "started" while it runs.
+fn stage(l: Lifecycle) -> u8 {
+    match l {
+        Lifecycle::Starting | Lifecycle::Running => 0,
+        Lifecycle::Stopping { .. } => 1,
+        Lifecycle::Finished { .. } => 2,
+    }
+}
+
 fn start_word(item: &Item) -> &'static str {
     match item.mode {
         ActionMode::Process => "start",
@@ -2366,6 +2425,49 @@ mod tests {
             search(&mut a, "run"),
             ["dev.typecheck", "dev.check", "dev.test"]
         );
+    }
+
+    fn run(a: &str, id: &RunId, lifecycle: Lifecycle) -> RunSummary {
+        RunSummary {
+            run_id: id.clone(),
+            action_ref: Some(a.parse().unwrap()),
+            lifecycle,
+            reported_health: lyra_protocol::run::ReportedHealth::unknown(),
+            definition_hash: Digest::of_bytes(a.as_bytes()),
+            started_at: Timestamp::now(),
+        }
+    }
+
+    #[test]
+    fn run_notices_go_when_the_run_moves_on() {
+        let mut a = app();
+        add_action(&mut a, "dev.web", "Web", &[], "");
+        add_action(&mut a, "dev.lint", "Lint", &[], "");
+        let web: ActionRef = "dev.web".parse().unwrap();
+        let id: RunId = "r_0000000000004000800000000000000a".parse().unwrap();
+        a.apply_runs(None, vec![run("dev.web", &id, Lifecycle::Starting)]);
+        a.info_run(&web, &id, "started dev.web");
+        // Starting to running keeps the notice.
+        a.apply_runs(None, vec![run("dev.web", &id, Lifecycle::Running)]);
+        assert!(a.notice.is_some());
+        // Another selected item drops it.
+        key(&mut a, KeyCode::Char('j'));
+        assert!(a.notice.is_none());
+        key(&mut a, KeyCode::Char('k'));
+        let stopping = Lifecycle::Stopping {
+            reason: lyra_protocol::run::StopReason::User,
+        };
+        a.apply_runs(None, vec![run("dev.web", &id, stopping)]);
+        a.info_run(&web, &id, "stopping dev.web");
+        assert!(a.notice.is_some());
+        // The run ended.
+        a.apply_runs(None, vec![]);
+        assert!(a.notice.is_none());
+        // Errors stay.
+        a.error("dev.web did not stop");
+        a.apply_runs(None, vec![]);
+        key(&mut a, KeyCode::Char('j'));
+        assert!(a.notice.is_some());
     }
 
     #[test]
