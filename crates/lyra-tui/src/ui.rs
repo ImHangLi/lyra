@@ -133,6 +133,17 @@ fn clip_end(s: &str, max: usize) -> String {
     format!("{}...", slice_cells(s, 0, max - 3))
 }
 
+/// Cuts `s` to `max` cells, marking the cut with one `…`.
+fn ellipsize(s: &str, max: usize) -> String {
+    if cells(s) <= max {
+        return s.to_owned();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    format!("{}…", slice_cells(s, 0, max - 1))
+}
+
 fn draw_header(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     let mut right = match &app.session {
         None => "NO SESSION".to_owned(),
@@ -315,8 +326,9 @@ fn draw_list(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         }
         let sw = cells(&state);
         let marker = if selected { "> " } else { "  " };
-        let title_w = w.saturating_sub(2 + sw + 1);
-        let title = slice_cells(&display(&title), 0, title_w);
+        // A long title ends in an ellipsis and keeps a space before the badge.
+        let title_w = w.saturating_sub(2 + sw + usize::from(sw > 0));
+        let title = ellipsize(&display(&title), title_w);
         let pad = w.saturating_sub(2 + cells(&title) + sw);
         let base = if selected && app.focus == Focus::List {
             Style::default().add_modifier(Modifier::REVERSED)
@@ -1323,7 +1335,17 @@ fn draw_history(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::wrap;
+    use super::{ellipsize, wrap};
+
+    #[test]
+    fn ellipsize_marks_the_cut() {
+        assert_eq!(
+            ellipsize("Tutorial app (dev server)", 15),
+            "Tutorial app (…"
+        );
+        assert_eq!(ellipsize("Lint", 15), "Lint");
+        assert_eq!(ellipsize("Lint", 0), "");
+    }
 
     #[test]
     fn wrap_keeps_words_within_the_width() {
