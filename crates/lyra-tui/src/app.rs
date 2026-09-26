@@ -1244,8 +1244,12 @@ impl App {
                     v.push(bind("Ctrl-U", "clear", Cmd::Escape));
                 }
                 if !f.pending {
+                    // Only a process restarts; a task runs again.
+                    let process = self
+                        .item(&f.action_ref)
+                        .is_some_and(|i| i.mode == ActionMode::Process);
                     let w = match f.intent {
-                        Intent::Restart => "restart",
+                        Intent::Restart if process => "restart",
                         _ => "run",
                     };
                     v.push(bind("Enter", w, Cmd::Open));
@@ -2468,6 +2472,41 @@ mod tests {
         a.apply_runs(None, vec![]);
         key(&mut a, KeyCode::Char('j'));
         assert!(a.notice.is_some());
+    }
+
+    #[test]
+    fn a_task_form_runs_again_and_a_process_form_restarts() {
+        let mut a = app();
+        add_action(&mut a, "dev.test", "Test", &[], "");
+        let r: ActionRef = "dev.test".parse().unwrap();
+        let schema: JsonObject = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": {"only": {"type": "string"}}
+        }))
+        .unwrap();
+        let hash = a.items[0].definition_hash.clone();
+        a.inputs.insert(r.clone(), (hash, Inputs::Form(schema)));
+        a.last.insert(
+            r,
+            LastRun {
+                run_id: "r_0000000000004000800000000000000a".parse().unwrap(),
+                lifecycle: Lifecycle::Finished {
+                    outcome: lyra_protocol::run::Outcome::Succeeded,
+                },
+                exit: None,
+                ended_at: None,
+            },
+        );
+        key(&mut a, KeyCode::Char('r'));
+        let enter = |a: &App| {
+            a.bindings()
+                .into_iter()
+                .find(|b| b.keys == "Enter")
+                .map(|b| b.label)
+        };
+        assert_eq!(enter(&a).as_deref(), Some("run"));
+        a.items[0].mode = ActionMode::Process;
+        assert_eq!(enter(&a).as_deref(), Some("restart"));
     }
 
     #[test]
