@@ -1,0 +1,27 @@
+{
+  "api": 1,
+  "id": "errors",
+  "name": "Errors",
+  "description": "Collect the log lines that contain an error from another running service, so they are in one place.",
+  "tags": ["logs", "errors", "watch"],
+  "entry": {"argv": ["python3", "main.py"]},
+  "actions": [
+    {
+      "id": "watch",
+      "title": "Watch for errors",
+      "description": "Follow the logs of another action's current run and add each line that contains the pattern to the Errors view. Waits and tries again when that action is not running.",
+      "mode": "process",
+      "run": {"kind": "plugin"},
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {"type": "string", "default": "dev.web", "minLength": 3, "maxLength": 97, "description": "The action to follow, as plugin.action."},
+          "pattern": {"type": "string", "default": "error", "minLength": 1, "maxLength": 200, "description": "Case-insensitive text to look for."}
+        },
+        "additionalProperties": false
+      },
+      "effects": ["read-logs"]
+    }
+  ],
+  "views": [{"id": "lines", "title": "Errors", "kind": "log"}]
+}

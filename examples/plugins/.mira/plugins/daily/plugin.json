@@ -1,0 +1,21 @@
+{
+  "api": 1,
+  "id": "daily",
+  "name": "Daily update",
+  "description": "Draft a short daily update from the last day of git commits and the open TODO markers. Reads files and git only; no network.",
+  "tags": ["update", "git", "todo", "daily"],
+  "entry": {"argv": ["python3", "main.py"]},
+  "actions": [
+    {
+      "id": "draft",
+      "title": "Draft daily update",
+      "description": "Write a daily update draft to the Daily update view and save it as a Markdown artifact.",
+      "mode": "task",
+      "run": {"kind": "plugin"},
+      "timeout": {"kind": "after", "ms": 60000},
+      "schedule": {"every_ms": 86400000},
+      "effects": ["read-files"]
+    }
+  ],
+  "views": [{"id": "update", "title": "Daily update", "kind": "text"}]
+}
