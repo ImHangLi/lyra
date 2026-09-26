@@ -382,7 +382,12 @@ impl ViewPane {
     fn row_text(&self, i: usize) -> String {
         match self.data() {
             Some(ViewData::Log { items }) => items.get(i).map_or(String::new(), |x| {
-                display(&format!("{} {}", level_word(x.level), x.text))
+                // Info is the normal case: show only the levels that carry meaning.
+                if x.level == LogLevel::Info {
+                    display(&x.text)
+                } else {
+                    display(&format!("{} {}", level_word(x.level), x.text))
+                }
             }),
             Some(ViewData::Tree { .. }) => self.flat.get(i).map_or(String::new(), |f| {
                 let mark = if !f.children {
