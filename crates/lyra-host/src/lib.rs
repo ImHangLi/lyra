@@ -4,6 +4,7 @@
 
 mod actor;
 mod env;
+mod groups;
 mod logs;
 mod plugin_runner;
 mod pty;

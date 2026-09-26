@@ -572,6 +572,7 @@ pub async fn supervise(
             return;
         }
     };
+    crate::groups::record_soon(&spec.run_id, child.id().unwrap_or(0));
     let _ = events
         .send((spec.run_id.clone(), RunnerEvent::Spawned))
         .await;
@@ -610,6 +611,7 @@ pub async fn supervise(
     batch.finish();
     batch.flush_gap().await;
     remove_temp(&spec.temp_files);
+    crate::groups::forget(&spec.run_id);
     let _ = events
         .send((spec.run_id.clone(), finish(exit, None, cleanup)))
         .await;
