@@ -70,6 +70,8 @@ pub struct ViewPane {
     /// The host returned less than the whole view.
     pub truncated: bool,
     pub row_actions: Vec<ActionId>,
+    /// Set (from describe) for a log view the host derives from another action's log.
+    pub source: Option<mira_protocol::manifest::ViewSourceWire>,
     pub cursor: usize,
     /// Stable ID of the selected row, item, or node.
     sel_id: Option<String>,
@@ -167,6 +169,7 @@ impl ViewPane {
             error: None,
             truncated: false,
             row_actions: Vec::new(),
+            source: None,
             cursor: 0,
             sel_id: None,
             sel_rev: None,

@@ -49,6 +49,31 @@
       "stop_grace_ms": 2000
     },
     {
+      "id": "args",
+      "title": "Templated arguments",
+      "description": "Print the arguments built from the input with argv placeholders; no shell or wrapper.",
+      "mode": "task",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/args.py",
+          "--port={input.port}",
+          "{input.label}",
+          "--verbose={input.verbose}"
+        ]
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "port": {"type": "integer", "default": 8000, "minimum": 1024, "maximum": 65535},
+          "label": {"type": "string", "default": "dev server", "maxLength": 64},
+          "verbose": {"type": "boolean", "default": false}
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "prompt",
       "title": "Interactive prompt",
       "description": "Ask for a name in a real terminal.",

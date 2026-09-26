@@ -88,6 +88,11 @@ impl SchemaDoc {
             .unwrap_or_default()
     }
 
+    /// True when `name` is a top-level property of this schema.
+    pub fn has_property(&self, name: &str) -> bool {
+        self.properties().is_some_and(|p| p.contains_key(name))
+    }
+
     fn properties(&self) -> Option<&Map<String, Value>> {
         self.0.get("properties").and_then(Value::as_object)
     }

@@ -767,7 +767,9 @@ impl App {
             }
             Event::ViewDescribed(r, res) => {
                 if let (Some(p), Ok(d)) = (self.view_panes.get_mut(&r), res) {
-                    p.row_actions = d.view.map(|v| v.row_actions).unwrap_or_default();
+                    let view = d.view;
+                    p.source = view.as_ref().and_then(|v| v.source.clone());
+                    p.row_actions = view.map(|v| v.row_actions).unwrap_or_default();
                 }
             }
             Event::ViewActed(r, action, res) => match res {

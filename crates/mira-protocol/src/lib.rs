@@ -18,6 +18,7 @@ pub mod run;
 pub mod schema_profile;
 pub mod schemas;
 pub mod strict_json;
+pub mod template;
 pub mod time;
 pub mod view;
 pub mod workspace;

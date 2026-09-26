@@ -27,7 +27,7 @@ Strict JSON: unknown fields, duplicate keys, and `null` for optional fields are 
 | Field | Default / rule |
 |---|---|
 | `id`, `title`, `description`, `mode` | required; `mode` is `task` (ends) or `process` (keeps running) |
-| `run` | `{"kind":"command","argv":[...]}` or `{"kind":"plugin"}`; argv is never templated, so input arrives only through `MIRA_INPUT_FILE` |
+| `run` | `{"kind":"command","argv":[...]}` or `{"kind":"plugin"}`; command argv may hold `{input.NAME}` placeholders (see below) |
 | `cwd` | `.` = workspace root; relative to the root |
 | `env_files`, `env` | layered after the caller's env (the CLI's or the TUI's shell, including `PATH`); `MIRA_*` names are reserved |
 | `input_schema` | JSON Schema 2020-12 with an object root; top-level `default`s are filled for CLI and TUI alike; `writeOnly` fields are never echoed |
@@ -41,9 +41,38 @@ Strict JSON: unknown fields, duplicate keys, and `null` for optional fields are 
 
 The child receives `MIRA_WORKSPACE_ROOT`, `MIRA_PLUGIN_DIR`, `MIRA_STATE_DIR`, `MIRA_CACHE_DIR`, `MIRA_ARTIFACT_DIR`, `MIRA_RUN_ID`, `MIRA_INPUT_FILE` (effective input JSON), `MIRA_CONFIG_FILE`. To call Mira from a plugin, run `"$MIRA_BIN"`: it is the running `mira`, and the host also passes its own `MIRA_DATA_HOME` and `MIRA_RUNTIME_DIR` when they are set, so the call reaches the same host.
 
+### Argv placeholders
+
+In a command action's `run.argv`, `{input.NAME}` becomes the effective input value (after schema defaults): a string as it is, a number or boolean in its JSON text form (`8080`, `true`). A placeholder can be a whole argument (`"{input.port}"`) or part of one (`"--port={input.port}"`). No shell is involved, so a value is never split or interpreted.
+
+- NAME must be a top-level property of `input_schema`; validation rejects other names.
+- A missing, `null`, object, or array value fails the run with `SCHEMA_INVALID` before anything starts.
+- Only arguments that contain `{input.` are templated. In them, `{{` and `}}` are literal braces; other arguments (for example `--format={{.Names}}`) pass unchanged.
+- `cwd`, `env`, `cleanup`, and a plugin `entry` are never templated.
+
+Use a wrapper script that reads `MIRA_INPUT_FILE` when arguments need logic (optional flags, lists).
+
 ## View
 
 `{"id","title","kind"}` with kind `text|table|log|tree|json`; `persistence` `last` (kept, bounded by retention) or `session`; tables may add `row_actions: [{"action": "show", "bindings": {"path": "path"}}]` mapping input names to column IDs.
+
+### Derived log view
+
+A log view with `source` shows another action's log lines, filtered by the host; no plugin process runs:
+
+```json
+{
+  "id": "errors",
+  "title": "Web errors",
+  "kind": "log",
+  "source": {"logs": "dev.web", "grep": "error", "stream": "stderr"}
+}
+```
+
+- `logs` (required) is `PLUGIN.ACTION` of any plugin in the workspace. Validation of the whole `.mira` rejects a ref that is not an action in the catalog, and `source` on other kinds.
+- `grep` (optional) keeps lines that contain the text, ignoring case. `stream` (optional) is `stdout` or `stderr`.
+- The view follows the action's current run, or its latest run when none is active. It starts from that run's newest 2000 log lines, keeps at most `view_log_items` (1000 by default), and updates as new lines arrive.
+- Freshness is `current` while the source run is live and `historical` after it ends. Plugins and `mira publish` cannot write it; `persistence` does not apply.
 
 ## `.mira/local.json` (personal, not committed)
 

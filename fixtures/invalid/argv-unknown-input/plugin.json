@@ -1,0 +1,1 @@
+{"api": 1, "id": "bad", "name": "Bad", "description": "Negative fixture.", "actions": [{"id": "a", "title": "A", "description": "A", "mode": "task", "run": {"kind": "command", "argv": ["echo", "--port={input.port}"]}, "input_schema": {"type": "object", "properties": {"host": {"type": "string"}}}}]}

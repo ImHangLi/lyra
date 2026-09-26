@@ -176,6 +176,8 @@ pub fn load_config_dir(mira_dir: &Path, local: Option<&LocalWire>) -> Result<Con
         }
     }
 
+    check_view_sources(&plugins, &mut issues);
+
     let mut storage = StoragePolicy::default();
     let mut ui = workspace.ui.clone();
     if let Some(s) = &workspace.storage_wire {
@@ -201,6 +203,33 @@ pub fn load_config_dir(mira_dir: &Path, local: Option<&LocalWire>) -> Result<Con
         ui,
         set_hash,
     })
+}
+
+/// A derived log view must name an action that exists in the whole loaded catalog.
+fn check_view_sources(plugins: &[LoadedPlugin], issues: &mut Issues) {
+    for lp in plugins {
+        for (i, v) in lp.plugin.views.iter().enumerate() {
+            let Some(src) = &v.source else { continue };
+            let target = plugins.iter().find(|q| q.plugin.id == src.logs.plugin);
+            let message = match target {
+                None => format!(
+                    "source.logs `{}` refers to plugin `{}`, which is not in the workspace",
+                    src.logs, src.logs.plugin
+                ),
+                Some(q) if q.plugin.action(src.logs.action.as_str()).is_some() => continue,
+                Some(q) if q.plugin.view(src.logs.action.as_str()).is_some() => format!(
+                    "source.logs `{}` is a view; it must name an action",
+                    src.logs
+                ),
+                Some(_) => format!("source.logs `{}` names no action in the catalog", src.logs),
+            };
+            let file = display(&lp.dir.as_path().join(PLUGIN_FILE));
+            issues.push(Issue {
+                file: Some(file),
+                ..Issue::schema(format!("/views/{i}/source/logs"), message)
+            });
+        }
+    }
 }
 
 fn peek_plugin_id(dir: &Path) -> Option<PluginId> {
@@ -340,4 +369,100 @@ pub fn validate_draft(path: &Path) -> Result<Draft, Issues> {
         "no workspace.json or plugin.json found",
     )])
     .in_file(&display(path)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Writes a workspace with `dev` (action `web`, view `feed`) and `watch` (one view).
+    fn workspace(watch_view: Value) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("mira-config-test-{}", uuid::Uuid::new_v4()));
+        let write = |rel: &str, v: Value| {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, serde_json::to_vec(&v).unwrap()).unwrap();
+        };
+        write(
+            "workspace.json",
+            json!({"api": 1, "name": "t", "plugins": ["plugins/dev", "plugins/watch"]}),
+        );
+        write(
+            "plugins/dev/plugin.json",
+            json!({"api": 1, "id": "dev", "name": "Dev", "description": "d",
+                "actions": [{"id": "web", "title": "Web", "description": "w", "mode": "process",
+                    "run": {"kind": "command", "argv": ["python3", "web.py"]}}],
+                "views": [{"id": "feed", "title": "Feed", "kind": "log"}]}),
+        );
+        write(
+            "plugins/watch/plugin.json",
+            json!({"api": 1, "id": "watch", "name": "Watch", "description": "w", "views": [watch_view]}),
+        );
+        root
+    }
+
+    fn load(watch_view: Value) -> Result<ConfigSet, Issues> {
+        let root = workspace(watch_view);
+        let out = load_config_dir(&root, None);
+        let _ = std::fs::remove_dir_all(&root);
+        out
+    }
+
+    fn first_issue(r: Result<ConfigSet, Issues>) -> Issue {
+        r.expect_err("expected issues").0.remove(0)
+    }
+
+    #[test]
+    fn derived_log_view_loads() {
+        let set = load(json!({"id": "errors", "title": "Errors", "kind": "log",
+            "source": {"logs": "dev.web", "grep": "Error", "stream": "stderr"}}))
+        .unwrap();
+        let (_, def) = set.view(&"watch.errors".parse().unwrap()).unwrap();
+        let src = def.source.as_ref().unwrap();
+        assert_eq!(src.logs.to_string(), "dev.web");
+        assert!(src.keeps(crate::run::LogStream::Stderr, "an ERROR here"));
+        assert!(!src.keeps(crate::run::LogStream::Stdout, "an error here"));
+        assert!(!src.keeps(crate::run::LogStream::Stderr, "all fine"));
+    }
+
+    #[test]
+    fn derived_source_must_exist_and_be_an_action() {
+        let missing = first_issue(load(json!({"id": "errors", "title": "E", "kind": "log",
+            "source": {"logs": "dev.api"}})));
+        assert_eq!(missing.pointer, "/views/0/source/logs");
+        assert!(missing.message.contains("names no action"));
+        let plugin = first_issue(load(json!({"id": "errors", "title": "E", "kind": "log",
+            "source": {"logs": "nope.web"}})));
+        assert!(plugin.message.contains("not in the workspace"));
+        let view = first_issue(load(json!({"id": "errors", "title": "E", "kind": "log",
+            "source": {"logs": "dev.feed"}})));
+        assert!(view.message.contains("is a view"));
+    }
+
+    #[test]
+    fn derived_source_is_only_for_log_views() {
+        let issue = first_issue(load(json!({"id": "errors", "title": "E", "kind": "table",
+            "source": {"logs": "dev.web"}})));
+        assert_eq!(issue.pointer, "/views/0/source");
+        let empty = first_issue(load(json!({"id": "errors", "title": "E", "kind": "log",
+            "source": {"logs": "dev.web", "grep": ""}})));
+        assert_eq!(empty.pointer, "/views/0/source/grep");
+        let unknown = first_issue(load(json!({"id": "errors", "title": "E", "kind": "log",
+            "source": {"logs": "dev.web", "regex": "x"}})));
+        assert!(unknown.message.contains("unknown field"));
+    }
+
+    #[test]
+    fn argv_placeholders_must_name_input_properties() {
+        let wire: PluginWire = wire_from_value(json!({"api": 1, "id": "p", "name": "P",
+            "description": "d", "actions": [{"id": "serve", "title": "S", "description": "s",
+            "mode": "process", "run": {"kind": "command", "argv": ["serve", "--port={input.port}", "{input.host}"]},
+            "input_schema": {"type": "object", "properties": {"port": {"type": "integer"}}}}]}))
+        .unwrap();
+        let issues = validate_plugin(wire).unwrap_err();
+        assert_eq!(issues.0.len(), 1);
+        assert_eq!(issues.0[0].pointer, "/actions/0/run/argv/2");
+        assert!(issues.0[0].message.contains("{input.host}"));
+    }
 }

@@ -1,0 +1,1 @@
+{"api": 1, "id": "bad", "name": "Bad", "description": "Negative fixture.", "views": [{"id": "t", "title": "T", "kind": "table", "source": {"logs": "bad.a"}}]}
