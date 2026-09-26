@@ -60,7 +60,6 @@ def main():
                            ("warm_catalog_if_revision_cli", ("catalog", "--if-revision", "1"))):
             run(*args)
             out[name] = summary([run(*args)[0] for _ in range(a.samples)])
-        out["warm_setup_scan_cli"] = summary([run("setup")[0] for _ in range(min(a.samples, 20))])
         # Log flood: ~5000 lines/s x ~200 bytes; control latency measured during the flood.
         rounds = []
         for _ in range(a.flood_rounds):

@@ -1,0 +1,78 @@
+# Set up Mira (for agents)
+
+You are setting up Mira for the user. Do the five steps in order. Mira installs nothing into a project on its own: you choose each location, and skills and notes never go into a repository.
+
+## 1. Install Mira
+
+Skip this step if `mira --version` works.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ImHangLi/mira/main/scripts/install.sh | sh
+```
+
+If `mira` is still not found, use the `export PATH=...` line that the installer printed.
+
+## 2. Export the skills
+
+Export the skills to the user's own skills folder. Never export them into a project folder.
+
+| The user's agent | Command |
+|---|---|
+| Claude Code | `mira skills export ~/.claude/skills` |
+| Codex and other agents (Codex reads `~/.agents/skills`) | `mira skills export ~/.agents/skills` |
+| Skills managed with Skillshare (`~/.config/skillshare/skills` exists) | `mira skills export ~/.config/skillshare/skills`, then `skillshare sync` |
+
+If Skillshare is in use, use only the Skillshare row. Ask the user only if the correct folder is not clear. The command writes `mira/` and `mira-extend/` in that folder. It does not overwrite a file that the user changed: it writes the new version next to it as `*.mira-new`. Run the same command again after you upgrade Mira; `mira doctor` warns when the exported skills are older than Mira.
+
+## 3. Add a global note
+
+Write a file `MIRA.md` next to the user's global instructions, and add one reference line to them. Do not add the line if it is already there.
+
+| Agent | Note file | Reference line | Added to |
+|---|---|---|---|
+| Claude Code | `~/.claude/MIRA.md` | `@MIRA.md` | `~/.claude/CLAUDE.md` |
+| Codex | `~/.codex/MIRA.md` | `Read ~/.codex/MIRA.md.` | `~/.codex/AGENTS.md` |
+
+Write this exact text into `MIRA.md`:
+
+```markdown
+# Mira
+
+Mira is installed. When a repository has a `.mira/` folder, or the user mentions Mira,
+use the mira skill: run and read project tools with the `mira` CLI instead of starting
+processes yourself. To add a tool, use the mira-extend skill.
+```
+
+For Claude Code, for example:
+
+```sh
+f=~/.claude/CLAUDE.md
+grep -qxF '@MIRA.md' "$f" 2>/dev/null || printf '\n@MIRA.md\n' >> "$f"
+```
+
+## 4. Set up the repository
+
+Follow the setup reference of the mira skill (`mira/references/setup.md` in the folder from step 2). In short:
+
+1. Read the README, docs, scripts, Makefile, Compose files, and CI config. Never run project code to find out what it does.
+2. Write `.mira/workspace.json` and the plugins in `.mira/plugins/<id>/plugin.json`.
+3. Run `mira validate .mira`, then `mira reload` (or `mira apply` when the project already has a catalog).
+4. Run `mira doctor`, then verify one tool, for example `mira run dev.check`.
+
+Ask the user one question: share `.mira/` with the team, or keep it personal?
+
+- **Share:** commit `.mira/workspace.json` and `.mira/plugins/`. Add `.mira/local.json` and `.mira/.drafts/` to `.gitignore`.
+- **Personal:** add `.mira/` to `.git/info/exclude` (find it with `git rev-parse --git-common-dir`). This applies to all worktrees of the repository and changes no tracked file.
+
+## 5. Report
+
+Tell the user what you installed, where, and how to undo each item:
+
+| Item | Where | Undo |
+|---|---|---|
+| Mira | the path the installer printed | the `Uninstall:` line the installer printed |
+| Skills | the folder from step 2 (`mira/`, `mira-extend/`) | delete those two folders (run `skillshare sync` if you used Skillshare) |
+| Global note | `MIRA.md` and the reference line from step 3 | delete the file and the line |
+| Plugins | `.mira/` in the repository | delete `.mira/`, and the line in `.git/info/exclude` if you added it |
+
+Also list the tools you created, what you verified, what you did not verify, and anything that is still running. Tell the user to run `mira` to open the TUI.

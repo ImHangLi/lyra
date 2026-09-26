@@ -111,7 +111,11 @@ fn apply_plugin(
                     ErrorCode::NOT_SETUP,
                     "this project has no .mira/workspace.json",
                 )
-                .with_next_action(&["mira", "setup", "--json"], "Set up Mira here first."));
+                .with_next_action(
+                    &["mira", "validate", ".mira"],
+                    "Write .mira/workspace.json and a plugin in .mira/plugins/ (mira skill, \
+                     setup reference), validate them, then run `mira reload`.",
+                ));
             }
             Ok::<_, ErrorInfo>((plugin, expected, paths, parse_key(request_key)?))
         })();

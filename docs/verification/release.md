@@ -2,6 +2,8 @@
 
 `scripts/release/package.sh` builds `mira-<version>-<target>.tar.gz` and a `.sha256` file for each target into `dist/`. `scripts/install.sh` installs one archive into `~/.mira/bin`: it needs no sudo and no Node. Recorded on 2026-09-26, macOS 27.2 on Apple Silicon.
 
+`mira setup` and `mira skills install` were removed after v0.7.0 (see [docs/agents.md](../agents.md) and `mira skills export DIR`). The rows below record the earlier releases.
+
 | Check | Result | Evidence |
 |---|---|---|
 | Build arm64 and x86_64 archives | pass | `aarch64-apple-darwin` (Mach-O arm64, 6.1 MB) and `x86_64-apple-darwin` (Mach-O x86_64, 6.6 MB), each with its checksum file. v0.1.0 ships the arm64 archive only |

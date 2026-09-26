@@ -1,17 +1,21 @@
-//! `mira skills install`: copy the bundled skills into the workspace without overwriting
-//! files the user changed (§17.2). Each installed skill keeps a `.mira-install.json` record
-//! with the source version and the content hash of every file Mira wrote.
+//! `mira skills export DIR`: write the bundled skills of this Mira version to `DIR/mira/`
+//! and `DIR/mira-extend/` without overwriting files the user changed (§17.2). Each skill
+//! keeps a `.mira-install.json` record with the source version and the content hash of
+//! every file Mira wrote. Mira never picks DIR itself and refuses a DIR inside the current
+//! Git work tree: skills belong to the user, not to a repository.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use mira_protocol::ids::Digest;
-use mira_protocol::reply::{PublicReply, ReplyContext, ReplyMeta, WorkspaceRef};
+use mira_protocol::reply::{PublicReply, ReplyContext, ReplyMeta};
+use mira_protocol::workspace::git_worktree_root;
 use mira_protocol::{ErrorCode, ErrorInfo};
 use serde::{Deserialize, Serialize};
 
 use super::ctx::Ctx;
+use crate::output::invalid_argument;
 
 macro_rules! bundled {
     ($($skill:literal => [$($file:literal),* $(,)?]),* $(,)?) => {
@@ -35,13 +39,7 @@ bundled! {
 }
 
 const RECORD: &str = ".mira-install.json";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum AgentKind {
-    Claude,
-    Codex,
-    Generic,
-}
+const SKILLS: [&str; 2] = ["mira", "mira-extend"];
 
 #[derive(Serialize, Deserialize, Default)]
 struct InstallRecord {
@@ -79,8 +77,7 @@ fn install_skill(dir: &Path, skill: &str, report: &mut Report) -> Result<(), Str
         source: format!("mira {}", mira_protocol::VERSION),
         files: BTreeMap::new(),
     };
-    for (s, rel, content) in BUNDLED.iter().filter(|(s, _, _)| *s == skill) {
-        let _ = s;
+    for (_, rel, content) in BUNDLED.iter().filter(|(s, _, _)| *s == skill) {
         let target = dir.join(rel);
         let shown = target.to_string_lossy().into_owned();
         let new_hash = hash(content.as_bytes());
@@ -124,58 +121,89 @@ fn install_skill(dir: &Path, skill: &str, report: &mut Report) -> Result<(), Str
     std::fs::write(&record_path, bytes).map_err(|e| format!("{}: {e}", record_path.display()))
 }
 
-/// Installs the bundled skills for `agent` under `root` (shared by `mira setup`).
-pub fn install_into(root: &Path, agent: AgentKind) -> Result<Report, String> {
-    let mut bases = vec![root.join(".agents/skills")];
-    if agent == AgentKind::Claude {
-        bases.push(root.join(".claude/skills"));
-    }
-    let mut report = Report::default();
-    for base in &bases {
-        for skill in ["mira", "mira-extend"] {
-            let dir = base.join(skill);
-            report.targets.push(dir.to_string_lossy().into_owned());
-            install_skill(&dir, skill, &mut report)?;
+/// Resolves `dir` against `cwd` and through symlinks of its nearest existing ancestor.
+fn resolve(cwd: &Path, dir: &Path) -> PathBuf {
+    let abs = cwd.join(dir);
+    let mut rest = Vec::new();
+    let mut base = abs.as_path();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(base) {
+            return rest.iter().rev().fold(real, |p, c| p.join(c));
+        }
+        match (base.parent(), base.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_owned());
+                base = parent;
+            }
+            _ => return abs,
         }
     }
-    Ok(report)
 }
 
-pub fn install(ctx: &Ctx, agent: AgentKind) -> ExitCode {
-    let selected = match ctx.select() {
-        Ok(s) => s,
-        Err(e) => return ctx.fail(ReplyContext::default(), e),
-    };
-    let root = selected.root.as_path().to_path_buf();
-    let rctx = ReplyContext {
-        workspace: Some(WorkspaceRef {
-            id: selected.id.clone(),
-            root: selected.root.clone(),
-        }),
-        ..ReplyContext::default()
-    };
-    let report = match install_into(&root, agent) {
-        Ok(r) => r,
+/// The record of one exported skill: the Mira version that wrote it, if readable.
+pub fn recorded_version(skill_dir: &Path) -> Option<String> {
+    let bytes = std::fs::read(skill_dir.join(RECORD)).ok()?;
+    let record: InstallRecord = serde_json::from_slice(&bytes).ok()?;
+    record.source.strip_prefix("mira ").map(str::to_owned)
+}
+
+pub fn export(ctx: &Ctx, dir: &Path) -> ExitCode {
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c,
         Err(e) => {
             return ctx.fail(
-                rctx,
+                ReplyContext::default(),
                 ErrorInfo::new(
-                    ErrorCode::STORAGE_UNAVAILABLE,
-                    format!("cannot install skills: {e}"),
+                    ErrorCode::NOT_FOUND,
+                    format!("cannot read the current directory: {e}"),
                 ),
             );
         }
     };
-    let reply = PublicReply::success(rctx, report, ReplyMeta::default());
+    let target = resolve(&cwd, dir);
+    if let Some(repo) = git_worktree_root(&cwd).map(|r| resolve(&cwd, &r))
+        && target.starts_with(&repo)
+    {
+        return ctx.fail(
+            ReplyContext::default(),
+            invalid_argument(format!(
+                "{} is inside the Git work tree {}; export the skills to your own skills \
+                 folder (for example ~/.claude/skills or ~/.agents/skills), not into a project",
+                target.display(),
+                repo.display()
+            )),
+        );
+    }
+    let mut report = Report::default();
+    for skill in SKILLS {
+        let skill_dir = target.join(skill);
+        report
+            .targets
+            .push(skill_dir.to_string_lossy().into_owned());
+        if let Err(e) = install_skill(&skill_dir, skill, &mut report) {
+            return ctx.fail(
+                ReplyContext::default(),
+                ErrorInfo::new(
+                    ErrorCode::STORAGE_UNAVAILABLE,
+                    format!("cannot export skills: {e}"),
+                ),
+            );
+        }
+    }
+    let reply = PublicReply::success(ReplyContext::default(), report, ReplyMeta::default());
     ctx.emit(&reply, |r| {
         let mut s = format!(
-            "skills: {} written, {} updated, {} unchanged, {} conflict(s)\n  {}",
+            "mira {} skills: {} written, {} updated, {} unchanged, {} kept\n  {}",
+            mira_protocol::VERSION,
             r.written.len(),
             r.updated.len(),
             r.unchanged.len(),
             r.conflicts.len(),
             r.targets.join("\n  ")
         );
+        for f in r.written.iter().chain(&r.updated) {
+            s.push_str(&format!("\n  wrote {f}"));
+        }
         for c in &r.conflicts {
             s.push_str(&format!(
                 "\n  kept your edit: {} (new version: {})",
