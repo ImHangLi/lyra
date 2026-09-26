@@ -1,0 +1,8 @@
+{
+  "name": "@fixture/web",
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "vite --port 5173",
+    "test": "vitest run"
+  }
+}

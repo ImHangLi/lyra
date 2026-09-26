@@ -157,6 +157,12 @@ enum Command {
         #[arg(long)]
         root: PathBuf,
     },
+    /// Report bounded, read-only project facts for the setup skill; never runs project code.
+    Setup {
+        /// Rescan even when the discovery cache is still valid.
+        #[arg(long)]
+        refresh: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -256,6 +262,9 @@ fn main() -> ExitCode {
         },
         Some(Command::Schema { name }) => commands::contract::schema(mode, &name),
         Some(Command::Validate { path }) => commands::contract::validate(mode, &path),
+        Some(Command::Setup { refresh }) => {
+            commands::setup::run(mode, ctx.project.as_deref(), refresh)
+        }
         None => {
             use clap::CommandFactory;
             let _ = Cli::command().print_help();
