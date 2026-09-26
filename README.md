@@ -43,3 +43,4 @@ To write a plugin yourself, add a small `plugin.json` under `.mira/plugins/` ([f
 | Every new session relearns how to run the repo. | The commands are saved as plugins in the repo. |
 | The view you need doesn't exist. | Build it as a plugin, or ask your agent to. |
 | Every morning, the same Slack updates, one prompt at a time. | Your agent saves the routine. Tomorrow, press `Enter`. |
+| You open Activity Monitor, or install another app, to watch CPU and memory. | Ask your agent for a monitor plugin, with the bars and settings you want. |
