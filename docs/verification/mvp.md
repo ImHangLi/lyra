@@ -1,11 +1,13 @@
 # MVP verification index (LYR-18)
 
-The final candidate is the tip of the PR stack. The stack runs #20 → #36, with this PR on top. Every row below points to the PR whose description records the live evidence. Results use four labels: **pass**, **fail**, **blocked**, and **not-run**. A "pass" with a note means the main case passed and the note names a part that was not run.
+The stack (#20 → #39, then #41) was merged into `main` as GitHub stack #40 at `039c0c3`, and `v0.1.0` was tagged on that commit. Every row below points to the PR whose description records the live evidence. Results use four labels: **pass**, **fail**, **blocked**, and **not-run**. A "pass" with a note means the main case passed and the note names a part that was not run.
 
 **Final regression** on candidate `74e99d0`, macOS 27.2 arm64:
 - `cargo fmt --check`, `cargo clippy --workspace --all-targets --locked -D warnings`, `cargo build --locked`, and `scripts/check-contract.sh` all pass.
 - One end-to-end CLI pass on the playground succeeded. It covered catalog, run, a failing run, up, start, logs, exec, a structured scan, view, publish, schedule, PTY input, apply, gc plan, storage status, doctor, the TUI first frame, and down.
 - Nothing was left running, and there were no uncommitted files.
+
+**After the merge**, on `main` at `039c0c3`: CI passed (format, clippy, build, contract, and a live smoke). The same checks and a CLI pass on the playground passed locally, and the released binary passed the install and first-use checks in [release.md](release.md).
 
 Performance numbers are in [performance.md](performance.md). Real-project records are in [onboarding.md](onboarding.md), and install checks are in [release.md](release.md).
 
@@ -66,12 +68,10 @@ Performance numbers are in [performance.md](performance.md). Real-project record
 
 ## Remaining limits
 
-- **Blocked:** installing from a real GitHub release. No release was published without the owner's approval.
 - **Not run:**
-  - a real OS sleep and wake;
-  - Terminal.app and iTerm2 by hand;
-  - launching the x86_64 build (there was no Intel Mac and no Rosetta);
-  - measurements on M2 hardware;
-  - Outline startup (its dependencies were not installed);
-  - Codex or generic agents.
-- **No new tests:** no permanent automated tests were added, because the owner did not authorize them. The evidence is the recorded live runs and `scripts/check-contract.sh`.
+  - A real OS sleep and wake. It needs the machine to sleep and a physical wake. The TTL logic was checked with shortened TTLs (LIFE-02).
+  - Terminal.app and iTerm2 by hand. The agent could not drive or capture a real window: Terminal automation waits for an Automation permission prompt, `screencapture` has no Screen Recording permission, and iTerm2 is not installed. The TUI was checked in a real PTY with an xterm emulator instead.
+  - Outline startup. The Docker engine on the verification machine returned HTTP 500 for every API call, and a full Outline install needs several GB of dependencies.
+  - Agent setup with Codex or a generic agent. `skills install --agent codex` and `--agent generic` write the skills to `.agents/skills`, but a headless agent run was not permitted in this environment. Setup and reuse were verified with Claude only.
+- **Out of scope:** the x86_64 build and M2 hardware. Every target machine is Apple Silicon M3 or later.
+- **No new tests:** no permanent automated tests were added, because the owner did not authorize them. The evidence is the recorded live runs, CI, and `scripts/check-contract.sh`.
