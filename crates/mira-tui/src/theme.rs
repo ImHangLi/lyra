@@ -416,13 +416,14 @@ pub const STOPPED: Mark = Mark::new("■", "stopped", None);
 static ASCII: AtomicBool = AtomicBool::new(false);
 static UTF8: AtomicBool = AtomicBool::new(true);
 
-/// Whether the locale (`LC_ALL`, then `LC_CTYPE`, then `LANG`) names UTF-8. No locale at
-/// all is the C locale, which is not UTF-8.
+/// Whether the locale (`LC_ALL`, then `LC_CTYPE`, then `LANG`) names UTF-8. A set locale
+/// that is not UTF-8 (for example `C` or `POSIX`) means no. No locale variable at all means
+/// yes: macOS terminals launched from the Dock often set none, and they are UTF-8.
 pub fn locale_is_utf8(get: impl Fn(&str) -> Option<String>) -> bool {
     ["LC_ALL", "LC_CTYPE", "LANG"]
         .iter()
         .find_map(|k| get(k).filter(|v| !v.is_empty()))
-        .is_some_and(|v| {
+        .is_none_or(|v| {
             let v = v.to_ascii_lowercase();
             v.contains("utf-8") || v.contains("utf8")
         })
@@ -481,6 +482,25 @@ pub fn ascii_cell(symbol: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_missing_locale_counts_as_utf8_but_c_does_not() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| (*v).to_owned())
+            }
+        };
+        assert!(locale_is_utf8(env(&[])));
+        assert!(locale_is_utf8(env(&[("LANG", "en_AU.UTF-8")])));
+        assert!(!locale_is_utf8(env(&[("LC_ALL", "C")])));
+        assert!(!locale_is_utf8(env(&[
+            ("LC_ALL", "POSIX"),
+            ("LANG", "en_AU.UTF-8")
+        ])));
+    }
+
     use super::{Background, Tone, contrast, index_rgb};
 
     const DARK_BGS: [(u8, u8, u8); 2] = [(0x1E, 0x1E, 0x1E), (0, 0, 0)];
