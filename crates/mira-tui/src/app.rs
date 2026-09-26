@@ -10,7 +10,7 @@ use mira_protocol::error::ErrorInfo;
 use mira_protocol::ids::{ActionId, ActionRef, Digest, ItemRef, RunId, SessionId, ViewRef};
 use mira_protocol::ipc::*;
 use mira_protocol::manifest::{ActionMode, JsonObject, ViewKind};
-use mira_protocol::run::{ExitInfo, Lifecycle, RunRecord, RunResult, RunSummary};
+use mira_protocol::run::{CleanupState, ExitInfo, Lifecycle, RunRecord, RunResult, RunSummary};
 use mira_protocol::time::Timestamp;
 use serde_json::{Map, Value};
 use tokio::sync::mpsc::UnboundedSender;
@@ -218,6 +218,8 @@ pub struct LastRun {
     pub ended_at: Option<Timestamp>,
     /// The structured result of the run, once its final record is read.
     pub result: Option<RunResult>,
+    /// The cleanup state, once the final record is read.
+    pub cleanup: Option<CleanupState>,
 }
 
 pub struct Notice {
@@ -470,6 +472,7 @@ impl App {
                     started_at: Some(r.started_at),
                     ended_at: None,
                     result: None,
+                    cleanup: None,
                 },
             );
             let _ = self.io.read.send(Read::RunGet(r.run_id.clone()));
@@ -860,6 +863,7 @@ impl App {
                 started_at: Some(rec.started_at),
                 ended_at: rec.ended_at,
                 result: rec.result,
+                cleanup: Some(rec.cleanup),
             },
         );
     }
@@ -2718,6 +2722,7 @@ mod tests {
                 started_at: None,
                 ended_at: None,
                 result: None,
+                cleanup: None,
             },
         );
         key(&mut a, KeyCode::Char('r'));
