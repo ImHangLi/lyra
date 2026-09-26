@@ -23,6 +23,13 @@ It is for everyone who runs things: frontend and backend, TypeScript, Python, an
 - **Customize everything.** Every tool is a plugin. Build your own, or let your agent do it.
 - **Your agent sees what you see.** Same runs, same logs.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/mira-demo-dark.gif">
+    <img src=".github/assets/mira-demo-light.gif" alt="Mira in a terminal: a web server and a queue worker start, the tests pass, a live view shows only the web server's errors, a system monitor plugin draws CPU, memory, and disk, and a one-off run from an agent appears on its own." width="100%">
+  </picture>
+</p>
+
 ## Getting started
 
 ```sh
