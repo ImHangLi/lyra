@@ -25,6 +25,8 @@ use crate::views::ViewPane;
 
 const MAX_PANES: usize = 8;
 const NOTICE_SECS: u64 = 8;
+/// The header's git branch is read again at most this often (or on a focus change).
+const BRANCH_SECS: u64 = 3;
 
 pub struct Item {
     pub action_ref: ActionRef,
@@ -87,6 +89,13 @@ pub enum Modal {
         choices: Vec<ActionId>,
         index: usize,
     },
+    /// The newest runs of one action; `runs` is `None` while the host answers.
+    History {
+        action_ref: ActionRef,
+        runs: Option<Vec<RunRecord>>,
+        error: Option<String>,
+        index: usize,
+    },
     Help,
 }
 
@@ -131,6 +140,8 @@ pub enum Cmd {
     Schedule,
     Mouse,
     CopyAll,
+    /// Open the run history of the selected action.
+    History,
 }
 
 pub struct Binding {
@@ -190,6 +201,11 @@ pub struct Io {
 
 pub struct App {
     pub root: String,
+    /// The workspace's git branch (or short commit); `None` outside a git repository.
+    pub branch: Option<String>,
+    branch_at: Instant,
+    /// Actions whose log pane shows an older run chosen in the history list.
+    pub viewing: HashMap<ActionRef, RunRecord>,
     pub offset: time::UtcOffset,
     pub items: Vec<Item>,
     pub views: Vec<ViewItem>,
@@ -240,7 +256,11 @@ pub struct App {
 
 impl App {
     pub fn new(root: String, offset: time::UtcOffset, io: Io) -> Self {
+        let branch = crate::git::head_label(std::path::Path::new(&root));
         Self {
+            branch,
+            branch_at: Instant::now(),
+            viewing: HashMap::new(),
             root,
             offset,
             items: Vec::new(),
@@ -340,6 +360,10 @@ impl App {
         for r in runs {
             match r.action_ref.clone() {
                 Some(a) => {
+                    // A new run of this action replaces a historical run in its pane.
+                    if old.get(&a).is_none_or(|o| o.run_id != r.run_id) {
+                        self.viewing.remove(&a);
+                    }
                     self.active.insert(a, r);
                 }
                 None => self.adhoc_runs += 1,
@@ -415,7 +439,16 @@ impl App {
         let _ = self.io.read.send(Read::View(view_ref.clone()));
     }
 
+    /// Reads the git branch again when it is older than [`BRANCH_SECS`] or `force` is set.
+    fn refresh_branch(&mut self, force: bool) {
+        if force || self.branch_at.elapsed().as_secs() >= BRANCH_SECS {
+            self.branch_at = Instant::now();
+            self.branch = crate::git::head_label(std::path::Path::new(&self.root));
+        }
+    }
+
     pub fn handle(&mut self, ev: Event) {
+        self.refresh_branch(false);
         match ev {
             Event::Input(crossterm::event::Event::Key(k)) => self.key(k),
             Event::Input(crossterm::event::Event::Paste(t)) => {
@@ -459,6 +492,7 @@ impl App {
                             format!("started {a} ({})", acc.run_id)
                         };
                         self.info(what);
+                        self.viewing.remove(&a);
                         if let Some(p) = self.panes.get_mut(&a)
                             && p.run_id.as_ref() != Some(&acc.run_id)
                         {
@@ -547,6 +581,30 @@ impl App {
                 }
             }
             Event::Recent(Err(_)) => {}
+            Event::History(a, res) => {
+                if let Modal::History {
+                    action_ref,
+                    runs,
+                    error,
+                    index,
+                } = &mut self.modal
+                    && *action_ref == a
+                {
+                    match res {
+                        Ok(list) => {
+                            // Keep the choice on the run whose logs the pane shows.
+                            let shown = self.panes.get(&a).and_then(|p| p.run_id.clone());
+                            *index = list
+                                .runs
+                                .iter()
+                                .position(|r| Some(&r.run_id) == shown.as_ref())
+                                .unwrap_or(0);
+                            *runs = Some(list.runs);
+                        }
+                        Err(e) => *error = Some(format!("[{}] {}", e.code, e.message)),
+                    }
+                }
+            }
             Event::Catalog(Ok(list)) => self.set_catalog(list),
             Event::Catalog(Err(e)) => self.catalog_error = Some(e),
             Event::CatalogChanged => {
@@ -739,6 +797,7 @@ impl App {
     }
 
     pub fn tick(&mut self) {
+        self.refresh_branch(false);
         if self
             .notice
             .as_ref()
@@ -891,12 +950,14 @@ impl App {
         self.sync_pane(&a);
     }
 
-    /// Makes the action's panel show its current (or latest) run.
+    /// Makes the action's panel show the run chosen in the history list, else its current
+    /// (or latest) run.
     fn sync_pane(&mut self, a: &ActionRef) {
         let want = self
-            .active
+            .viewing
             .get(a)
             .map(|r| r.run_id.clone())
+            .or_else(|| self.active.get(a).map(|r| r.run_id.clone()))
             .or_else(|| self.last.get(a).map(|l| l.run_id.clone()));
         self.pane_order.retain(|x| x != a);
         self.pane_order.push_back(a.clone());
@@ -1125,6 +1186,14 @@ impl App {
                 v.push(bind("Esc", "cancel", Cmd::Escape));
                 return v;
             }
+            Modal::History { runs, .. } => {
+                if runs.as_ref().is_some_and(|r| !r.is_empty()) {
+                    v.push(bind("j/k", "choose", Cmd::Down));
+                    v.push(bind("Enter", "open logs", Cmd::Open));
+                }
+                v.push(bind("Esc", "close", Cmd::Escape));
+                return v;
+            }
             Modal::Help => {
                 v.push(bind("Esc/?", "close help", Cmd::Escape));
                 return v;
@@ -1162,6 +1231,13 @@ impl App {
                     };
                     v.push(bind("G/End", follow, Cmd::Bottom));
                 }
+                if pane.is_none_or(|p| p.anchor.is_none())
+                    && self
+                        .selected_ref()
+                        .is_some_and(|a| self.viewing.contains_key(&a))
+                {
+                    v.push(bind("Esc", "latest run", Cmd::Escape));
+                }
             }
         }
         if let Some(item) = self.selected_item() {
@@ -1198,6 +1274,9 @@ impl App {
                     "rerun"
                 };
                 v.push(bind("r", w, Cmd::Restart));
+            }
+            if self.has_history(&item.action_ref) {
+                v.push(bind("H", "history", Cmd::History));
             }
             if self.has_schedule(&item.action_ref)
                 && self.control_lost.is_none()
@@ -1363,6 +1442,28 @@ impl App {
         }
         self.global_bindings(&mut v);
         v
+    }
+
+    /// The action has at least one run the history list can show.
+    fn has_history(&self, a: &ActionRef) -> bool {
+        self.active.contains_key(a) || self.last.contains_key(a) || self.viewing.contains_key(a)
+    }
+
+    /// Shows `rec`'s logs in the action's pane. The newest run clears the historical choice,
+    /// so the pane follows new runs again.
+    fn open_history_run(&mut self, a: ActionRef, rec: RunRecord) {
+        let latest = self
+            .active
+            .get(&a)
+            .map(|r| &r.run_id)
+            .or_else(|| self.last.get(&a).map(|l| &l.run_id));
+        if latest == Some(&rec.run_id) {
+            self.viewing.remove(&a);
+        } else {
+            self.viewing.insert(a.clone(), rec);
+        }
+        self.sync_pane(&a);
+        self.focus = Focus::Logs;
     }
 
     /// The selected item's active PTY run, if it can be attached.
@@ -1598,6 +1699,36 @@ impl App {
                 }
                 return;
             }
+            Modal::History { .. } => {
+                let Modal::History { runs, index, .. } = &mut self.modal else {
+                    return;
+                };
+                let n = runs.as_ref().map_or(0, Vec::len);
+                match k.code {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('H') => {
+                        self.modal = Modal::None
+                    }
+                    KeyCode::Char('c') if ctrl => self.modal = Modal::None,
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        *index = (*index + 1).min(n.saturating_sub(1))
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => *index = index.saturating_sub(1),
+                    KeyCode::Enter if !repeat && n > 0 => {
+                        if let Modal::History {
+                            action_ref,
+                            runs: Some(runs),
+                            index,
+                            ..
+                        } = std::mem::replace(&mut self.modal, Modal::None)
+                            && let Some(rec) = runs.into_iter().nth(index)
+                        {
+                            self.open_history_run(action_ref, rec);
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
             Modal::Help => {
                 if matches!(
                     k.code,
@@ -1642,6 +1773,7 @@ impl App {
             (KeyCode::Char('t'), _) => Cmd::Schedule,
             (KeyCode::Char('m'), _) => Cmd::Mouse,
             (KeyCode::Char('Y'), _) => Cmd::CopyAll,
+            (KeyCode::Char('H'), _) => Cmd::History,
             _ => return,
         };
         let navigation = matches!(
@@ -1734,6 +1866,17 @@ impl App {
                 }
             }
             Cmd::CopyAll => {}
+            Cmd::History => {
+                if let Some(a) = self.selected_ref() {
+                    self.modal = Modal::History {
+                        action_ref: a.clone(),
+                        runs: None,
+                        error: None,
+                        index: 0,
+                    };
+                    let _ = self.io.read.send(Read::History(a));
+                }
+            }
             Cmd::Up | Cmd::Down | Cmd::PageUp | Cmd::PageDown | Cmd::Top | Cmd::Bottom => {
                 self.navigate(cmd)
             }
@@ -1766,7 +1909,8 @@ impl App {
                 self.focus = match self.focus {
                     Focus::List => Focus::Logs,
                     Focus::Logs => Focus::List,
-                }
+                };
+                self.refresh_branch(true);
             }
             Cmd::Search => {
                 self.modal = Modal::Search {
@@ -1819,8 +1963,16 @@ impl App {
             }
             Cmd::Escape => {
                 if self.focus == Focus::Logs {
-                    if let Some(p) = self.selected_pane_mut() {
+                    let Some(a) = self.selected_ref() else {
+                        return;
+                    };
+                    if let Some(p) = self.panes.get_mut(&a)
+                        && p.anchor.is_some()
+                    {
                         p.anchor = None;
+                    } else if self.viewing.remove(&a).is_some() {
+                        self.sync_pane(&a);
+                        self.info(format!("showing the latest run of {a}"));
                     }
                 } else {
                     self.filter.clear();
