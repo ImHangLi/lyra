@@ -27,10 +27,11 @@ It is for everyone who runs things: frontend and backend, TypeScript, Python, an
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ImHangLi/mira/main/scripts/install.sh | sh
-mira setup
 ```
 
-`mira setup` prints a prompt for your agent. Your agent turns the repo's commands into plugins. Then run `mira`.
+Then ask your agent to set up Mira for your repo.
+
+*Are you an agent? [Start here.](docs/agents.md)*
 
 To write a plugin yourself, add a small `plugin.json` under `.mira/plugins/` ([format](skills/mira-extend/references/manifest.md)) and run `mira reload`.
 

@@ -92,5 +92,5 @@ case ":$PATH:" in
     fi
     ;;
 esac
-echo "Next: in your project, run 'mira setup'. It prepares your coding agent and prints the one command to run."
+echo "Next: ask your agent to set up Mira. Agents start here: https://github.com/ImHangLi/mira/blob/main/docs/agents.md"
 echo "Uninstall: rm \"$dir/mira\" \"$marker\", and remove the Mira line from your shell profile (project .mira files and workspace data are kept)."

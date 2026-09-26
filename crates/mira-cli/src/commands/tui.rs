@@ -48,14 +48,13 @@ fn setup_screen(root: &str, e: &ErrorInfo) -> String {
         "Mira is not set up in {root}
 {message}.
 
-Set it up in one step. Mira never guesses commands; your coding agent writes the tools:
+Mira never guesses commands. Ask your coding agent to set up Mira for this repo;
+agents start here:
 
-  mira setup
+  https://github.com/ImHangLi/mira/blob/main/docs/agents.md
 
-It installs the Mira skills for your agent and prints the one command to run
-(for example `claude '...'`). When the agent is done, run `mira` again.
-
-Agents: run `mira setup --json`, then follow the mira skill; see `mira --help`.
+Or write a plugin yourself: add .mira/workspace.json and .mira/plugins/<id>/plugin.json
+(see `mira schema plugin`), run `mira validate .mira` and `mira reload`, then `mira` again.
 ",
         message = e.message
     )
