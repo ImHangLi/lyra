@@ -225,6 +225,12 @@ impl Actor {
                 i.to_error_info().message
             ));
         }
+        crate::groups::init(paths.state_dir.join("process-groups"));
+        for (run, pid) in crate::groups::reap_leftovers() {
+            diag(format!(
+                "stopped process group {pid} that run {run} left running when the previous host stopped"
+            ));
+        }
         let mut storage_warnings = Vec::new();
         let storage = match Storage::open(&paths) {
             Ok((s, report)) => {
@@ -396,6 +402,8 @@ impl Actor {
                 _ = tokio::time::sleep(Duration::from_millis(50)) => {}
             }
         }
+        // Whatever did not stop in time gets SIGKILL, so no child outlives the host.
+        crate::groups::kill_remaining(self.runs.keys());
     }
 
     fn update_idle(&mut self) {
