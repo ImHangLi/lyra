@@ -27,6 +27,9 @@ const MAX_PANES: usize = 8;
 const NOTICE_SECS: u64 = 8;
 /// The header's git branch is read again at most this often (or on a focus change).
 const BRANCH_SECS: u64 = 3;
+/// Open views whose metadata can still change (a save in progress, or a producing run
+/// that ended) are read again at most this often.
+const VIEW_POLL_MS: u128 = 1000;
 
 pub struct Item {
     pub action_ref: ActionRef,
@@ -204,6 +207,7 @@ pub struct App {
     /// The workspace's git branch (or short commit); `None` outside a git repository.
     pub branch: Option<String>,
     branch_at: Instant,
+    view_poll_at: Instant,
     /// Actions whose log pane shows an older run chosen in the history list.
     pub viewing: HashMap<ActionRef, RunRecord>,
     pub offset: time::UtcOffset,
@@ -260,6 +264,7 @@ impl App {
         Self {
             branch,
             branch_at: Instant::now(),
+            view_poll_at: Instant::now(),
             viewing: HashMap::new(),
             root,
             offset,
@@ -373,6 +378,20 @@ impl App {
             if self.active.get(&a).is_some_and(|n| n.run_id == r.run_id) {
                 continue;
             }
+            // Views this run produced are no longer current: read their metadata again.
+            let produced: Vec<ViewRef> = self
+                .view_panes
+                .iter()
+                .filter(|(_, p)| {
+                    p.meta
+                        .as_ref()
+                        .is_some_and(|m| m.source_run_id.as_ref() == Some(&r.run_id))
+                })
+                .map(|(v, _)| v.clone())
+                .collect();
+            for v in produced {
+                self.load_view(&v);
+            }
             // The run ended: fetch its final record for the outcome.
             self.last.insert(
                 a.clone(),
@@ -448,7 +467,8 @@ impl App {
     }
 
     pub fn handle(&mut self, ev: Event) {
-        self.refresh_branch(false);
+        // A busy event stream can starve the idle tick; its checks are rate-limited.
+        self.tick();
         match ev {
             Event::Input(crossterm::event::Event::Key(k)) => self.key(k),
             Event::Input(crossterm::event::Event::Paste(t)) => {
@@ -798,12 +818,32 @@ impl App {
 
     pub fn tick(&mut self) {
         self.refresh_branch(false);
+        self.poll_views();
         if self
             .notice
             .as_ref()
             .is_some_and(|n| n.at.elapsed().as_secs() >= NOTICE_SECS)
         {
             self.notice = None;
+        }
+    }
+
+    /// Reads open views again while their freshness or durability can still change without
+    /// a new revision: a save in progress, or "current" data whose producing run ended.
+    fn poll_views(&mut self) {
+        if self.view_poll_at.elapsed().as_millis() < VIEW_POLL_MS {
+            return;
+        }
+        self.view_poll_at = Instant::now();
+        let running: Vec<&RunId> = self.active.values().map(|r| &r.run_id).collect();
+        let due: Vec<ViewRef> = self
+            .view_panes
+            .iter()
+            .filter(|(_, p)| !p.loading && p.meta.as_ref().is_some_and(|m| m.may_change(&running)))
+            .map(|(v, _)| v.clone())
+            .collect();
+        for v in due {
+            self.load_view(&v);
         }
     }
 
