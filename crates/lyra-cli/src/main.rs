@@ -140,7 +140,12 @@ enum Command {
     Down {
         #[arg(long)]
         wait: bool,
+        /// Stop the sessions of every running Lyra host of this user on this machine.
+        #[arg(long)]
+        all: bool,
     },
+    /// Every running Lyra host of this user: session, runs, ports, memory, and problems.
+    Ps,
     /// Recent runs, or one run's details.
     Runs {
         #[arg(value_name = "RUN")]
@@ -526,7 +531,9 @@ fn main() -> ExitCode {
         }) => commands::runtime::exec(&ctx, label, argv, request_key),
         Some(Command::Up { background, ttl }) => commands::runtime::up(&ctx, background, &ttl),
         Some(Command::Keep { ttl }) => commands::runtime::keep(&ctx, &ttl),
-        Some(Command::Down { wait }) => commands::runtime::down(&ctx, wait),
+        Some(Command::Down { wait, all: false }) => commands::runtime::down(&ctx, wait),
+        Some(Command::Down { wait, all: true }) => commands::machine::down_all(&ctx, wait),
+        Some(Command::Ps) => commands::machine::ps(&ctx),
         Some(Command::Runs {
             run,
             action,
