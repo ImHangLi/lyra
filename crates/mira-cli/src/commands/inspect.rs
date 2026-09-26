@@ -391,6 +391,7 @@ enum CheckStatus {
     Ok,
     Warn,
     Fail,
+    Info,
 }
 
 #[derive(Serialize)]
@@ -418,6 +419,60 @@ fn on_path(program: &str, root: &Path) -> bool {
     }
     std::env::var_os("PATH")
         .is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join(program).is_file()))
+}
+
+/// The usual per-user skill folders `mira skills export` writes to (never a project).
+const SKILL_DIRS: [&str; 4] = [
+    ".claude/skills",
+    ".agents/skills",
+    ".codex/skills",
+    ".config/skillshare/skills",
+];
+
+fn version_tuple(v: &str) -> Option<(u64, u64, u64)> {
+    let core = v.split(['-', '+']).next()?;
+    let mut it = core.split('.').map(|p| p.parse::<u64>().ok());
+    Some((it.next()??, it.next()??, it.next()??))
+}
+
+/// One `skills` check per exported copy that is older than this Mira; one info line when
+/// none are found.
+fn skills_checks(push: &mut impl FnMut(&str, CheckStatus, String)) {
+    let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) else {
+        return;
+    };
+    let home = PathBuf::from(home);
+    let current = version_tuple(mira_protocol::VERSION);
+    let (mut found, mut any) = (Vec::new(), false);
+    for rel in SKILL_DIRS {
+        let Some(v) = super::skills::recorded_version(&home.join(rel).join("mira")) else {
+            continue;
+        };
+        any = true;
+        let shown = format!("~/{rel}");
+        match (version_tuple(&v), current) {
+            (Some(old), Some(now)) if old < now => push(
+                "skills",
+                CheckStatus::Warn,
+                format!(
+                    "Mira skills in {shown} are from {v}; run `mira skills export {shown}` again."
+                ),
+            ),
+            _ => found.push(format!("{shown} ({v})")),
+        }
+    }
+    if !found.is_empty() {
+        push("skills", CheckStatus::Ok, found.join(", "));
+    } else if !any {
+        push(
+            "skills",
+            CheckStatus::Info,
+            "no exported Mira skills found in ~/.claude/skills, ~/.agents/skills, \
+             ~/.codex/skills, or ~/.config/skillshare/skills; see \
+             https://github.com/ImHangLi/mira/blob/main/docs/agents.md"
+                .into(),
+        );
+    }
 }
 
 pub fn doctor(ctx: &Ctx) -> ExitCode {
@@ -468,9 +523,12 @@ pub fn doctor(ctx: &Ctx) -> ExitCode {
             push(
                 "config",
                 CheckStatus::Warn,
-                "not set up: .mira/workspace.json is missing; run `mira setup --json`".into(),
+                "not set up: .mira/workspace.json is missing; write a plugin in .mira/plugins/ \
+                 (mira skill, setup reference), then `mira validate .mira` and `mira reload`"
+                    .into(),
             );
         }
+        skills_checks(&mut push);
         match std::fs::symlink_metadata(&paths.runtime_dir) {
             Ok(m)
                 if m.is_dir()
@@ -556,6 +614,7 @@ pub fn doctor(ctx: &Ctx) -> ExitCode {
                         CheckStatus::Ok => "ok  ",
                         CheckStatus::Warn => "warn",
                         CheckStatus::Fail => "FAIL",
+                        CheckStatus::Info => "info",
                     };
                     let ok = matches!(c.status, CheckStatus::Ok);
                     let (label, message) = match c.name.as_str() {

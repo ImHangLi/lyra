@@ -2,7 +2,7 @@
 
 Goal: a small set of ordinary plugins that run this project's real commands, validated and applied, so the human can open `mira` and use them immediately.
 
-1. **Workspace.** Use the directory the user named. Otherwise `mira setup --json` picks it (`data.selected_root`, `data.reason`) and installs the agent skills (`data.skills`). If `selected_root` is null, ask the user once, listing `data.candidates`. Never read outside the project.
+1. **Workspace.** Use the directory the user named. Otherwise use the Git repository root of the current directory; `mira status --json` shows the selected root (`workspace.root`). If the current directory is not a project (`NEEDS_PROJECT`), ask the user once which one to use. Never read outside the project.
 2. **Existing state.** If `.mira/workspace.json` exists, read `mira catalog --json` first and extend it; never overwrite `.mira/local.json` (personal overrides).
 3. **Read the repository.** Mira does not scan the project; read the files yourself. Places to look: README and CONTRIBUTING files and `docs/`; `package.json` scripts and `pyproject.toml` scripts; `Makefile`, `justfile`, `Taskfile.yml`; Compose files (`compose.yaml`, `docker-compose*.yml`); CI config (`.github/workflows/`, `.gitlab-ci.yml`); env examples (`.env.example`). In a monorepo, also check the workspace members. Never run project code to find out what it does.
 4. **Meaning.** Decide what each command does from its source, not from its name. A `test` or `migrate` target can have side effects.
@@ -19,7 +19,11 @@ Goal: a small set of ordinary plugins that run this project's real commands, val
    ```
    Then run `mira doctor --json`: `validate` checks the manifest, but only `doctor` reports executables that are not installed. Delete the draft directory after a successful apply.
 
-   Add ignore rules for personal and generated files to the project's `.gitignore` without rewriting it: `.mira/local.json`, `.mira/.drafts/`. Commit `.mira/workspace.json` and `.mira/plugins/`. The installed skills (`.agents/skills/mira*`, `.claude/skills/mira*`) are per-machine copies: ask whether the team wants them committed; if so, exclude them from the project's linters.
+   Ask the user once whether to share `.mira/` with the team or keep it personal:
+   - **Share:** commit `.mira/workspace.json` and `.mira/plugins/`. Add ignore rules for personal and generated files to the project's `.gitignore` without rewriting it: `.mira/local.json`, `.mira/.drafts/`.
+   - **Personal:** add `.mira/` to `.git/info/exclude` (the path is `$(git rev-parse --git-common-dir)/info/exclude`), so it applies to all worktrees of the repository and changes no tracked file.
+
+   The skills are never part of the project: they live in the user's own skills folder (`mira skills export DIR`).
 8. **Verify.** Run one quick task (`mira run dev.check`) and, if the user agrees, start the main service and read its logs. A dev server can move to another port when its default is taken: read the real URL from the log before you check it. Stop what you started unless the user wants it running.
 9. **Report** in a few lines: the tools created (refs), what was verified to start, what was not verified (missing credentials, services not tried), and how to stop anything still running. Tell the user to open `mira` for the TUI.
 

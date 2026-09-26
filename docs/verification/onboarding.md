@@ -26,7 +26,7 @@ Agents set up Mira on these repositories by following the installed skills liter
 
 ## Use cases
 
-The static setup scanner (`setup --json` facts) was removed after v0.7.0; agents now read the repository themselves. The discovery row below records the earlier version.
+The static setup scanner (`setup --json` facts) was removed after v0.7.0; agents now read the repository themselves. The discovery row below records the earlier version. `mira setup` and `mira skills install` were removed later; agents now follow [docs/agents.md](../agents.md) and export the skills with `mira skills export DIR`.
 
 | Check | Persona | Result | Evidence |
 |---|---|---|---|

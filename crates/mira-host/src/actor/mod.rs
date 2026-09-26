@@ -659,8 +659,9 @@ impl Actor {
                 "this workspace has no .mira/workspace.json yet",
             )
             .with_next_action(
-                &["mira", "setup", "--json"],
-                "Install the agent skills, then let your agent create plugins with the mira skill.",
+                &["mira", "validate", ".mira"],
+                "Write .mira/workspace.json and a plugin in .mira/plugins/ (mira skill, setup \
+                 reference), validate them, then run `mira reload`.",
             )),
             ConfigState::Invalid(i) => Err(i.to_error_info()),
         }

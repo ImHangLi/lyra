@@ -22,7 +22,7 @@ python3 -m venv /tmp/mira-venv && /tmp/mira-venv/bin/pip install pyte
 | Warm `mira status` (CLI start + IPC + serialization) | 80 | 50 | 13.1 | 14.9 | 15.3 | 15.5 | met |
 | Warm `mira catalog` | 80 | 50 | 10.5 | 11.3 | 11.3 | 11.3 | met |
 | Warm `mira catalog --if-revision` | 80 | 50 | 9.9 | 10.7 | 10.8 | 10.8 | met |
-| Warm-cache bounded discovery (`setup --json`) | 400 | 20 | 6.3 | 7.1 | 13.9 | 15.7 | met (small test workspace; see limits) |
+| Warm-cache bounded discovery (`setup --json`) | 400 | 20 | 6.3 | 7.1 | 13.9 | 15.7 | met (small test workspace; see limits; `setup` was removed after v0.7.0) |
 | Cold `mira status` (starts a host) | not a target | 20 | 45.2 | 49.6 | 67.7 | 72.3 | reported |
 
 **Log flood**: 3 rounds of 60 s at about 5,000 lines/s, 200 bytes per line (`dev.flood`). Each round is one `mira status` every 200 ms while the flood runs.

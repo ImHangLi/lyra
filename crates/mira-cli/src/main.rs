@@ -342,8 +342,7 @@ enum Command {
         #[command(subcommand)]
         command: StorageCommand,
     },
-    /// Install or update the agent skills in this project.
-    #[command(hide = true)]
+    /// Export the agent skills of this Mira version to your own skills folder.
     Skills {
         #[command(subcommand)]
         command: SkillsCommand,
@@ -353,14 +352,6 @@ enum Command {
     Host {
         #[arg(long)]
         root: PathBuf,
-    },
-    /// Install the agent skills and print a prompt for your agent. With --json: the selected project and installed skills.
-    ///
-    /// It never runs project code.
-    Setup {
-        /// The agent to set up for (default: Claude Code when installed, else generic).
-        #[arg(long, value_enum)]
-        agent: Option<commands::skills::AgentKind>,
     },
 }
 
@@ -470,10 +461,12 @@ enum StorageCommand {
 
 #[derive(Subcommand)]
 enum SkillsCommand {
-    /// Copy `mira` and `mira-extend` into .agents/skills (and .claude/skills for Claude); never overwrites your edits.
-    Install {
-        #[arg(long, value_enum, default_value = "generic")]
-        agent: commands::skills::AgentKind,
+    /// Write `mira` and `mira-extend` into DIR (for example ~/.claude/skills or
+    /// ~/.agents/skills). Never overwrites your edits; refuses a DIR inside the current Git
+    /// work tree.
+    Export {
+        #[arg(value_name = "DIR")]
+        dir: PathBuf,
     },
 }
 
@@ -689,16 +682,9 @@ fn main() -> ExitCode {
             ),
         },
         Some(Command::Skills {
-            command: SkillsCommand::Install { agent },
-        }) => commands::skills::install(&ctx, agent),
+            command: SkillsCommand::Export { dir },
+        }) => commands::skills::export(&ctx, &dir),
         Some(Command::Reload) => commands::config::reload(&ctx),
-        Some(Command::Setup { agent }) => {
-            if mode == Mode::Text {
-                commands::setup::guided(ctx.project.as_deref(), agent)
-            } else {
-                commands::setup::run(mode, ctx.project.as_deref(), agent)
-            }
-        }
         None => commands::tui::open(&ctx),
     }
 }
