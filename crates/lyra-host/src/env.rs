@@ -86,3 +86,37 @@ pub fn compose(
     put("LYRA_CONFIG_FILE", &host.config_file);
     Ok(ChildEnv(env))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_malformed_env_line_never_appears_in_the_error() {
+        let dir = std::env::temp_dir().join(format!("lyra-test-{}-env", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("app.env"), "OK=1\nSECRET_KEY=hunter2 topsecret\n").unwrap();
+        let host = HostVars {
+            workspace_root: dir.to_string_lossy().into_owned(),
+            plugin_dir: None,
+            state_dir: String::new(),
+            cache_dir: String::new(),
+            artifact_dir: String::new(),
+            run_id: String::new(),
+            input_file: String::new(),
+            config_file: String::new(),
+        };
+        let err = compose(
+            &ClientEnv::default(),
+            &dir,
+            &["app.env".to_owned()],
+            &BTreeMap::new(),
+            &host,
+        )
+        .expect_err("a malformed line must fail");
+        let shown = serde_json::to_string(&err).unwrap();
+        assert!(!shown.contains("hunter2"), "{shown}");
+        assert!(shown.contains("app.env"), "{shown}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

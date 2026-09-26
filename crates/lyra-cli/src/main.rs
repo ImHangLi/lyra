@@ -624,3 +624,40 @@ fn main() -> ExitCode {
         None => commands::tui::open(&ctx),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::rewrite_input_text;
+
+    fn rewrite(args: &[&str]) -> Vec<String> {
+        rewrite_input_text(args.iter().map(|s| (*s).to_owned()).collect())
+    }
+
+    #[test]
+    fn input_text_value_becomes_input_text() {
+        assert_eq!(
+            rewrite(&["lyra", "input", "r_1", "--text", "hi"]),
+            ["lyra", "input", "r_1", "--input-text", "hi"]
+        );
+    }
+
+    #[test]
+    fn text_with_key_or_last_is_the_output_flag() {
+        assert_eq!(
+            rewrite(&["lyra", "input", "r_1", "--key", "enter", "--text"]),
+            ["lyra", "input", "r_1", "--key", "enter", "--text"]
+        );
+        assert_eq!(
+            rewrite(&["lyra", "input", "r_1", "--text"]),
+            ["lyra", "input", "r_1", "--text"]
+        );
+    }
+
+    #[test]
+    fn other_commands_are_unchanged() {
+        assert_eq!(
+            rewrite(&["lyra", "status", "--text"]),
+            ["lyra", "status", "--text"]
+        );
+    }
+}

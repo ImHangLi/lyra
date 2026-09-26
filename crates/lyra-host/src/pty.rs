@@ -751,6 +751,7 @@ pub fn start(
                 closed: s.handle.closed.clone(),
             };
             let handle = s.handle;
+            crate::groups::record_soon(&spec.run_id, s.pid);
             tokio::spawn(supervise(
                 spec,
                 log,
@@ -884,6 +885,7 @@ async fn supervise(
     let cleanup = runner::run_cleanup(&spec, reason, &mut batch).await;
     batch.finish();
     runner::remove_temp(&spec.temp_files);
+    crate::groups::forget(&spec.run_id);
     let _ = events
         .send((
             run_id,
