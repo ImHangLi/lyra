@@ -19,7 +19,6 @@ pub const COMMANDS: &[&str] = &[
     "doctor",
     "validate",
     "schema",
-    "setup",
     "run",
     "start",
     "stop",
