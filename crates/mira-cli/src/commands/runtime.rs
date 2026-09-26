@@ -12,7 +12,7 @@ use mira_protocol::ipc::*;
 use mira_protocol::limits::MAX_PUBLIC_REPLY_BYTES;
 use mira_protocol::manifest::TimeoutWire;
 use mira_protocol::reply::{PublicReply, ReplyContext};
-use mira_protocol::run::{Lifecycle, Outcome, RunRecord};
+use mira_protocol::run::{CleanupState, Lifecycle, Outcome, RunRecord};
 use mira_protocol::schema_profile::SchemaDoc;
 use serde_json::{Map, Value};
 
@@ -149,6 +149,105 @@ fn run_text(r: &RunRecord) -> String {
     s
 }
 
+/// `mira runs RUN --text`: what happened, in a few lines, and where the output is.
+fn run_summary(r: &RunRecord) -> String {
+    let target = r
+        .action_ref
+        .as_ref()
+        .map_or_else(|| format!("exec \"{}\"", r.label), ToString::to_string);
+    let mut outcome = match r.lifecycle {
+        Lifecycle::Finished { outcome } => outcome_text(outcome).to_owned(),
+        other => lifecycle_text(&other),
+    };
+    if let Some(e) = &r.exit {
+        match (e.code, &e.signal) {
+            (Some(c), _) => outcome.push_str(&format!(", exit {c}")),
+            (None, Some(sig)) => outcome.push_str(&format!(", ended by {sig}")),
+            _ => {}
+        }
+    }
+    let took = if r.lifecycle.is_active() {
+        "running for"
+    } else {
+        "took"
+    };
+    let mut s = format!(
+        "{}  {target}\n  {outcome}\n  started {}, {took} {}",
+        r.run_id,
+        human::clock_seconds(r.started_at),
+        human::run_duration(r)
+    );
+    match &r.cleanup {
+        CleanupState::NotNeeded => {}
+        CleanupState::Succeeded { .. } => s.push_str("\n  cleanup succeeded"),
+        CleanupState::Pending | CleanupState::Running { .. } => s.push_str("\n  cleanup running"),
+        CleanupState::Unknown { message } => s.push_str(&format!("\n  cleanup unknown: {message}")),
+        failed @ CleanupState::Failed { .. } => {
+            if let Some(c) = human::cleanup_failure(failed) {
+                s.push_str(&format!("\n  {c}"));
+            }
+        }
+    }
+    if let Some(res) = &r.result {
+        s.push_str(&format!(
+            "\n  result ({}): {}",
+            if res.ok { "ok" } else { "failed" },
+            res.summary
+        ));
+    }
+    if let Some(n) = &r.note {
+        s.push_str(&format!("\n  note: {n}"));
+    }
+    s.push_str(&format!("\n  output: mira logs {}", human::short_run(&r.run_id)));
+    s
+}
+
+fn outcome_text(o: Outcome) -> &'static str {
+    match o {
+        Outcome::Succeeded => "succeeded",
+        Outcome::Failed => "failed",
+        Outcome::Cancelled => "cancelled",
+        Outcome::TimedOut => "timed out",
+        Outcome::Interrupted => "interrupted",
+    }
+}
+
+/// Log lines shown under a failed `run --text`.
+const FAILURE_TAIL: u32 = 5;
+
+/// Text for a failed run: the status line, the last log lines, then what to do next.
+async fn failure_text(client: &mut Client, rec: &RunRecord, e: &ErrorInfo) -> String {
+    let mut status = e.message.clone();
+    if let Some(c) = human::cleanup_failure(&rec.cleanup) {
+        status.push_str(&format!(", {c}"));
+    }
+    let mut s = format!("error[{}]: {status}", e.code);
+    let page = client
+        .call::<_, LogPage>(
+            Method::LogRead,
+            &LogReadParams {
+                target: RunTarget::Run {
+                    run_id: rec.run_id.clone(),
+                },
+                cursor: None,
+                limit: Some(FAILURE_TAIL),
+                max_bytes: None,
+            },
+        )
+        .await;
+    if let Ok(page) = page
+        && let Some(pg) = page.data()
+    {
+        for r in &pg.items {
+            s.push_str(&format!("\n  {} {}", stream_tag(r), r.text));
+        }
+    }
+    if let Some(n) = &e.next_action {
+        s.push_str(&format!("\n  next: {} ({})", n.argv.join(" "), n.reason));
+    }
+    s
+}
+
 /// Converts a finished run into the public reply: success, or an error with the fixed class.
 fn final_reply(reply: PublicReply<RunRecord>) -> PublicReply<RunRecord> {
     let ctx = reply.context();
@@ -246,10 +345,19 @@ pub(crate) async fn run_and_wait(
     if ctx.mode == Mode::Text {
         eprintln!("{run_id} started; waiting (Ctrl-C stops it)...");
     }
-    match wait_finished(client, &run_id).await {
-        Ok(reply) => ctx.emit(&final_reply(reply), run_text),
-        Err(e) => ctx.fail(client.context(), e),
+    let finished = match wait_finished(client, &run_id).await {
+        Ok(reply) => reply,
+        Err(e) => return ctx.fail(client.context(), e),
+    };
+    let record = finished.data().cloned();
+    let reply = final_reply(finished);
+    if ctx.mode == Mode::Text
+        && let (Some(rec), Some(e)) = (record, reply.error())
+    {
+        eprintln!("{}", failure_text(client, &rec, e).await);
+        return ExitCode::from(reply.exit_code());
     }
+    ctx.emit(&reply, run_text)
 }
 
 pub fn run(
@@ -788,9 +896,7 @@ pub fn runs(
                 .call::<_, RunRecord>(Method::RunGet, &RunGetParams { run_id })
                 .await
             {
-                Ok(r) => ctx.emit(&r, |rec| {
-                    serde_json::to_string_pretty(rec).unwrap_or_else(|_| run_text(rec))
-                }),
+                Ok(r) => ctx.emit(&r, run_summary),
                 Err(e) => ctx.fail(client.context(), e.to_error_info()),
             };
         }
@@ -828,15 +934,18 @@ pub fn runs(
     })
 }
 
-fn log_line(r: &mira_protocol::run::LogRecord) -> String {
-    let tag = match r.stream {
+fn stream_tag(r: &mira_protocol::run::LogRecord) -> &'static str {
+    match r.stream {
         mira_protocol::run::LogStream::Stderr => "err ",
         mira_protocol::run::LogStream::Host => "mira",
         mira_protocol::run::LogStream::Plugin => "plug",
         mira_protocol::run::LogStream::Pty => "pty ",
         mira_protocol::run::LogStream::Stdout => "out ",
-    };
-    format!("{:>6} {tag} {}", r.log_seq, r.text)
+    }
+}
+
+fn log_line(r: &mira_protocol::run::LogRecord) -> String {
+    format!("{:>6} {} {}", r.log_seq, stream_tag(r), r.text)
 }
 
 /// `--stream` values.
