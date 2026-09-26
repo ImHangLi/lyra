@@ -88,7 +88,7 @@ pub fn draw(f: &mut Frame, app: &mut App, color: bool) {
     draw_status(f, app, &t, status);
     draw_footer(f, app, &t, footer);
     match &app.modal {
-        Modal::Help => draw_help(f, app, &t, area),
+        Modal::Help { .. } => draw_help(f, app, &t, area),
         Modal::Form(_) => draw_form(f, app, &t, area),
         Modal::Output(_) => draw_output(f, app, &t, area),
         Modal::RowAction { .. } => draw_row_actions(f, app, &t, area),
@@ -703,7 +703,83 @@ fn draw_footer(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_help(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
+/// Word-wraps `text` to `width` cells; words longer than a line are cut into pieces.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let mut word = word.to_owned();
+        loop {
+            let used = cells(&line);
+            let gap = usize::from(used > 0);
+            if used + gap + cells(&word) <= width {
+                if gap == 1 {
+                    line.push(' ');
+                }
+                line.push_str(&word);
+                break;
+            }
+            if used > 0 {
+                out.push(std::mem::take(&mut line));
+                continue;
+            }
+            // A word wider than the whole line.
+            out.push(slice_cells(&word, 0, width));
+            word = slice_cells(&word, width, cells(&word) - width);
+            if word.is_empty() {
+                break;
+            }
+        }
+    }
+    if !line.is_empty() || out.is_empty() {
+        out.push(line);
+    }
+    out
+}
+
+/// The help overlay's lines, wrapped to `width` cells.
+fn help_lines<'a>(app: &App, t: &Theme, width: usize) -> Vec<Line<'a>> {
+    const KEYS_W: usize = 12;
+    let mut lines = vec![
+        Line::from(Span::styled("Keys that work here", t.bold())),
+        Line::from(""),
+    ];
+    // Help lists the keys of the normal mode for the current focus.
+    for b in app.normal_bindings() {
+        let keys = format!("{:<KEYS_W$}", b.keys);
+        let label_w = width.saturating_sub(cells(&keys)).max(8);
+        for (i, part) in wrap(&b.label, label_w).into_iter().enumerate() {
+            let head = if i == 0 {
+                keys.clone()
+            } else {
+                " ".repeat(cells(&keys))
+            };
+            lines.push(Line::from(vec![
+                Span::styled(head, t.bold()),
+                Span::raw(part),
+            ]));
+        }
+    }
+    lines.push(Line::from(""));
+    let notes = [
+        if app.mouse {
+            "Mouse mode is on (m): the wheel scrolls; terminal selection needs Option/Shift."
+        } else {
+            "Mouse mode is off (m turns it on): your terminal's own text selection works."
+        },
+        ": runs one public lyra command (not a shell). Forms: Tab moves, Enter runs.",
+        "q and Ctrl-C close this TUI; the host stops owned work only when no controller or \
+         background lease remains. b keeps work running for 2h (lyra down stops it).",
+        "If a crash leaves the terminal in raw mode, type `reset` and press Enter.",
+    ];
+    for n in notes {
+        lines.extend(wrap(n, width).into_iter().map(Line::from));
+    }
+    lines
+}
+
+fn draw_help(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     let w = area.width.saturating_sub(8).min(84);
     let h = area.height.saturating_sub(4);
     let rect = Rect {
@@ -712,44 +788,32 @@ fn draw_help(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         width: w,
         height: h,
     };
-    let saved_modal_bindings = {
-        // Help lists the keys of the normal mode for the current focus.
-        let mut lines = vec![
-            Line::from(Span::styled("Keys that work here", t.bold())),
-            Line::from(""),
-        ];
-        let normal = app.normal_bindings();
-        for b in normal {
-            lines.push(Line::from(vec![
-                Span::styled(format!("{:<12}", b.keys), t.bold()),
-                Span::raw(b.label),
-            ]));
+    let lines = help_lines(app, t, w.saturating_sub(2) as usize);
+    let rows = h.saturating_sub(2) as usize;
+    let max = lines.len().saturating_sub(rows);
+    let top = match &mut app.modal {
+        Modal::Help { top, max: m } => {
+            *m = max;
+            *top = (*top).min(max);
+            *top
         }
-        lines.push(Line::from(""));
-        lines.push(Line::from(if app.mouse {
-            "Mouse mode is on (m): the wheel scrolls; terminal selection needs Option/Shift."
-        } else {
-            "Mouse mode is off (m turns it on): your terminal's own text selection works."
-        }));
-        lines.push(Line::from(
-            ": runs one public lyra command (not a shell). Forms: Tab moves, Enter runs.",
-        ));
-        lines.push(Line::from(
-            "q and Ctrl-C close this TUI; the host stops owned work only when no controller or",
-        ));
-        lines.push(Line::from(
-            "background lease remains. b keeps work running for 2h (lyra down stops it).",
-        ));
-        lines.push(Line::from(
-            "If a crash leaves the terminal in raw mode, type `reset` and press Enter.",
-        ));
-        lines
+        _ => 0,
     };
+    let mut block = Block::bordered().title(" Help · Esc closes ");
+    if max > 0 {
+        let last = (top + rows).min(lines.len());
+        block = block.title_bottom(
+            Line::from(format!(
+                " j/k scroll · {}-{last} of {} ",
+                top + 1,
+                lines.len()
+            ))
+            .right_aligned(),
+        );
+    }
+    let shown: Vec<Line> = lines.into_iter().skip(top).take(rows).collect();
     f.render_widget(Clear, rect);
-    f.render_widget(
-        Paragraph::new(saved_modal_bindings).block(Block::bordered().title(" Help · Esc closes ")),
-        rect,
-    );
+    f.render_widget(Paragraph::new(shown).block(block), rect);
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -1255,4 +1319,19 @@ fn draw_history(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         ))),
         rect,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap;
+
+    #[test]
+    fn wrap_keeps_words_within_the_width() {
+        assert_eq!(
+            wrap("the host stops owned work only when", 12),
+            ["the host", "stops owned", "work only", "when"]
+        );
+        assert_eq!(wrap("abcdefghij", 4), ["abcd", "efgh", "ij"]);
+        assert_eq!(wrap("", 4), [""]);
+    }
 }

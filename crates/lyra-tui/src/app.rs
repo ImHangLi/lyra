@@ -101,7 +101,12 @@ pub enum Modal {
         error: Option<String>,
         index: usize,
     },
-    Help,
+    /// `top` is the first shown line; `max` the largest `top` (0 when all lines fit),
+    /// which drawing sets.
+    Help {
+        top: usize,
+        max: usize,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1282,7 +1287,10 @@ impl App {
                 v.push(bind("Esc", "close", Cmd::Escape));
                 return v;
             }
-            Modal::Help => {
+            Modal::Help { max, .. } => {
+                if *max > 0 {
+                    v.push(bind("j/k", "scroll", Cmd::Down));
+                }
                 v.push(bind("Esc/?", "close help", Cmd::Escape));
                 return v;
             }
@@ -1819,13 +1827,22 @@ impl App {
                 }
                 return;
             }
-            Modal::Help => {
-                if matches!(
-                    k.code,
-                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter
-                ) || (ctrl && k.code == KeyCode::Char('c'))
-                {
-                    self.modal = Modal::None;
+            Modal::Help { .. } => {
+                let Modal::Help { top, max } = &mut self.modal else {
+                    return;
+                };
+                match k.code {
+                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
+                        self.modal = Modal::None
+                    }
+                    KeyCode::Char('c') if ctrl => self.modal = Modal::None,
+                    KeyCode::Char('j') | KeyCode::Down => *top = (*top + 1).min(*max),
+                    KeyCode::Char('k') | KeyCode::Up => *top = top.saturating_sub(1),
+                    KeyCode::PageDown | KeyCode::Char(' ') => *top = (*top + 10).min(*max),
+                    KeyCode::PageUp => *top = top.saturating_sub(10),
+                    KeyCode::Char('g') | KeyCode::Home => *top = 0,
+                    KeyCode::Char('G') | KeyCode::End => *top = *max,
+                    _ => {}
                 }
                 return;
             }
@@ -2082,7 +2099,7 @@ impl App {
                     self.find(&q, cmd == Cmd::NextMatch);
                 }
             }
-            Cmd::Help => self.modal = Modal::Help,
+            Cmd::Help => self.modal = Modal::Help { top: 0, max: 0 },
             Cmd::Attach => {
                 if let Some((a, run_id)) = self.attach_target() {
                     self.term.open(a, run_id, self.io.events.clone());
