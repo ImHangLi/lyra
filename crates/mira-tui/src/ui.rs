@@ -128,6 +128,17 @@ fn panel_title(t: &Theme, text: &str, focus: bool) -> Line<'static> {
 }
 
 pub fn draw(f: &mut Frame, app: &mut App, t: &Theme) {
+    draw_screen(f, app, t);
+    if theme::ascii() {
+        for cell in &mut f.buffer_mut().content {
+            if let Some(a) = theme::ascii_cell(cell.symbol()) {
+                cell.set_symbol(a);
+            }
+        }
+    }
+}
+
+fn draw_screen(f: &mut Frame, app: &mut App, t: &Theme) {
     let area = f.area();
     if area.width < MIN_W || area.height < MIN_H {
         let msg = vec![
@@ -423,12 +434,15 @@ fn oneoff_mark(o: &OneOff) -> Mark {
 }
 
 fn kind_glyph(k: ViewKind) -> &'static str {
-    match k {
-        ViewKind::Table => "▦",
-        ViewKind::Log => "≡",
-        ViewKind::Tree => "⌗",
-        ViewKind::Text => "¶",
-        ViewKind::Json => "{}",
+    match (k, theme::ascii()) {
+        (ViewKind::Table, false) => "▦",
+        (ViewKind::Table, true) => "[]",
+        (ViewKind::Log, false) => "≡",
+        (ViewKind::Log, true) => ">_",
+        (ViewKind::Tree, _) => "#",
+        (ViewKind::Text, false) => "¶",
+        (ViewKind::Text, true) => "Aa",
+        (ViewKind::Json, _) => "{}",
     }
 }
 
@@ -549,9 +563,9 @@ fn draw_header(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     let name = ellipsize(&name, room.min(32));
     room = room.saturating_sub(cells(&name));
     let branch = app.branch.as_deref().map(display).and_then(|b| {
-        // ` ⎇ ` + name + ` `, two spaces before it.
-        let cap = room.saturating_sub(6).min(BRANCH_MAX);
-        (cap >= BRANCH_MIN.min(cells(&b))).then(|| format!(" ⎇ {} ", ellipsize(&b, cap)))
+        // ` ` + name + ` `, two spaces before it; the chip itself marks the branch.
+        let cap = room.saturating_sub(4).min(BRANCH_MAX);
+        (cap >= BRANCH_MIN.min(cells(&b))).then(|| format!(" {} ", ellipsize(&b, cap)))
     });
     if let Some(b) = &branch {
         room = room.saturating_sub(cells(b) + 2);
@@ -870,7 +884,7 @@ fn draw_main(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     if !item.enabled {
         l1.push(Span::raw(" "));
         l1.push(Span::styled(
-            " ⏸ disabled ",
+            " ‖ disabled ",
             t.muted().add_modifier(Modifier::REVERSED),
         ));
     }
@@ -2206,6 +2220,9 @@ fn help_lines(app: &App, t: &Theme, avail: usize) -> (Vec<Line<'static>>, usize)
         ": runs one public mira command (not a shell). Forms: Tab moves, Enter runs.",
         "q and Ctrl-C close this window. When it is the last Mira window, its runs stop. \
          b keeps them running for 2h; `mira down` stops them.",
+        "Marks: ● running · ✓ ok · ✗ failed · ◐ starting or stopping · ○ not run yet · \
+         ‖ disabled · ■ stopped. ASCII mode (MIRA_ASCII=1, or a locale that is not UTF-8) \
+         shows them as * v x ~ o - =.",
         "If a crash leaves the terminal in raw mode, type `reset` and press Enter.",
     ];
     for n in notes {

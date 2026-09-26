@@ -8,6 +8,8 @@
 //! decoration only; secondary text uses the `Muted` tone. State is never shown by color
 //! alone: see [`Mark`].
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use ratatui::style::{Color, Modifier, Style};
 
 /// How many colors the terminal can show.
@@ -384,8 +386,76 @@ pub const FAILED: Mark = Mark::new("✗", "failed", Some(Tone::Rose));
 pub const STARTING: Mark = Mark::new("◐", "starting", Some(Tone::Amber));
 pub const STOPPING: Mark = Mark::new("◐", "stopping", Some(Tone::Amber));
 pub const NOT_RUN: Mark = Mark::new("○", "not run yet", None);
-pub const DISABLED: Mark = Mark::new("⏸", "disabled", None);
+pub const DISABLED: Mark = Mark::new("‖", "disabled", None);
 pub const STOPPED: Mark = Mark::new("■", "stopped", None);
+
+// ----- ASCII mode ---------------------------------------------------------------------
+
+static ASCII: AtomicBool = AtomicBool::new(false);
+static UTF8: AtomicBool = AtomicBool::new(true);
+
+/// Whether the locale (`LC_ALL`, then `LC_CTYPE`, then `LANG`) names UTF-8. No locale at
+/// all is the C locale, which is not UTF-8.
+pub fn locale_is_utf8(get: impl Fn(&str) -> Option<String>) -> bool {
+    ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .find_map(|k| get(k).filter(|v| !v.is_empty()))
+        .is_some_and(|v| {
+            let v = v.to_ascii_lowercase();
+            v.contains("utf-8") || v.contains("utf8")
+        })
+}
+
+/// Chooses the glyph set once at start: `MIRA_ASCII=1` forces ASCII, `MIRA_ASCII=0`
+/// forces Unicode, and otherwise a locale that is not UTF-8 gets ASCII.
+pub fn detect_glyphs() {
+    let get = |k: &str| std::env::var(k).ok();
+    let utf8 = locale_is_utf8(get);
+    let ascii = match get("MIRA_ASCII").as_deref().map(str::trim) {
+        Some("1" | "true" | "yes" | "on") => true,
+        Some("0" | "false" | "no" | "off") => false,
+        _ => !utf8,
+    };
+    ASCII.store(ascii, Ordering::Relaxed);
+    UTF8.store(utf8, Ordering::Relaxed);
+}
+
+/// Whether the screen uses ASCII glyphs and `+-|` borders.
+pub fn ascii() -> bool {
+    ASCII.load(Ordering::Relaxed)
+}
+
+/// The ASCII stand-in for one drawn cell in ASCII mode; `None` keeps the cell. Mark
+/// glyphs stay distinct: `* v x ~ o - =` (see the help overlay). Other non-ASCII text
+/// becomes `?` only when the locale cannot show it.
+pub fn ascii_cell(symbol: &str) -> Option<&'static str> {
+    if symbol.is_ascii() {
+        return None;
+    }
+    Some(match symbol {
+        "╭" | "╮" | "╰" | "╯" | "┌" | "┐" | "└" | "┘" | "├" | "┤" | "┬" | "┴" | "┼" => {
+            "+"
+        }
+        "─" | "━" => "-",
+        "│" | "┃" => "|",
+        "●" => "*",
+        "✓" => "v",
+        "✗" => "x",
+        "◐" => "~",
+        "○" | "◌" => "o",
+        "‖" => "-",
+        "■" => "=",
+        "◆" | "◇" => "@",
+        "·" => "|",
+        "…" => ".",
+        "▌" | "▸" | "›" => ">",
+        "‹" => "<",
+        "▎" => "!",
+        "▏" => "_",
+        _ if UTF8.load(Ordering::Relaxed) => return None,
+        _ => "?",
+    })
+}
 
 #[cfg(test)]
 mod tests {

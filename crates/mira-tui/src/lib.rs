@@ -132,6 +132,7 @@ async fn serve(paths: WorkspacePaths, offset: time::UtcOffset) -> Result<TuiEnd,
     let _ = read_tx.send(Read::Recent);
 
     let color = theme::ColorMode::detect();
+    theme::detect_glyphs();
     let mut guard = term::TerminalGuard::enter().map_err(|e| {
         ErrorInfo::new(
             ErrorCode::INTERNAL,
