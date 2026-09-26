@@ -12,7 +12,7 @@ use mira_protocol::ipc::*;
 use mira_protocol::limits::MAX_PUBLIC_REPLY_BYTES;
 use mira_protocol::manifest::TimeoutWire;
 use mira_protocol::reply::{PublicReply, ReplyContext};
-use mira_protocol::run::{CleanupState, Lifecycle, Outcome, RunRecord};
+use mira_protocol::run::{CleanupState, Lifecycle, Outcome, RunRecord, StopReason};
 use mira_protocol::schema_profile::SchemaDoc;
 use serde_json::{Map, Value};
 
@@ -144,7 +144,7 @@ fn run_text(r: &RunRecord) -> String {
         ));
     }
     if let Some(n) = &r.note {
-        s.push_str(&format!("\n  note: {n}"));
+        s.push_str(&format!("\n  note: {}", human::note_text(n)));
     }
     s
 }
@@ -196,7 +196,7 @@ fn run_summary(r: &RunRecord) -> String {
         ));
     }
     if let Some(n) = &r.note {
-        s.push_str(&format!("\n  note: {n}"));
+        s.push_str(&format!("\n  note: {}", human::note_text(n)));
     }
     s.push_str(&format!("\n  output: mira logs {}", human::short_run(&r.run_id)));
     s
@@ -217,7 +217,17 @@ const FAILURE_TAIL: u32 = 5;
 
 /// Text for a failed run: the status line, the last log lines, then what to do next.
 async fn failure_text(client: &mut Client, rec: &RunRecord, e: &ErrorInfo) -> String {
-    let mut status = e.message.clone();
+    let target = rec
+        .action_ref
+        .as_ref()
+        .map_or_else(|| rec.label.clone(), ToString::to_string);
+    let mut status = match (rec.stop_reason, &rec.note) {
+        (Some(StopReason::ProtocolError), Some(note)) => {
+            format!("{target} stopped: {}", human::note_text(note))
+        }
+        (Some(StopReason::ProtocolError), None) => format!("{target} stopped: invalid plugin output"),
+        _ => e.message.clone(),
+    };
     if let Some(c) = human::cleanup_failure(&rec.cleanup) {
         status.push_str(&format!(", {c}"));
     }
@@ -318,6 +328,28 @@ fn final_reply(reply: PublicReply<RunRecord>) -> PublicReply<RunRecord> {
     PublicReply::failure(ctx, info)
 }
 
+/// Whether `action` is a long-running (process) action.
+async fn is_service(client: &mut Client, action: &str) -> bool {
+    let Ok(item_ref) = action.parse::<ItemRef>() else {
+        return false;
+    };
+    let reply: Result<PublicReply<ItemDescription>, _> = client
+        .call(
+            Method::ItemDescribe,
+            &ItemDescribeParams {
+                item_ref,
+                include_schema: false,
+                max_bytes: None,
+            },
+        )
+        .await;
+    reply.ok().is_some_and(|r| {
+        r.data()
+            .and_then(|d| d.action.as_ref())
+            .is_some_and(|a| a.mode == mira_protocol::manifest::ActionMode::Process)
+    })
+}
+
 pub(crate) async fn run_and_wait(
     ctx: &Ctx,
     client: &mut Client,
@@ -329,6 +361,18 @@ pub(crate) async fn run_and_wait(
         Ok(r) => r,
         Err(e) => return ctx.fail(client.context(), e.to_error_info()),
     };
+    if ctx.mode == Mode::Text
+        && let Some(e) = accepted.error()
+        && e.code == ErrorCode::SESSION_REQUIRED
+        && let Some(action) = params.get("action_ref").and_then(Value::as_str)
+        && is_service(client, action).await
+    {
+        eprintln!(
+            "error[{}]: {action} is a service. Start it with `mira start {action}`.",
+            e.code
+        );
+        return ExitCode::from(accepted.exit_code());
+    }
     if !wait || !accepted.is_ok() {
         return ctx.emit(&accepted, |a| {
             format!(
@@ -626,19 +670,7 @@ pub fn restart(ctx: &Ctx, action: &str, input: Option<&str>) -> ExitCode {
 }
 
 fn session_text(d: &SessionData) -> String {
-    match &d.session {
-        None => "no session".into(),
-        Some(s) => format!(
-            "session {} {} {}, {} controller(s){}",
-            s.id,
-            super::inspect::lc(&s.mode),
-            super::inspect::lc(&s.state),
-            s.controller_count,
-            s.expires_at
-                .map(|t| format!(", expires {t}"))
-                .unwrap_or_else(|| ", no expiry".into())
-        ),
-    }
+    human::session_line(d.session.as_ref())
 }
 
 pub fn up(ctx: &Ctx, background: bool, ttl: &str) -> ExitCode {

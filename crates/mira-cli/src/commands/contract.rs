@@ -69,6 +69,13 @@ fn report(p: &mira_protocol::config::LoadedPlugin) -> PluginReport {
 /// `mira validate PATH`: pure validation; never executes plugin or project code.
 pub fn validate(mode: Mode, path: &Path) -> ExitCode {
     let shown = path.to_string_lossy().into_owned();
+    if std::fs::symlink_metadata(path).is_err() {
+        return output::fail(
+            mode,
+            ReplyContext::default(),
+            ErrorInfo::new(ErrorCode::NOT_FOUND, format!("`{shown}` does not exist.")),
+        );
+    }
     let reply = match validate_draft(path) {
         Ok(Draft::Workspace(set)) => PublicReply::success(
             ReplyContext::default(),
@@ -95,7 +102,8 @@ pub fn validate(mode: Mode, path: &Path) -> ExitCode {
         Err(issues) => PublicReply::failure(ReplyContext::default(), issues.to_error_info()),
     };
     output::emit(mode, &reply, |r| {
-        let mut s = format!("valid {} at {}", r.kind, r.path);
+        let kind = if r.kind == "workspace" { "project" } else { r.kind };
+        let mut s = format!("valid {kind} at {}", r.path);
         for p in &r.plugins {
             s.push_str(&format!(
                 "\n  {} ({}): {} action(s), {} view(s){}",
