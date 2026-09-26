@@ -5,7 +5,7 @@ description: Create or change Mira plugins — save a one-off command as a reusa
 
 # Extend Mira
 
-A plugin is a directory with `plugin.json` and optional scripts. New capability never needs a Core change or rebuild.
+A plugin is a directory with `plugin.json` and optional scripts. New capability never needs a change to Mira itself or a rebuild.
 
 ## 1. Reuse before creating
 
@@ -33,7 +33,9 @@ Command actions do not template `argv`: input reaches the child only as JSON in 
 
 ## 3. Write it
 
-Work in a draft: copy `.mira` to `.mira/.drafts/<name>/` (without `.drafts`), edit there, and add the plugin path to `workspace.json` `plugins` if it is new. Field reference: [manifest](references/manifest.md). Structured output: [MPP/1 and views](references/protocol.md). Starting points: [command template](templates/command/plugin.json), [structured template](templates/structured/).
+Two ways to write it:
+- **Directly** (simplest, for one plugin): edit `.mira/plugins/<id>/plugin.json`, add the path to `.mira/workspace.json` `plugins` if it is new, then `mira validate .mira --json` and `mira reload`.
+- **As a draft** (safe when others may change the catalog at the same time): copy `workspace.json` and `plugins/` from `.mira` into `.mira/.drafts/<name>/`, edit there, then validate and apply the draft as in step 4. Delete the draft after it is applied. Field reference: [manifest](references/manifest.md). Structured output: [MPP/1 and views](references/protocol.md). Starting points: [command template](templates/command/plugin.json), [structured template](templates/structured/).
 
 Rules that matter:
 - Action IDs and view IDs share one namespace inside a plugin: an action `slowest` and a view `slowest` conflict.

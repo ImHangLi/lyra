@@ -30,7 +30,9 @@ curl -fsSL https://raw.githubusercontent.com/ImHangLi/mira/main/scripts/install.
 mira setup
 ```
 
-`mira setup` prints one command for your agent. Your agent turns the repo's commands into plugins. Then run `mira`.
+`mira setup` prints a prompt for your agent. Your agent turns the repo's commands into plugins. Then run `mira`.
+
+To write a plugin yourself, add a small `plugin.json` under `.mira/plugins/` ([format](skills/mira-extend/references/manifest.md)) and run `mira reload`.
 
 ## Use cases
 
