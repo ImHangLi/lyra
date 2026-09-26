@@ -73,7 +73,14 @@ case ":$PATH:" in
       fish) rc="$HOME/.config/fish/conf.d/lyra.fish"; line="fish_add_path \"$dir\"" ;;
       *) rc="" ;;
     esac
-    if [ -n "${LYRA_NO_MODIFY_PATH:-}" ] || [ -z "$rc" ]; then
+    # The path is written into a shell profile, so it must not contain characters a shell
+    # would interpret there.
+    case "$dir" in
+      *[\"\$\`\\]* | *"
+"*) unsafe=1 ;;
+      *) unsafe="" ;;
+    esac
+    if [ -n "${LYRA_NO_MODIFY_PATH:-}" ] || [ -z "$rc" ] || [ -n "$unsafe" ]; then
       echo "Add it to PATH:  export PATH=\"$dir:\$PATH\""
     else
       if ! grep -qsF "$line" "$rc"; then
