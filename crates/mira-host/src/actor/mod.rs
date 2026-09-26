@@ -656,7 +656,7 @@ impl Actor {
             )
             .with_next_action(
                 &["mira", "setup", "--json"],
-                "Discover project facts, then let your agent create plugins with the mira skill.",
+                "Install the agent skills, then let your agent create plugins with the mira skill.",
             )),
             ConfigState::Invalid(i) => Err(i.to_error_info()),
         }

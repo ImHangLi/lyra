@@ -50,6 +50,7 @@ python3 -m venv /tmp/mira-venv && /tmp/mira-venv/bin/pip install pyte
 
 - **Terminal apps:** Terminal.app and iTerm2 were not driven by hand, so the difference between them is not reported. All TUI numbers come from a PTY.
 - **Hardware:** only this M5 Pro was measured. There are no M2 or x86_64 numbers.
+- **Discovery removed:** the static setup scanner was removed after v0.7.0, so the discovery row above is historical.
 - **Discovery size:** it was measured on the test workspace (small). A 5000-entry/8 MiB tree was measured once in #24 at 37 ms on a debug build; it has no release percentiles. Cold-disk discovery was not measured.
 - **Cold CLI:** the cold `status` numbers include starting a new host process. An earlier run at `c654e14` had a p99 near 400 ms; this run had 62 ms. No target covers this.
 - **Load:** under the same load, a back-to-back run of 60 warm `mira status` calls measured p50 9.4 ms and p95 10.4 ms for the previous build, and p50 10.1 ms and p95 12.0 ms for v0.2.0.

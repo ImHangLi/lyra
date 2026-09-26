@@ -28,7 +28,7 @@ All commands accept `--project PATH`, `--json`, `--text`. `REF` is `plugin.item`
 | `artifacts [RUN]`, `artifacts read ID` | registered run outputs, bounded text reads |
 | `storage status [--all]`, `storage gc [--kind K] [--apply]`, `storage clear --plugin ID --kind state` | usage and retention; gc only plans without `--apply` |
 | `skills install --agent claude\|codex\|generic` | install/update these skills without overwriting edits |
-| `setup --json [--refresh]`, `doctor`, `paths`, `schema NAME` | setup facts, diagnostics, locations, JSON Schemas |
+| `setup --json [--agent KIND]`, `doctor`, `paths`, `schema NAME` | selected project and installed skills, diagnostics, locations, JSON Schemas |
 
 ## Exit codes
 

@@ -1019,7 +1019,6 @@ pub enum PathClass {
     WorkspaceConfig,
     Plugins,
     LocalConfig,
-    Discovery,
     Drafts,
     StateDb,
     FingerprintKey,
