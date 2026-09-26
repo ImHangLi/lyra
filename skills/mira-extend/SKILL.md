@@ -1,6 +1,6 @@
 ---
 name: mira-extend
-description: Create or change Mira plugins — save a one-off command as a reusable tool, add a structured table/log panel, or adjust an existing action — then validate and apply without changing the Mira Core. Use when the user wants a new or modified project tool in `.mira/`. For running and reading existing tools, use the mira skill.
+description: Create or change Mira plugins — save a one-off command as a reusable tool, add a structured table/log panel, or adjust an existing action — then validate and apply without changing Mira itself. Use when the user wants a new or modified project tool in `.mira/`. For running and reading existing tools, use the mira skill.
 ---
 
 # Extend Mira
