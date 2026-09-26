@@ -733,7 +733,7 @@ pub fn keep(ctx: &Ctx, ttl: &str) -> ExitCode {
 
 fn stop_text(d: &SessionStopData) -> String {
     match &d.stopped_session {
-        None => "no session".into(),
+        None => "Nothing is running.".into(),
         Some(id) => {
             let state = if d.session.is_some() {
                 "; stopping"
@@ -831,12 +831,41 @@ async fn stop_other_build_host(ctx: &Ctx, cx: ReplyContext, refused: ErrorInfo) 
 
 pub fn down(ctx: &Ctx, wait: bool) -> ExitCode {
     block_on(async {
-        let mut client = match ctx.client(&ConnectOptions::cli()).await {
+        let paths = match ctx.paths() {
+            Ok(p) => p,
+            Err(e) => return ctx.fail(ReplyContext::default(), e),
+        };
+        let cx = ReplyContext {
+            workspace: Some(mira_protocol::reply::WorkspaceRef {
+                id: paths.id.clone(),
+                root: paths.root.clone(),
+            }),
+            ..ReplyContext::default()
+        };
+        // Never start a host only to report that nothing runs.
+        let opts = ConnectOptions {
+            spawn: false,
+            ..ConnectOptions::cli()
+        };
+        let mut client = match mira_client::connect(&paths, &opts).await {
             Ok(c) => c,
-            Err((cx, e)) if e.code == ErrorCode::PROTOCOL_MISMATCH => {
-                return stop_other_build_host(ctx, cx, e).await;
+            Err(mira_client::ClientError::Connect(_)) => {
+                let data = SessionStopData {
+                    session: None,
+                    stopped_session: None,
+                    stopped_runs: 0,
+                };
+                let reply =
+                    PublicReply::success(cx, data, mira_protocol::reply::ReplyMeta::default());
+                return ctx.emit(&reply, |_| "Nothing is running.".to_owned());
             }
-            Err((cx, e)) => return ctx.fail(cx, e),
+            Err(e) => {
+                let e = e.to_error_info();
+                if e.code == ErrorCode::PROTOCOL_MISMATCH {
+                    return stop_other_build_host(ctx, cx, e).await;
+                }
+                return ctx.fail(cx, e);
+            }
         };
         let reply = match client
             .call::<_, SessionStopData>(Method::SessionStop, &Empty {})
