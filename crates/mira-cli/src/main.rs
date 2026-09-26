@@ -35,6 +35,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Print a raw JSON Schema: workspace, plugin, local, invocation, plugin-event, cli-reply, ipc.
+    #[command(hide = true)]
     Schema { name: String },
     /// Check a .mira draft, workspace.json, or plugin.json without running anything.
     Validate {
@@ -80,6 +81,7 @@ enum Command {
         max_bytes: Option<u32>,
     },
     /// Show where this project's config, state, logs, cache, and runtime files are.
+    #[command(hide = true)]
     Paths,
     /// Check the project, plugins, and required programs.
     Doctor,
@@ -126,6 +128,7 @@ enum Command {
         input: Option<String>,
     },
     /// Run a one-off command (not saved as a plugin).
+    #[command(hide = true)]
     Exec {
         #[arg(long)]
         label: String,
@@ -144,6 +147,7 @@ enum Command {
         ttl: String,
     },
     /// Keep the current session running in the background.
+    #[command(hide = true)]
     Keep {
         /// How long to keep it: 30m, 2h, 1d, or none.
         #[arg(long, default_value = "2h")]
@@ -231,6 +235,7 @@ enum Command {
         request_key: Option<String>,
     },
     /// Run a table row action with input taken from that row.
+    #[command(hide = true)]
     ViewAction {
         /// The table view, as plugin.view.
         #[arg(value_name = "VIEW")]
@@ -246,7 +251,7 @@ enum Command {
         expected_view_revision: u64,
     },
     /// List saved run outputs (artifacts), or read one.
-    #[command(args_conflicts_with_subcommands = true)]
+    #[command(args_conflicts_with_subcommands = true, hide = true)]
     Artifacts {
         #[arg(value_name = "RUN")]
         run: Option<String>,
@@ -254,11 +259,13 @@ enum Command {
         read: Option<ArtifactsCommand>,
     },
     /// Read the rest of a large reply.
+    #[command(hide = true)]
     Payload {
         #[command(subcommand)]
         command: PayloadCommand,
     },
     /// Apply a validated draft of .mira.
+    #[command(hide = true)]
     Apply {
         #[arg(value_name = "DRAFT_DIR")]
         draft: PathBuf,
@@ -330,11 +337,13 @@ enum Command {
         expected_screen_revision: Option<u64>,
     },
     /// Show disk use, clean up old data, or clear a plugin's state.
+    #[command(hide = true)]
     Storage {
         #[command(subcommand)]
         command: StorageCommand,
     },
     /// Install or update the agent skills in this project.
+    #[command(hide = true)]
     Skills {
         #[command(subcommand)]
         command: SkillsCommand,

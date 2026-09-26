@@ -2,6 +2,8 @@
 
 All commands accept `--project PATH`, `--json`, `--text`. `REF` is `plugin.item`; `RUN` is a run ID (`r_…`) or a unique prefix of one, such as `r_fb60aacf`; `logs`, `stop`, `terminal`, and `input` also take an action ref.
 
+`mira --help` does not list `apply`, `view-action`, `exec`, `artifacts`, `payload`, `storage`, `paths`, `skills`, `schema`, and `keep`, but they work as shown here.
+
 | Command | Notes |
 |---|---|
 | `mira` | TUI for humans (needs a TTY; otherwise `TTY_REQUIRED`) |
