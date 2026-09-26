@@ -39,7 +39,7 @@ Strict JSON: unknown fields, duplicate keys, and `null` for optional fields are 
 | `schedule` | tasks only: `{"every_ms": ≥1000, "params": {...}, "run_on_start": false}`; off until the user enables it |
 | `effects` | descriptive tags such as `read-files`, `writes-state`, `network` |
 
-The child receives `MIRA_WORKSPACE_ROOT`, `MIRA_PLUGIN_DIR`, `MIRA_STATE_DIR`, `MIRA_CACHE_DIR`, `MIRA_ARTIFACT_DIR`, `MIRA_RUN_ID`, `MIRA_INPUT_FILE` (effective input JSON), `MIRA_CONFIG_FILE`.
+The child receives `MIRA_WORKSPACE_ROOT`, `MIRA_PLUGIN_DIR`, `MIRA_STATE_DIR`, `MIRA_CACHE_DIR`, `MIRA_ARTIFACT_DIR`, `MIRA_RUN_ID`, `MIRA_INPUT_FILE` (effective input JSON), `MIRA_CONFIG_FILE`. To call Mira from a plugin, run `"$MIRA_BIN"`: it is the running `mira`, and the host also passes its own `MIRA_DATA_HOME` and `MIRA_RUNTIME_DIR` when they are set, so the call reaches the same host.
 
 ## View
 
