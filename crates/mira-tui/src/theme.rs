@@ -225,10 +225,10 @@ impl Tone {
         })
     }
 
-    /// The 16-color entry.
+    /// The 16-color entry. Accent is magenta, so brand and selection never read as errors.
     fn basic(self) -> Option<Color> {
         Some(match self {
-            Tone::Accent | Tone::AccentDeep => Color::LightRed,
+            Tone::Accent | Tone::AccentDeep => Color::Magenta,
             Tone::Sky => Color::Blue,
             Tone::Leaf => Color::Green,
             Tone::Amber => Color::Yellow,
@@ -251,6 +251,13 @@ impl Tone {
         match self {
             Tone::Sky => 68,
             t => t.indexed(Background::Dark).unwrap_or(247),
+        }
+    }
+
+    fn chip_basic(self) -> Option<Color> {
+        match self {
+            Tone::Sky => Some(Color::Cyan),
+            t => t.basic(),
         }
     }
 }
@@ -279,6 +286,7 @@ impl Theme {
         let pick = |tone: Tone, chip: bool| -> Option<Color> {
             match mode {
                 ColorMode::None => None,
+                ColorMode::Basic if chip => tone.chip_basic(),
                 ColorMode::Basic => tone.basic(),
                 ColorMode::Indexed if chip => Some(Color::Indexed(tone.chip_indexed())),
                 ColorMode::Indexed => tone.indexed(bg).map(Color::Indexed),
@@ -308,10 +316,11 @@ impl Theme {
     }
 
     /// Words in `tone`. Without a known background the middle tones are too weak for
-    /// text, so words use the default foreground.
+    /// text, so words use the default foreground; in 16 colors, amber words are bold.
     pub fn word(&self, tone: Tone) -> Style {
-        match (self.mode, self.bg) {
-            (ColorMode::Indexed | ColorMode::TrueColor, Background::Unknown) => Style::default(),
+        match (self.mode, self.bg, tone) {
+            (ColorMode::Basic, _, Tone::Amber) => self.bold(),
+            (ColorMode::Indexed | ColorMode::TrueColor, Background::Unknown, _) => Style::default(),
             _ => self.fg(tone),
         }
     }
