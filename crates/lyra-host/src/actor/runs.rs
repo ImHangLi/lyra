@@ -1291,6 +1291,7 @@ impl Actor {
             RunTarget::Run { .. } => None,
         };
         let storage = self.storage.clone();
+        let record_store = self.storage.clone();
         tokio::spawn(async move {
             let run_id = match run_id {
                 Some(id) => Some(id),
@@ -1314,6 +1315,21 @@ impl Actor {
                     err(ErrorCode::NOT_FOUND, "no run found for this target"),
                 ));
             };
+            // Logs removed by retention must not read as an empty success.
+            if log.is_none()
+                && !logs_dir.join(run_id.as_str()).exists()
+                && let Ok(storage) = &record_store
+                && let Ok(Some(rec)) = storage.get_run(run_id.clone()).await
+                && rec.log.last_seq.is_some()
+            {
+                return r.send(reply_fail(
+                                ctx,
+                                err(
+                                    ErrorCode::PAYLOAD_GONE,
+                                    format!("the logs of {run_id} were removed by retention; the run summary is kept"),
+                                ),
+                            ));
+            }
             let log = log.unwrap_or_else(|| {
                 Arc::new(Mutex::new(RunLog::open_existing(
                     logs_dir.join(run_id.as_str()),

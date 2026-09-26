@@ -19,7 +19,9 @@ use sha2::Sha256;
 use tokio::sync::{mpsc, oneshot};
 
 use super::db::Db;
-use super::{Claim, KeyClaim, OpenReport, RunFilter, StorageError, StoredView};
+use super::{
+    Claim, GcPolicy, GcSelection, KeyClaim, OpenReport, RunFilter, StorageError, StoredView,
+};
 
 /// Pending jobs beyond this make senders wait (backpressure).
 const QUEUE_DEPTH: usize = 64;
@@ -39,6 +41,9 @@ enum Job {
     LoadView(ViewRef, Reply<Option<StoredView>>),
     Status(Reply<StorageStatusData>),
     SetSchedule(ActionRef, bool, Reply<()>),
+    GcSelect(GcPolicy, i64, Vec<RunId>, Reply<GcSelection>),
+    GcApply(Box<GcSelection>, i64, Vec<RunId>, Reply<()>),
+    CleanedViews(Reply<Vec<(ViewRef, u64, i64)>>),
     ListSchedules(Reply<Vec<(ActionRef, bool)>>),
 }
 
@@ -58,6 +63,9 @@ impl Job {
             Job::LoadView(v, tx) => drop(tx.send(db.load_view(&v))),
             Job::Status(tx) => drop(tx.send(db.status())),
             Job::SetSchedule(a, e, tx) => drop(tx.send(db.set_schedule(&a, e))),
+            Job::GcSelect(p, now, active, tx) => drop(tx.send(db.gc_select(&p, now, &active))),
+            Job::GcApply(sel, now, active, tx) => drop(tx.send(db.gc_apply(&sel, now, &active))),
+            Job::CleanedViews(tx) => drop(tx.send(db.cleaned_views())),
             Job::ListSchedules(tx) => drop(tx.send(db.list_schedules())),
         }
     }
@@ -184,6 +192,27 @@ impl Storage {
     ) -> Result<(), StorageError> {
         self.call(|tx| Job::SetSchedule(action_ref, enabled, tx))
             .await
+    }
+    pub async fn gc_select(
+        &self,
+        policy: GcPolicy,
+        now_ms: i64,
+        active: Vec<RunId>,
+    ) -> Result<GcSelection, StorageError> {
+        self.call(|tx| Job::GcSelect(policy, now_ms, active, tx))
+            .await
+    }
+    pub async fn gc_apply(
+        &self,
+        selection: GcSelection,
+        now_ms: i64,
+        active: Vec<RunId>,
+    ) -> Result<(), StorageError> {
+        self.call(|tx| Job::GcApply(Box::new(selection), now_ms, active, tx))
+            .await
+    }
+    pub async fn cleaned_views(&self) -> Result<Vec<(ViewRef, u64, i64)>, StorageError> {
+        self.call(Job::CleanedViews).await
     }
     pub async fn list_schedules(&self) -> Result<Vec<(ActionRef, bool)>, StorageError> {
         self.call(Job::ListSchedules).await

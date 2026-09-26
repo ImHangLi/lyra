@@ -9,10 +9,25 @@ pub(super) struct Migration {
     pub sql: &'static str,
 }
 
-pub(super) const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: V1,
-}];
+pub(super) const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: V1,
+    },
+    Migration {
+        version: 2,
+        sql: V2,
+    },
+];
+
+/// V2: remember views removed by retention so reads say "cleaned up", not "no data".
+const V2: &str = r#"
+CREATE TABLE cleaned_views (
+    view_ref    TEXT PRIMARY KEY NOT NULL,
+    revision    INTEGER NOT NULL,
+    cleaned_at  INTEGER NOT NULL
+) STRICT;
+"#;
 
 const V1: &str = r#"
 CREATE TABLE schema_migrations (

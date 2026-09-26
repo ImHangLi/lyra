@@ -80,6 +80,8 @@ pub struct ViewStore {
     block: Option<(u64, u64)>,
     writer: Option<mpsc::UnboundedSender<StoredView>>,
     commit_waiters: Vec<(ViewRef, ViewRevision, Responder, PublishResult)>,
+    /// Views removed by retention: last revision and when (ms), so reads say "cleaned up".
+    pub cleaned: HashMap<ViewRef, (u64, i64)>,
 }
 
 fn verr(code: ErrorCode, msg: impl Into<String>) -> ErrorInfo {
@@ -243,11 +245,29 @@ struct Page<'a> {
 }
 
 impl Actor {
+    /// Retention removed these views: drop them from memory and remember the cleanup.
+    pub(super) fn views_cleaned(&mut self, views: Vec<(ViewRef, u64)>, at: i64) {
+        for (v, rev) in views {
+            let current = self.views.entries.get(&v).map(|e| e.revision.get());
+            if current.is_none_or(|c| c == rev) {
+                self.views.entries.remove(&v);
+                self.views.cleaned.insert(v, (rev, at));
+            }
+        }
+        self.state_changed();
+    }
+
     /// Loads persisted `last` views of the accepted definitions (startup only).
     pub(super) async fn init_views(&mut self) {
         let (Ok(set), Ok(storage)) = (self.accepted(), self.storage.clone()) else {
             return;
         };
+        if let Ok(cleaned) = storage.cleaned_views().await {
+            self.views.cleaned = cleaned
+                .into_iter()
+                .map(|(v, rev, at)| (v, (rev, at)))
+                .collect();
+        }
         for lp in &set.plugins {
             for def in lp
                 .plugin
@@ -837,6 +857,12 @@ impl Actor {
                 Persistence::Session => (Durability::SessionOnly, "no data in this session yet"),
                 Persistence::Last => (Durability::Unavailable, "no data has been recorded"),
             };
+            let cleaned = self.views.cleaned.get(&p.view_ref).map(|(rev, at)| {
+                format!(
+                    "cleaned up by retention at {} (last revision {rev}); this is not an empty result",
+                    lyra_protocol::time::Timestamp::from_unix_ms(*at)
+                )
+            });
             return Ok(self.ok(
                 ViewSnapshot {
                     view_ref: p.view_ref,
@@ -847,7 +873,7 @@ impl Actor {
                     source_kind: None,
                     definition_hash: def.definition_hash.clone(),
                     freshness: Freshness::Historical,
-                    freshness_reason: Some(reason.into()),
+                    freshness_reason: Some(cleaned.unwrap_or_else(|| reason.into())),
                     durability,
                     data: None,
                 },

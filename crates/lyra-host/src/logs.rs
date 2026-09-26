@@ -38,6 +38,8 @@ pub struct RunLog {
     unflushed: usize,
     last_flush: Instant,
     cap_bytes: u64,
+    /// Segment size: at most 4 MiB, and small enough that the cap is honored.
+    segment_max: u64,
     total_bytes: u64,
     ring: VecDeque<LogRecord>,
     /// Records that could not be written (IO failure); never silently zero.
@@ -78,6 +80,7 @@ impl RunLog {
             unflushed: 0,
             last_flush: Instant::now(),
             cap_bytes,
+            segment_max: SEGMENT_MAX_BYTES.min((cap_bytes / 4).max(64 * 1024)),
             total_bytes: 0,
             ring: VecDeque::new(),
             dropped: 0,
@@ -134,6 +137,7 @@ impl RunLog {
             unflushed: 0,
             last_flush: Instant::now(),
             cap_bytes: u64::MAX,
+            segment_max: SEGMENT_MAX_BYTES,
             total_bytes: 0,
             ring: VecDeque::new(),
             dropped: 0,
@@ -179,7 +183,7 @@ impl RunLog {
         let full = self
             .segments
             .back()
-            .is_none_or(|s| s.bytes >= SEGMENT_MAX_BYTES);
+            .is_none_or(|s| s.bytes >= self.segment_max);
         if full {
             if let Some(w) = self.writer.as_mut() {
                 let _ = w.flush();
