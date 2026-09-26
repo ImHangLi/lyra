@@ -3,7 +3,9 @@
 
 use std::io::{Stdout, Write};
 use std::mem::ManuallyDrop;
+use std::os::fd::AsFd;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
@@ -62,6 +64,60 @@ impl TerminalGuard {
             }
         }
     }
+}
+
+/// Asks the terminal for its background color (OSC 11) and waits at most `wait` for the
+/// reply. Call it in raw mode, before anything else reads input. A Primary Device
+/// Attributes request follows the query: every terminal answers it, in order, so a
+/// terminal without OSC 11 support ends the wait at once. Both replies are read here and
+/// never reach the key input.
+pub fn query_background(wait: Duration) -> Option<(u8, u8, u8)> {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    use rustix::io::Errno;
+
+    let mut out = std::io::stdout();
+    out.write_all(b"\x1b]11;?\x07\x1b[c").ok()?;
+    out.flush().ok()?;
+    let stdin = std::io::stdin();
+    let fd = stdin.as_fd();
+    let end = Instant::now() + wait;
+    let mut buf: Vec<u8> = Vec::with_capacity(64);
+    let mut chunk = [0u8; 128];
+    while !has_device_attributes(&buf) && buf.len() < 1024 {
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        let Ok(timeout) = Timespec::try_from(left) else {
+            break;
+        };
+        let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+        match poll(&mut fds, Some(&timeout)) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(Errno::INTR) => continue,
+            Err(_) => break,
+        }
+        match rustix::io::read(fd, &mut chunk) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(Errno::INTR | Errno::AGAIN) => continue,
+            Err(_) => break,
+        }
+    }
+    crate::theme::parse_osc11(&buf)
+}
+
+/// Whether `buf` holds a complete Primary Device Attributes reply (`ESC [ ? … c`).
+fn has_device_attributes(buf: &[u8]) -> bool {
+    buf.windows(3)
+        .position(|w| w == b"\x1b[?")
+        .is_some_and(|i| {
+            buf[i + 3..]
+                .iter()
+                .find(|b| !(b.is_ascii_digit() || **b == b';'))
+                .is_some_and(|&b| b == b'c')
+        })
 }
 
 /// Application mouse mode (§12.5); off by default so the terminal's own selection works.

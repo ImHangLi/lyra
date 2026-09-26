@@ -21,7 +21,7 @@ use crate::app::{
 };
 use crate::form::Kind;
 use crate::logs::{LogPane, cells, display, slice_cells};
-use crate::theme::{self, ColorMode, Mark, Theme, Tone};
+use crate::theme::{self, Mark, Theme, Tone};
 use crate::views::{durability_word, freshness_word, kind_word};
 
 pub const MIN_W: u16 = 60;
@@ -120,15 +120,14 @@ fn panel<'a>(t: &Theme, title: impl Into<Line<'a>>, focus: bool) -> Block<'a> {
 
 fn panel_title(t: &Theme, text: &str, focus: bool) -> Line<'static> {
     let st = if focus {
-        t.fg(Tone::Accent).add_modifier(Modifier::BOLD)
+        t.word(Tone::Accent).add_modifier(Modifier::BOLD)
     } else {
         t.bold()
     };
     Line::from(Span::styled(format!(" {text} "), st))
 }
 
-pub fn draw(f: &mut Frame, app: &mut App, mode: ColorMode) {
-    let t = Theme::new(mode);
+pub fn draw(f: &mut Frame, app: &mut App, t: &Theme) {
     let area = f.area();
     if area.width < MIN_W || area.height < MIN_H {
         let msg = vec![
@@ -142,7 +141,7 @@ pub fn draw(f: &mut Frame, app: &mut App, mode: ColorMode) {
         f.render_widget(Paragraph::new(msg), area);
         return;
     }
-    let status = status_line(app, &t);
+    let status = status_line(app, t);
     let [header, body, status_row, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
@@ -150,19 +149,19 @@ pub fn draw(f: &mut Frame, app: &mut App, mode: ColorMode) {
         Constraint::Length(1),
     ])
     .areas(area);
-    draw_header(f, app, &t, header);
+    draw_header(f, app, t, header);
     app.narrow = area.width < NARROW_W;
     app.wide = area.width >= RAIL_MIN_W;
     if app.wide {
         app.want_recent();
     }
     if app.term.is_open() {
-        crate::terminal::draw(f, &mut app.term, body, mode.enabled());
+        crate::terminal::draw(f, &mut app.term, body, t.mode.enabled());
     } else if app.narrow {
         if app.focus == Focus::Logs || app.shown_tab() == Tab::History {
-            draw_main(f, app, &t, body);
+            draw_main(f, app, t, body);
         } else {
-            draw_sidebar(f, app, &t, body);
+            draw_sidebar(f, app, t, body);
         }
     } else {
         let side_w = sidebar_width(area.width);
@@ -173,21 +172,21 @@ pub fn draw(f: &mut Frame, app: &mut App, mode: ColorMode) {
             Constraint::Length(rail_w),
         ])
         .areas(body);
-        draw_sidebar(f, app, &t, side);
-        draw_main(f, app, &t, main);
+        draw_sidebar(f, app, t, side);
+        draw_main(f, app, t, main);
         if app.wide {
-            draw_rail(f, app, &t, rail);
+            draw_rail(f, app, t, rail);
         }
     }
     if let Some(line) = status {
         f.render_widget(Paragraph::new(line), status_row);
     }
-    draw_footer(f, app, &t, footer);
+    draw_footer(f, app, t, footer);
     match &app.modal {
-        Modal::Help { .. } => draw_help(f, app, &t, area),
-        Modal::Form(_) => draw_form(f, app, &t, area),
-        Modal::Output(_) => draw_output(f, app, &t, area),
-        Modal::RowAction { .. } => draw_row_actions(f, app, &t, area),
+        Modal::Help { .. } => draw_help(f, app, t, area),
+        Modal::Form(_) => draw_form(f, app, t, area),
+        Modal::Output(_) => draw_output(f, app, t, area),
+        Modal::RowAction { .. } => draw_row_actions(f, app, t, area),
         _ => {}
     }
 }
@@ -482,7 +481,7 @@ fn session_spans(app: &App, t: &Theme) -> Vec<Span<'static>> {
         ],
         Some(s) if s.state == SessionState::Stopping => vec![
             Span::styled("◐", t.fg(Tone::Amber)),
-            Span::styled(" stopping", t.fg(Tone::Amber)),
+            Span::styled(" stopping", t.word(Tone::Amber)),
         ],
         Some(s) => {
             let until = s.expires_at.map(|e| app.clock(e, false));
@@ -500,7 +499,7 @@ fn session_spans(app: &App, t: &Theme) -> Vec<Span<'static>> {
                     if let Some(u) = until {
                         v.push(Span::styled(
                             format!(" · kept until {u}"),
-                            t.fg(Tone::Amber),
+                            t.word(Tone::Amber),
                         ));
                     }
                     v
@@ -512,7 +511,7 @@ fn session_spans(app: &App, t: &Theme) -> Vec<Span<'static>> {
                     };
                     vec![
                         Span::styled("◐", t.fg(Tone::Amber)),
-                        Span::styled(text, t.fg(Tone::Amber).add_modifier(Modifier::BOLD)),
+                        Span::styled(text, t.word(Tone::Amber).add_modifier(Modifier::BOLD)),
                     ]
                 }
             }
@@ -528,7 +527,7 @@ fn session_spans(app: &App, t: &Theme) -> Vec<Span<'static>> {
                 " · ! {warnings} warning{}",
                 if warnings == 1 { "" } else { "s" }
             ),
-            t.fg(Tone::Amber),
+            t.word(Tone::Amber),
         ));
     }
     out
@@ -563,7 +562,7 @@ fn draw_header(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         String::new()
     };
     let mut spans = vec![
-        Span::styled(brand, t.fg(Tone::Accent).add_modifier(Modifier::BOLD)),
+        Span::styled(brand, t.word(Tone::Accent).add_modifier(Modifier::BOLD)),
         Span::raw("  "),
         Span::styled(name, t.bold()),
     ];
@@ -664,7 +663,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
             }
             rows.push(Line::from(Span::styled(
                 format!(" {}", ellipsize(&group, w.saturating_sub(2))),
-                t.fg(Tone::AccentDeep).add_modifier(Modifier::BOLD),
+                t.word(Tone::AccentDeep).add_modifier(Modifier::BOLD),
             )));
             last_group = Some(group);
         }
@@ -694,7 +693,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
             ])
         } else {
             let (lead, tstyle) = if selected {
-                ("▌", t.fg(Tone::Accent).add_modifier(Modifier::BOLD))
+                ("▌", t.word(Tone::Accent).add_modifier(Modifier::BOLD))
             } else {
                 (" ", Style::default())
             };
@@ -736,7 +735,7 @@ fn empty_card(f: &mut Frame, t: &Theme, area: Rect, head: &str, hint: &str) {
     let mut lines = vec![
         Line::from(Span::styled(
             head.to_owned(),
-            t.fg(Tone::Accent).add_modifier(Modifier::BOLD),
+            t.word(Tone::Accent).add_modifier(Modifier::BOLD),
         ))
         .centered(),
         Line::from(""),
@@ -778,7 +777,7 @@ fn tabs_line(t: &Theme, labels: &[&str], shown: usize, info: &str, w: usize) -> 
         if i == shown {
             spans.push(Span::styled(
                 label,
-                t.fg(Tone::Accent)
+                t.word(Tone::Accent)
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             ));
         } else {
@@ -862,7 +861,7 @@ fn draw_main(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         Span::raw(" "),
         Span::styled(
             format!("◇ {}", a.plugin),
-            t.fg(Tone::AccentDeep).add_modifier(Modifier::BOLD),
+            t.word(Tone::AccentDeep).add_modifier(Modifier::BOLD),
         ),
     ];
     if !item.enabled {
@@ -1031,12 +1030,12 @@ fn oneoff_status(app: &App, t: &Theme, o: &OneOff) -> Vec<Span<'static>> {
     details.push(short_id(o.run_id.as_str()));
     let mut spans = vec![
         Span::styled(format!("{} ", mark.glyph), mark.style(t)),
-        Span::styled(word, mark.style(t).add_modifier(Modifier::BOLD)),
+        Span::styled(word, mark.word_style(t).add_modifier(Modifier::BOLD)),
     ];
     if let Some(c) = o.cleanup.as_ref().and_then(cleanup_word) {
         spans.push(Span::styled(
             format!("  {c}"),
-            t.fg(Tone::Rose).add_modifier(Modifier::BOLD),
+            t.word(Tone::Rose).add_modifier(Modifier::BOLD),
         ));
     }
     for d in details {
@@ -1110,7 +1109,7 @@ fn status_spans(app: &App, t: &Theme, item: &Item) -> Vec<Span<'static>> {
     let head = |word: String| -> Vec<Span<'static>> {
         vec![
             Span::styled(format!("{} ", mark.glyph), mark.style(t)),
-            Span::styled(word, mark.style(t).add_modifier(Modifier::BOLD)),
+            Span::styled(word, mark.word_style(t).add_modifier(Modifier::BOLD)),
         ]
     };
     let mut details: Vec<String> = Vec::new();
@@ -1162,7 +1161,7 @@ fn status_spans(app: &App, t: &Theme, item: &Item) -> Vec<Span<'static>> {
         if let Some(c) = l.cleanup.as_ref().and_then(cleanup_word) {
             h.push(Span::styled(
                 format!("  {c}"),
-                t.fg(Tone::Rose).add_modifier(Modifier::BOLD),
+                t.word(Tone::Rose).add_modifier(Modifier::BOLD),
             ));
         }
         h
@@ -1300,7 +1299,7 @@ fn draw_logs(
     let mut tabs = tab_bar(t, Tab::Logs, &bar, w);
     if old.is_some() {
         // Historical runs stand out: the whole bar is amber.
-        tabs = tabs.patch_style(t.fg(Tone::Amber));
+        tabs = tabs.patch_style(t.word(Tone::Amber));
     }
     f.render_widget(Paragraph::new(tabs), tabs_area);
     if p.records.is_empty()
@@ -1316,7 +1315,7 @@ fn draw_logs(
             )));
         }
         lines.push(Line::from(vec![
-            Span::styled("waiting for input", t.fg(Tone::Amber)),
+            Span::styled("waiting for input", t.word(Tone::Amber)),
             Span::styled(" · ", t.dim()),
             Span::styled("a", t.bold()),
             Span::styled(" attaches", t.dim()),
@@ -1460,7 +1459,7 @@ fn draw_history(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     match (runs, error) {
         (_, Some(e)) => lines.push(Line::from(Span::styled(
             ellipsize(&display(&format!("Cannot read run history: {e}")), w),
-            t.fg(Tone::Rose),
+            t.word(Tone::Rose),
         ))),
         (None, None) => lines.push(Line::from(Span::styled("reading…", t.dim()))),
         (Some(r), None) if r.is_empty() => {
@@ -1492,7 +1491,7 @@ fn draw_history(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
                     (
                         Style::default(),
                         m.style(t),
-                        t.fg(Tone::Rose).add_modifier(Modifier::BOLD),
+                        t.word(Tone::Rose).add_modifier(Modifier::BOLD),
                     )
                 };
                 let mut used = cells(&outcome);
@@ -1564,7 +1563,7 @@ fn draw_output_tab(
         ("✗ failed", Tone::Rose)
     };
     let mut lines: Vec<Line> = vec![Line::from(vec![
-        Span::styled(mark, t.fg(tone).add_modifier(Modifier::BOLD)),
+        Span::styled(mark, t.word(tone).add_modifier(Modifier::BOLD)),
         Span::raw("  "),
         Span::styled(
             ellipsize(&display(&res.summary), w.saturating_sub(10)),
@@ -1574,7 +1573,7 @@ fn draw_output_tab(
     if let Some(e) = &res.error {
         lines.push(Line::from(Span::styled(
             ellipsize(&display(&format!("[{}] {}", e.code, e.message)), w),
-            t.fg(Tone::Rose),
+            t.word(Tone::Rose),
         )));
     }
     let mut body: Vec<String> = Vec::new();
@@ -1665,7 +1664,7 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
             Span::raw(" "),
             Span::styled(
                 format!("◇ {}", r.plugin),
-                t.fg(Tone::AccentDeep).add_modifier(Modifier::BOLD),
+                t.word(Tone::AccentDeep).add_modifier(Modifier::BOLD),
             ),
         ],
         w,
@@ -1675,7 +1674,10 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         None => vec![Span::styled("◌ reading…", t.dim())],
         Some(m) => match m.revision {
             None => vec![
-                Span::styled("○ no data", t.fg(Tone::Amber).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "○ no data",
+                    t.word(Tone::Amber).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(
                     format!(
                         " · {} (this is not an empty result)",
@@ -1699,7 +1701,7 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                 let lines = format!(" · {n} line{}{filter}", if n == 1 { "" } else { "s" });
                 match m.freshness {
                     Freshness::Current => vec![
-                        Span::styled("● live", t.fg(Tone::Leaf).add_modifier(Modifier::BOLD)),
+                        Span::styled("● live", t.word(Tone::Leaf).add_modifier(Modifier::BOLD)),
                         Span::styled(format!(" · from {src} (running){lines}"), t.dim()),
                     ],
                     _ => {
@@ -1731,7 +1733,7 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                     Freshness::Stale => "◐",
                     Freshness::Historical => "○",
                 };
-                let st = tone.map_or(t.dim(), |c| t.fg(c));
+                let st = tone.map_or(t.dim(), |c| t.word(c));
                 // Past data names where it came from instead of the word "historical".
                 // The head says it all; the host's reason would only repeat it.
                 let (word, why, at, src) = match (m.freshness, &m.source_run_id, m.recorded_at) {
@@ -1807,7 +1809,7 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     f.render_widget(Paragraph::new(card), card_area);
     let tab = vec![Span::styled(
         format!(" {} {} ", kind_glyph(kind), capitalized(kind_word(kind))),
-        t.fg(Tone::Accent)
+        t.word(Tone::Accent)
             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
     )];
     f.render_widget(
@@ -1826,7 +1828,7 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     if let Some(e) = &p.error {
         f.render_widget(
             Paragraph::new(format!("Cannot read the view: {e}"))
-                .style(t.fg(Tone::Rose))
+                .style(t.word(Tone::Rose))
                 .wrap(ratatui::widgets::Wrap { trim: true }),
             body,
         );
@@ -1946,9 +1948,9 @@ fn draw_rail(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         None => lines.push(row("mode", "○ no session".into(), t.dim())),
         Some(s) => {
             let (mode, st) = match (s.state, s.mode) {
-                (SessionState::Stopping, _) => ("◐ stopping", t.fg(Tone::Amber)),
-                (_, SessionMode::Foreground) => ("● foreground", t.fg(Tone::Leaf)),
-                (_, SessionMode::Background) => ("◐ background", t.fg(Tone::Amber)),
+                (SessionState::Stopping, _) => ("◐ stopping", t.word(Tone::Amber)),
+                (_, SessionMode::Foreground) => ("● foreground", t.word(Tone::Leaf)),
+                (_, SessionMode::Background) => ("◐ background", t.word(Tone::Amber)),
             };
             lines.push(row("mode", mode.into(), st));
             lines.push(row(
@@ -2011,7 +2013,7 @@ fn status_line(app: &App, t: &Theme) -> Option<Line<'static>> {
             Span::styled(display(text), t.bold()),
             Span::styled("▏   ", t.fg(Tone::Accent)),
             match error {
-                Some(e) => Span::styled(display(e), t.fg(Tone::Rose)),
+                Some(e) => Span::styled(display(e), t.word(Tone::Rose)),
                 None => Span::styled(crate::cmdbar::hint(text).to_string(), t.dim()),
             },
         ],
@@ -2045,9 +2047,9 @@ fn status_line(app: &App, t: &Theme) -> Option<Line<'static>> {
             };
             let st = tone.map_or(t.dim(), |c| t.fg(c));
             let text_st = match tone {
-                Some(Tone::Rose) => st.add_modifier(Modifier::BOLD),
+                Some(Tone::Rose) => t.word(Tone::Rose).add_modifier(Modifier::BOLD),
                 Some(Tone::Sky | Tone::Leaf) | None => Style::default(),
-                _ => st,
+                Some(c) => t.word(c),
             };
             vec![
                 Span::raw(" "),
@@ -2181,7 +2183,7 @@ fn help_lines(app: &App, t: &Theme, avail: usize) -> (Vec<Line<'static>>, usize)
     let mut lines = vec![
         Line::from(Span::styled(
             "Keys that work here",
-            t.fg(Tone::Accent).add_modifier(Modifier::BOLD),
+            t.word(Tone::Accent).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
@@ -2335,7 +2337,7 @@ fn draw_form(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         };
         let (lst, vst) = if focused {
             (
-                t.fg(Tone::Accent).add_modifier(Modifier::BOLD),
+                t.word(Tone::Accent).add_modifier(Modifier::BOLD),
                 t.selected(),
             )
         } else {
@@ -2363,7 +2365,7 @@ fn draw_form(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         if let Some(e) = &fl.error {
             lines.push(Line::from(Span::styled(
                 slice_cells(&display(&format!("    ✗ {e}")), 0, inner_w),
-                t.fg(Tone::Rose).add_modifier(Modifier::BOLD),
+                t.word(Tone::Rose).add_modifier(Modifier::BOLD),
             )));
         }
     }
@@ -2371,7 +2373,7 @@ fn draw_form(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     if let Some(e) = &form.error {
         foot.push(Line::from(Span::styled(
             slice_cells(&display(e), 0, inner_w),
-            t.fg(Tone::Rose).add_modifier(Modifier::BOLD),
+            t.word(Tone::Rose).add_modifier(Modifier::BOLD),
         )));
     }
     foot.push(Line::from(Span::styled(
@@ -2430,9 +2432,9 @@ fn draw_output(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         .collect();
     clear_around(f, rect, area);
     let title_style = if o.failed {
-        t.fg(Tone::Rose).add_modifier(Modifier::BOLD)
+        t.word(Tone::Rose).add_modifier(Modifier::BOLD)
     } else {
-        t.fg(Tone::Accent).add_modifier(Modifier::BOLD)
+        t.word(Tone::Accent).add_modifier(Modifier::BOLD)
     };
     let mark = if o.failed { "✗ " } else { "" };
     f.render_widget(

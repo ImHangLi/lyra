@@ -1,8 +1,10 @@
 //! The TUI palette and state glyphs. Colors come from the product illustrations (terracotta
-//! roofs, sky, leaves, warm stone). Truecolor terminals get the exact tones, other terminals
-//! the nearest 256-color or 16-color entry, and `NO_COLOR` gets none. Text never sits in pure
-//! white or black on the default background, so it reads on light and dark themes; secondary
-//! text uses the DIM modifier. State is never shown by color alone: see [`Mark`].
+//! roofs, sky, leaves, warm stone). The tones depend on the terminal background (see
+//! [`Background`]). When the background is unknown, a middle set that passes as marks on
+//! light and dark alike is used, and colored words fall back to the default foreground.
+//! Truecolor terminals get the exact tones, other terminals the nearest 256-color or
+//! 16-color entry, and `NO_COLOR` gets none. Secondary text uses the DIM modifier. State
+//! is never shown by color alone: see [`Mark`].
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -39,6 +41,85 @@ impl ColorMode {
     }
 }
 
+/// The terminal background, as far as Mira can tell.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Background {
+    Light,
+    Dark,
+    Unknown,
+}
+
+impl Background {
+    /// `MIRA_THEME=light|dark`; any other value means "detect".
+    pub fn from_override(v: Option<&str>) -> Option<Self> {
+        match v?.trim().to_ascii_lowercase().as_str() {
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+
+    /// Light when black text has more contrast on the color than white text has.
+    pub fn from_rgb(rgb: (u8, u8, u8)) -> Self {
+        let l = luminance(rgb);
+        if contrast_l(l, 0.0) > contrast_l(l, 1.0) {
+            Self::Light
+        } else {
+            Self::Dark
+        }
+    }
+
+    /// `COLORFGBG` (`fg;bg` or `fg;other;bg`): the last field is an ANSI color index.
+    pub fn from_colorfgbg(v: Option<&str>) -> Option<Self> {
+        let bg: u8 = v?.rsplit(';').next()?.trim().parse().ok()?;
+        match bg {
+            7 | 9..=15 => Some(Self::Light),
+            0..=6 | 8 => Some(Self::Dark),
+            _ => None,
+        }
+    }
+}
+
+/// Parses an OSC 11 reply (`ESC ] 11 ; rgb:RRRR/GGGG/BBBB` ended by BEL or ST) found
+/// anywhere in `buf`. Each channel has 1 to 4 hex digits.
+pub fn parse_osc11(buf: &[u8]) -> Option<(u8, u8, u8)> {
+    let start = buf.windows(5).position(|w| w == b"\x1b]11;")? + 5;
+    let rest = &buf[start..];
+    let end = rest.iter().position(|&b| b == 0x07 || b == 0x1b)?;
+    let body = std::str::from_utf8(&rest[..end]).ok()?;
+    let spec = body
+        .strip_prefix("rgb:")
+        .or_else(|| body.strip_prefix("rgba:"))?;
+    let mut parts = spec.split('/').map(|p| {
+        let n = p.len();
+        if !(1..=4).contains(&n) {
+            return None;
+        }
+        let v = u32::from_str_radix(p, 16).ok()?;
+        let max = (1u32 << (4 * n)) - 1;
+        u8::try_from((v * 255 + max / 2) / max).ok()
+    });
+    Some((parts.next()??, parts.next()??, parts.next()??))
+}
+
+/// WCAG 2.2 relative luminance of an sRGB color.
+pub fn luminance((r, g, b): (u8, u8, u8)) -> f64 {
+    let lin = |c: u8| {
+        let c = f64::from(c) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+fn contrast_l(a: f64, b: f64) -> f64 {
+    let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
 /// A named tone of the palette.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tone {
@@ -59,15 +140,19 @@ pub enum Tone {
 }
 
 impl Tone {
-    fn rgb(self) -> (u8, u8, u8) {
-        match self {
-            Tone::Accent => (0xF2, 0x6B, 0x3A),
-            Tone::AccentDeep => (0xC8, 0x5A, 0x30),
-            Tone::Sky => (0x3B, 0x82, 0xC4),
-            Tone::Leaf => (0x4F, 0x9D, 0x5B),
-            Tone::Amber => (0xD9, 0x9A, 0x2B),
-            Tone::Rose => (0xD9, 0x53, 0x4F),
-            Tone::Ink => (0x1C, 0x1C, 0x1C),
+    fn rgb(self, bg: Background) -> (u8, u8, u8) {
+        match (self, bg) {
+            // Marks that pass 3:1 on light and dark backgrounds alike.
+            (Tone::Accent, Background::Unknown) => (0xEC, 0x4A, 0x10),
+            (Tone::Leaf, Background::Unknown) => (0x4A, 0x93, 0x55),
+            (Tone::Amber, Background::Unknown) => (0xAE, 0x7A, 0x1F),
+            (Tone::Accent, _) => (0xF2, 0x6B, 0x3A),
+            (Tone::AccentDeep, _) => (0xC8, 0x5A, 0x30),
+            (Tone::Sky, _) => (0x3B, 0x82, 0xC4),
+            (Tone::Leaf, _) => (0x4F, 0x9D, 0x5B),
+            (Tone::Amber, _) => (0xD9, 0x9A, 0x2B),
+            (Tone::Rose, _) => (0xD9, 0x53, 0x4F),
+            (Tone::Ink, _) => (0x1C, 0x1C, 0x1C),
         }
     }
 
@@ -110,15 +195,16 @@ pub fn nearest_256(r: u8, g: u8, b: u8) -> u8 {
 
 pub struct Theme {
     pub mode: ColorMode,
+    pub bg: Background,
 }
 
 impl Theme {
-    pub fn new(mode: ColorMode) -> Self {
-        Self { mode }
+    pub fn new(mode: ColorMode, bg: Background) -> Self {
+        Self { mode, bg }
     }
 
     pub fn color(&self, tone: Tone) -> Option<Color> {
-        let (r, g, b) = tone.rgb();
+        let (r, g, b) = tone.rgb(self.bg);
         match self.mode {
             ColorMode::None => None,
             ColorMode::Basic => Some(tone.basic()),
@@ -130,6 +216,15 @@ impl Theme {
     pub fn fg(&self, tone: Tone) -> Style {
         self.color(tone)
             .map_or(Style::default(), |c| Style::default().fg(c))
+    }
+
+    /// Words in `tone`. Without a known background the middle tones are too weak for
+    /// text, so words use the default foreground.
+    pub fn word(&self, tone: Tone) -> Style {
+        match (self.mode, self.bg) {
+            (ColorMode::Indexed | ColorMode::TrueColor, Background::Unknown) => Style::default(),
+            _ => self.fg(tone),
+        }
     }
 
     pub fn bold(&self) -> Style {
@@ -179,8 +274,14 @@ impl Mark {
         Self { glyph, word, tone }
     }
 
+    /// The glyph's style.
     pub fn style(&self, t: &Theme) -> Style {
         self.tone.map_or(t.dim(), |c| t.fg(c))
+    }
+
+    /// The word's style.
+    pub fn word_style(&self, t: &Theme) -> Style {
+        self.tone.map_or(t.dim(), |c| t.word(c))
     }
 }
 
