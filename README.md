@@ -1,15 +1,33 @@
-# Lyra
+<p align="center">
+  <img src=".github/assets/lyra-hero.png" alt="Lyra" width="100%">
+</p>
 
-**Lyra is an agent-native, fully customizable control plane for your development workflow.**
+<h1 align="center">Lyra</h1>
 
-See it, keep it, reuse it. You and your coding agent run, watch, and extend the same project tools from one place: you use a terminal workbench, the agent uses a structured CLI, and both drive the same host, runs, logs, and views. When a one-off command finally works, the agent saves it as a plugin, and the next agent finds and reuses it instead of rediscovering it.
+<h3 align="center">You and your agent, on the same page.</h3>
 
-- **One host per workspace.** Start the dev server from the TUI; your agent reads the same run's logs and stops it. No duplicate instances, no hidden shells.
-- **Plugins are just files.** A `plugin.json` with commands, or a small script that prints typed tables, logs, and trees. New tools never need a Lyra rebuild.
-- **Bounded, honest history.** Results keep their source run, time, and definition, and say when they are historical or stale.
-- **No AI inside.** The Core runs no models and sends no telemetry. Your existing agent does setup and extension through the bundled skills.
+<p align="center">
+  <a href="https://github.com/ImHangLi/lyra/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/ImHangLi/lyra?style=flat-square&color=f26b3a"></a>
+  <img alt="Platform" src="https://img.shields.io/badge/macOS-arm64-f26b3a?style=flat-square">
+</p>
 
-macOS on Apple Silicon (arm64). Status: MVP, [latest release](https://github.com/ImHangLi/lyra/releases/latest). What was verified, and what was not, is in [docs/verification/mvp.md](docs/verification/mvp.md).
+---
+
+Your agents do the work. You still have to find it, check it, and explain it again tomorrow.
+
+**Lyra gives you and your agents one shared place to run your work, and it remembers what worked.**
+
+<p align="center"><img src=".github/assets/lyra-architecture.png" alt="How Lyra works: the human uses the TUI and agents use the CLI. Both talk to one Lyra host per workspace over LIPC/1 (JSON-RPC 2.0 on a Unix socket) and receive stream events. The host owns runs (pipe or PTY), plugins (LPP/1 JSONL), a SQLite ledger in WAL mode, and typed views (table, tree, log, text, JSON)." width="100%"></p>
+
+## What it fixes
+
+| The pain | With Lyra |
+|---|---|
+| **You can't tell which terminal tab is the dev server.** | **One screen shows every run, its status, and its logs.** |
+| **Your agent says it worked, but you can't see it.** | **You and your agent watch the same run, and either of you can stop it.** |
+| **You explain last week's fix to your agent again.** | **The command that worked is saved, and the next agent finds it.** |
+| **Every morning, you walk your agent through the same Slack updates and contractor follow-ups.** | **Your agent saves the routine once. Tomorrow, you press `Enter`.** |
+| **Every new video means the same export and caption steps, one prompt at a time.** | **The steps become one saved tool. Pick the file and run it.** |
 
 ## Install
 
@@ -17,53 +35,14 @@ macOS on Apple Silicon (arm64). Status: MVP, [latest release](https://github.com
 curl -fsSL https://raw.githubusercontent.com/ImHangLi/lyra/main/scripts/install.sh | sh
 ```
 
-The installer puts one native binary in `~/.lyra/bin` (no sudo, no Node), verifies its SHA-256 checksum, and never replaces a `lyra` it did not install. From source: `cargo build --release --locked` (Rust toolchain pinned in `rust-toolchain.toml`).
+Then tell your agent:
 
-## For agents
-
-Give your agent this instruction in the project you want to set up:
-
-> Set up Lyra for this repository. Run `lyra skills install --agent claude` (or `codex`/`generic`), then follow the installed `lyra` skill: run `lyra setup --json`, read the project's docs and scripts, create a few plugins for the real dev commands, validate and apply them, verify one, and tell me what is ready and what is not.
-
-If your agent cannot load skills dynamically, have it read `.agents/skills/lyra/SKILL.md` directly. To add a tool later, ask for it in plain words; the `lyra-extend` skill saves it as a plugin and checks that the TUI and CLI both see it.
-
-## For humans
-
-Open `lyra` in the project. Move with `j`/`k`, run or start with `Enter`/`s`, read logs with `Tab`, and press `?` for every key. Closing the last window stops the work it owns; press `b` first to keep it running in the background (default 2 hours, or until `lyra down`).
-
-## Quick start
-
-```sh
-cd your-project
-lyra skills install --agent claude   # or codex / generic
-# ask your agent: "Set up Lyra for this repository."
-lyra                                 # open the workbench
+```text
+Set up Lyra for this repo: run `lyra skills install --agent claude`, then follow the `lyra` skill.
 ```
 
-After setup, the agent and you use the same tools:
+It reads your project and saves your real commands as plugins. Run `lyra` to open the workbench.
 
-```sh
-lyra catalog                 # what this project can run
-lyra run dev.backend-test    # run a task and wait for its result
-lyra start dev.backend       # start a service (needs an open `lyra` or `lyra up --background`)
-lyra logs dev.backend --follow  # the same logs the workbench shows
-lyra stop dev.backend
-```
+**No AI inside.** Lyra runs no models and sends no telemetry. Everything stays on your machine.
 
-Tool names come from your plugins; these are from the FastAPI example. [examples/](examples/) has real plugin sets that agents wrote for the [FastAPI full-stack template](examples/fastapi-full-stack-template) and [Outline](examples/outline).
-
-## Layout
-
-| Path | Contents |
-|---|---|
-| `crates/lyra-protocol` | IDs, wire DTOs, validated domain types, errors, JSON Schemas |
-| `crates/lyra-host` | Workspace host: actor, runners, SQLite ledger, socket server |
-| `crates/lyra-client` | Typed client shared by CLI and TUI |
-| `crates/lyra-tui` | Terminal workbench |
-| `crates/lyra-discovery` | Static project facts for setup (never executes the project) |
-| `crates/lyra-cli` | The `lyra` binary |
-| `skills/` | Bundled agent skills (`lyra`, `lyra-extend`) |
-| `examples/` | Real plugin sets written by agents during setup |
-| `tests/fixtures/workspace` | Test workspace for CI, the contract check, and performance scripts |
-| `schemas/` | Generated JSON Schemas; `scripts/check-contract.sh` checks drift |
-
+<p align="center"><sub><a href="examples/">Examples</a> · <a href="docs/verification/mvp.md">What we verified</a></sub></p>
