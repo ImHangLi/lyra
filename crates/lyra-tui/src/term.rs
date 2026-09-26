@@ -6,7 +6,9 @@ use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::cursor::{Hide, Show};
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -23,7 +25,13 @@ pub fn restore() {
     if ACTIVE.swap(false, Ordering::SeqCst) {
         let mut out = std::io::stdout();
         let _ = disable_raw_mode();
-        let _ = execute!(out, DisableBracketedPaste, LeaveAlternateScreen, Show);
+        let _ = execute!(
+            out,
+            DisableMouseCapture,
+            DisableBracketedPaste,
+            LeaveAlternateScreen,
+            Show
+        );
         let _ = out.flush();
     }
 }
@@ -54,6 +62,16 @@ impl TerminalGuard {
             }
         }
     }
+}
+
+/// Application mouse mode (§12.5); off by default so the terminal's own selection works.
+pub fn set_mouse(on: bool) {
+    let mut out = std::io::stdout();
+    let _ = if on {
+        execute!(out, EnableMouseCapture)
+    } else {
+        execute!(out, DisableMouseCapture)
+    };
 }
 
 impl Drop for TerminalGuard {

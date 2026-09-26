@@ -5,18 +5,21 @@
 //!   host learns that this TUI left.
 //! - read: an observer connection for describe, logs, and run history, so a slow read never
 //!   queues in front of a stop.
-//! - stream: `state` and `log` events; re-subscribes after a reset.
+//! - stream: `state`, `log`, and `view` events; re-subscribes after a reset.
 
 use std::time::Duration;
 
 use lyra_client::{Client, ClientError, ConnectOptions, connect};
 use lyra_protocol::error::{ErrorCode, ErrorInfo};
-use lyra_protocol::ids::{ActionRef, CatalogRevision, RunId, SessionId};
+use lyra_protocol::ids::{
+    ActionId, ActionRef, CatalogRevision, RunId, SessionId, ViewRef, ViewRevision,
+};
 use lyra_protocol::ipc::*;
 use lyra_protocol::manifest::{JsonObject, TimeoutWire};
 use lyra_protocol::paths::WorkspacePaths;
 use lyra_protocol::reply::{PublicReply, ReplyMeta};
 use lyra_protocol::run::RunRecord;
+use lyra_protocol::view::{ViewBody, ViewData, ViewSnapshot};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -28,6 +31,8 @@ const TAIL_LIMIT: u32 = 500;
 const TAIL_BYTES: u32 = 256 * 1024;
 /// A subscription must confirm with `ready` within this time.
 const READY_TIMEOUT: Duration = Duration::from_secs(3);
+/// View pages use the largest reply budget so text, tree, and JSON views arrive inline.
+const VIEW_PAGE_BYTES: u32 = 256 * 1024;
 
 pub enum Control {
     Invoke {
@@ -39,6 +44,17 @@ pub enum Control {
         run_id: RunId,
     },
     Keep,
+    /// A table row action bound to the revision the user chose the row in.
+    ViewAction {
+        view_ref: ViewRef,
+        action: ActionId,
+        row: String,
+        expected: ViewRevision,
+    },
+    Schedule {
+        action_ref: ActionRef,
+        enabled: bool,
+    },
 }
 
 pub enum Read {
@@ -52,6 +68,16 @@ pub enum Read {
     RunGet(RunId),
     Recent,
     Catalog,
+    /// Every page of a view's current revision.
+    View(ViewRef),
+    DescribeView(ViewRef),
+    /// Full status, for schedules (state events do not carry them).
+    Status,
+}
+
+pub struct ViewLoad {
+    pub snapshot: ViewSnapshot,
+    pub truncated: bool,
 }
 
 pub struct LogChunk {
@@ -85,6 +111,12 @@ pub enum Event {
     Signal(&'static str),
     /// Facts from the attached PTY view's worker.
     Terminal(crate::terminal::Msg),
+    View(ViewRef, Result<Box<ViewLoad>, ErrorInfo>),
+    ViewDescribed(ViewRef, Result<Box<ItemDescription>, ErrorInfo>),
+    ViewActed(ViewRef, ActionId, Result<InvokeAccepted, ErrorInfo>),
+    ScheduleSet(ActionRef, Result<ScheduleData, ErrorInfo>),
+    Status(Result<Box<StatusData>, ErrorInfo>),
+    CommandDone(crate::cmdbar::Output),
 }
 
 pub type Tx = UnboundedSender<Event>;
@@ -196,6 +228,45 @@ pub async fn control_worker(
                 let res = call::<_, StopAccepted>(&mut client, Method::RunStop, &params).await;
                 let lost = matches!(res, Err(Failure::Lost(_)));
                 let _ = tx.send(Event::Stopped(
+                    action_ref,
+                    res.map(|a| a.data).map_err(|f| f.info()),
+                ));
+                lost
+            }
+            Control::ViewAction {
+                view_ref,
+                action,
+                row,
+                expected,
+            } => {
+                let params = ViewActionParams {
+                    view_ref: view_ref.clone(),
+                    action: action.clone(),
+                    row,
+                    expected_view_revision: expected,
+                    client_env: env.clone(),
+                };
+                let res = call::<_, InvokeAccepted>(&mut client, Method::ViewAction, &params).await;
+                let lost = matches!(res, Err(Failure::Lost(_)));
+                let _ = tx.send(Event::ViewActed(
+                    view_ref,
+                    action,
+                    res.map(|a| a.data).map_err(|f| f.info()),
+                ));
+                lost
+            }
+            Control::Schedule {
+                action_ref,
+                enabled,
+            } => {
+                let params = ScheduleSetParams {
+                    action_ref: action_ref.clone(),
+                    enabled,
+                    client_env: env.clone(),
+                };
+                let res = call::<_, ScheduleData>(&mut client, Method::ScheduleSet, &params).await;
+                let lost = matches!(res, Err(Failure::Lost(_)));
+                let _ = tx.send(Event::ScheduleSet(
                     action_ref,
                     res.map(|a| a.data).map_err(|f| f.info()),
                 ));
@@ -323,6 +394,35 @@ pub async fn read_worker(
                 }
                 let _ = tx.send(Event::Recent(res.map_err(|f| f.info())));
             }
+            Read::View(view_ref) => {
+                let res = read_view(&mut client, &view_ref).await;
+                if let Err(f) = &res {
+                    note(f);
+                }
+                let _ = tx.send(Event::View(view_ref, res.map_err(|f| f.info())));
+            }
+            Read::DescribeView(view_ref) => {
+                let params = ItemDescribeParams {
+                    item_ref: view_ref.to_item_ref(),
+                    include_schema: false,
+                };
+                let res = call::<_, ItemDescription>(&mut client, Method::ItemDescribe, &params)
+                    .await
+                    .map(|a| Box::new(a.data));
+                if let Err(f) = &res {
+                    note(f);
+                }
+                let _ = tx.send(Event::ViewDescribed(view_ref, res.map_err(|f| f.info())));
+            }
+            Read::Status => {
+                let res = call::<_, StatusData>(&mut client, Method::WorkspaceStatus, &Empty {})
+                    .await
+                    .map(|a| Box::new(a.data));
+                if let Err(f) = &res {
+                    note(f);
+                }
+                let _ = tx.send(Event::Status(res.map_err(|f| f.info())));
+            }
             Read::Catalog => {
                 let res =
                     call::<_, CatalogList>(&mut client, Method::CatalogListM, &catalog_params())
@@ -355,6 +455,64 @@ pub async fn read_worker(
     }
 }
 
+/// Reads all pages of one revision (tables ≤10000 rows). A revision change between pages
+/// (VIEW_CHANGED on the cursor) restarts from the first page, at most three times.
+async fn read_view(client: &mut Client, view_ref: &ViewRef) -> Result<Box<ViewLoad>, Failure> {
+    let mut attempts = 0;
+    'restart: loop {
+        attempts += 1;
+        let mut cursor: Option<String> = None;
+        let mut first: Option<ViewSnapshot> = None;
+        loop {
+            let params = ViewReadParams {
+                view_ref: view_ref.clone(),
+                cursor: cursor.clone(),
+                limit: Some(1000),
+                max_bytes: Some(VIEW_PAGE_BYTES),
+            };
+            let page = match call::<_, ViewSnapshot>(client, Method::ViewRead, &params).await {
+                Ok(p) => p,
+                Err(Failure::Reply(e)) if e.code == ErrorCode::VIEW_CHANGED && attempts < 3 => {
+                    continue 'restart;
+                }
+                Err(f) => return Err(f),
+            };
+            let next = page.meta.next_cursor.clone();
+            let truncated = page.meta.truncated && next.is_none();
+            let snap = page.data;
+            match &mut first {
+                None => first = Some(snap),
+                Some(acc) => match (&mut acc.data, snap.data) {
+                    (
+                        Some(ViewBody::Inline(ViewData::Table { rows, .. })),
+                        Some(ViewBody::Inline(ViewData::Table { rows: more, .. })),
+                    ) => rows.extend(more),
+                    (
+                        Some(ViewBody::Inline(ViewData::Log { items })),
+                        Some(ViewBody::Inline(ViewData::Log { items: more })),
+                    ) => items.extend(more),
+                    _ => {}
+                },
+            }
+            match next {
+                Some(c) => cursor = Some(c),
+                None => {
+                    let Some(snapshot) = first else {
+                        return Err(Failure::Reply(ErrorInfo::new(
+                            ErrorCode::INTERNAL,
+                            "empty view reply",
+                        )));
+                    };
+                    return Ok(Box::new(ViewLoad {
+                        snapshot,
+                        truncated,
+                    }));
+                }
+            }
+        }
+    }
+}
+
 pub fn catalog_params() -> CatalogListParams {
     CatalogListParams {
         query: None,
@@ -367,7 +525,7 @@ pub fn catalog_params() -> CatalogListParams {
 
 async fn subscribe(client: &mut Client) -> Result<(), Failure> {
     let params = StreamSubscribeParams {
-        kinds: vec![StreamKind::State, StreamKind::Log],
+        kinds: vec![StreamKind::State, StreamKind::Log, StreamKind::View],
         refs: vec![],
         cursor: None,
     };
