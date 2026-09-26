@@ -41,7 +41,7 @@ Performance numbers are in [performance.md](performance.md). Real-project record
 | UI-02 | partial | #28 | A pinned log stays put during a flood, and copy is exact. Checked in a PTY with an xterm emulator (pyte). **not-run:** copy and scroll in a real macOS terminal |
 | UI-03 | pass | #30 | CJK, emoji, long lines, and resizes render without broken characters |
 | UI-04 | pass | #28, #30 | 60×18, 80×24, and 120×40 are usable; smaller windows recover |
-| UI-05 | partial | #30 | Mouse on and off match the help in an emulated PTY. **not-run:** native selection in Terminal.app or iTerm2 by hand |
+| UI-05 | partial | #30 | Mouse on and off match the help in an emulated PTY. The TUI was also driven in real Terminal.app and Ghostty windows before v0.2.0 (see Remaining limits). **not-run:** native selection and copy by hand |
 | PTY-01 | pass | #29 | Esc and Ctrl-C reach the child; Ctrl-] detaches; paste arrives once |
 | PTY-02 | pass | #29 | Input lock, INPUT_BUSY, release on disconnect, stale screen revision rejected |
 | PTY-03 | pass | #29 | Only the lock holder resizes; alternate screen handled |
@@ -55,7 +55,7 @@ Performance numbers are in [performance.md](performance.md). Real-project record
 | CONFIG-01 | pass | #26 | Of two concurrent applies, one succeeds and one gets REVISION_CONFLICT |
 | CONFIG-02 | pass | #26 | Invalid or partial disk config blocks new invokes; `reload` recovers |
 | CONFIG-03 | pass | #26 | A changed or disabled definition never restarts a run; it can still be stopped |
-| AGENT-01 | pass | #33, #34 | Real agent (Claude) setup on FastAPI, including a run. On Outline the setup was checked for structure only |
+| AGENT-01 | pass | #33, #34, [onboarding](onboarding.md) | Real agent setup with Claude (FastAPI, the Lyra template, saas-starter), Codex (the Lyra template), and a generic agent (Flask). On Outline the setup was checked for structure only |
 | AGENT-02 | pass | #33, #34 | A new agent session reuses the existing tool |
 | AGENT-03 | pass | #33 | The agent added a structured plugin with no Core change |
 | AGENT-04 | pass | #31 | Reads are bounded by default and scoped to the run |
@@ -68,10 +68,11 @@ Performance numbers are in [performance.md](performance.md). Real-project record
 
 ## Remaining limits
 
+- **Real terminals (partial):** before v0.2.0 the TUI ran in real Terminal.app and Ghostty (200x59) windows. A small proxy passed the output through to the window and typed scripted keys. Only the Lyra window was captured.
+  - Checked: the home screen, a running service with live logs, the run history, help, search, and the terminal restore on quit. After SIGTERM in Terminal.app, `stty` showed `icanon isig echo`.
+  - Not run: native text selection and copy by hand. iTerm2 is not installed.
 - **Not run:**
   - A real OS sleep and wake. It needs the machine to sleep and a physical wake. The TTL logic was checked with shortened TTLs (LIFE-02).
-  - Terminal.app and iTerm2 by hand. The agent could not drive or capture a real window: Terminal automation waits for an Automation permission prompt, `screencapture` has no Screen Recording permission, and iTerm2 is not installed. The TUI was checked in a real PTY with an xterm emulator instead.
-  - Outline startup. The Docker engine on the verification machine returned HTTP 500 for every API call, and a full Outline install needs several GB of dependencies.
-  - Agent setup with Codex or a generic agent. `skills install --agent codex` and `--agent generic` write the skills to `.agents/skills`, but a headless agent run was not permitted in this environment. Setup and reuse were verified with Claude only.
+  - Outline startup. A full Outline install needs several GB of dependencies. Docker itself now works: the FastAPI Compose services start and stop through Lyra with their volumes kept.
 - **Out of scope:** the x86_64 build and M2 hardware. Every target machine is Apple Silicon M3 or later.
-- **Few automated tests:** the owner authorized a small set after the release review. They cover the fixes in #43 and the process-group ledger: bounded log tails, env-file errors that hide values, `input --text` parsing, and never signalling a mismatched process. CI runs them. The other evidence is the recorded live runs, CI, and `scripts/check-contract.sh`.
+- **Few automated tests:** the owner authorized a small, focused set after the release review; CI runs them (23 at v0.2.0). They cover bounded log tails, escape stripping, env-file errors that hide values, `input --text` parsing, process-group identity, catalog and TUI search ranking, discovery exclusions, and several TUI behaviors. The other evidence is the recorded live runs, CI, and `scripts/check-contract.sh`.

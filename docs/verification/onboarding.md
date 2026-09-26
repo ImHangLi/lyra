@@ -14,6 +14,18 @@ Results use four labels: **pass**, **fail**, **blocked**, and **not-run**. "Stru
 
 The plugins the agents generated are kept as examples in `examples/` (drafts, discovery caches, and personal files excluded).
 
+## Real repositories before v0.2.0
+
+Agents set up Lyra on these repositories by following the installed skills literally. They used the v0.1.1 build plus the fixes that were not yet released. Their findings were fixed in #48, #49, and #50.
+
+| Project | Agent | Setup time | Tools | Verified live |
+|---|---|---|---|---|
+| Lyra's shared template (Next.js 16, Bun, Prisma/SQLite, Vitest), local clone | Claude, skills loaded | about 6 min | 14, including a command plugin saved from `lyra exec` and a structured SQLite table | install, 15 tests, lint, typecheck, `db push`, dev server (`GET /` 200) |
+| Same template, fresh clone | Codex 0.157, headless in its `workspace-write` sandbox | one run | 6 (`dev.server`, `checks.test`, `checks.lint`, `checks.format`, `db.generate`, `db.studio`) | 15 tests passed; bad input rejected. Not ready: `.env` was missing, and the sandbox blocked the Prisma cache |
+| [nextjs/saas-starter](https://github.com/nextjs/saas-starter) (Next.js, Postgres, Drizzle) | Claude, skills loaded | about 6 min | 10, including a structured routes table | Postgres through Compose, migration, `next dev` (`/` 200), stop with cleanup |
+| [pallets/flask](https://github.com/pallets/flask) | generic agent that reads `.agents/skills/lyra/SKILL.md` | about 2 min to the first tools | 11, including a pytest report table with a row action | tests, a failing test (exit 5 and a readable traceback), an example app as a service |
+
+
 ## Use cases
 
 | Check | Persona | Result | Evidence |
