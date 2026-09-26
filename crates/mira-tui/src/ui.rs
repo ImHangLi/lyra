@@ -1759,6 +1759,8 @@ fn status_line(app: &App, t: &Theme) -> Option<Line<'static>> {
             let (glyph, text, tone) = if let Some(n) = &app.notice {
                 if n.error {
                     ("✗", n.text.clone(), Some(Tone::Rose))
+                } else if n.ok {
+                    ("✓", n.text.clone(), Some(Tone::Leaf))
                 } else {
                     ("›", n.text.clone(), Some(Tone::Sky))
                 }
@@ -1788,7 +1790,7 @@ fn status_line(app: &App, t: &Theme) -> Option<Line<'static>> {
             let st = tone.map_or(t.dim(), |c| t.fg(c));
             let text_st = match tone {
                 Some(Tone::Rose) => st.add_modifier(Modifier::BOLD),
-                Some(Tone::Sky) | None => Style::default(),
+                Some(Tone::Sky | Tone::Leaf) | None => Style::default(),
                 _ => st,
             };
             vec![
