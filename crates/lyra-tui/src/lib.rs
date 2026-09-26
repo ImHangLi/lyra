@@ -14,6 +14,7 @@ mod ipc;
 mod logs;
 mod term;
 mod terminal;
+mod theme;
 mod ui;
 mod views;
 
@@ -136,7 +137,7 @@ async fn serve(paths: WorkspacePaths, offset: time::UtcOffset) -> Result<TuiEnd,
     })?;
     spawn_input(tx.clone());
 
-    let color = std::env::var_os("NO_COLOR").is_none();
+    let color = theme::ColorMode::detect();
     let mut last_draw = Instant::now() - FRAME_GAP;
     let mut dirty = true;
     let mut urgent = true;
