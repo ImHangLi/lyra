@@ -24,9 +24,14 @@ use crate::terminal::Terminals;
 use crate::views::ViewPane;
 
 const MAX_PANES: usize = 8;
+/// Errors stay this long; other notices are transient and go sooner.
 const NOTICE_SECS: u64 = 8;
+const INFO_SECS: u64 = 4;
 /// The header's git branch is read again at most this often (or on a focus change).
 const BRANCH_SECS: u64 = 3;
+/// Open views whose metadata can still change (a save in progress, or a producing run
+/// that ended) are read again at most this often.
+const VIEW_POLL_MS: u128 = 1000;
 
 pub struct Item {
     pub action_ref: ActionRef,
@@ -96,7 +101,12 @@ pub enum Modal {
         error: Option<String>,
         index: usize,
     },
-    Help,
+    /// `top` is the first shown line; `max` the largest `top` (0 when all lines fit),
+    /// which drawing sets.
+    Help {
+        top: usize,
+        max: usize,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -178,6 +188,11 @@ pub struct Notice {
     pub text: String,
     pub error: bool,
     at: Instant,
+    /// The run an info notice is about; it goes when that run changes state or ends, or
+    /// when another item is selected.
+    about: Option<(ActionRef, RunId)>,
+    /// The run's [`stage`] when the notice was last checked.
+    seen: Option<u8>,
 }
 
 pub enum Quit {
@@ -204,6 +219,7 @@ pub struct App {
     /// The workspace's git branch (or short commit); `None` outside a git repository.
     pub branch: Option<String>,
     branch_at: Instant,
+    view_poll_at: Instant,
     /// Actions whose log pane shows an older run chosen in the history list.
     pub viewing: HashMap<ActionRef, RunRecord>,
     pub offset: time::UtcOffset,
@@ -260,6 +276,7 @@ impl App {
         Self {
             branch,
             branch_at: Instant::now(),
+            view_poll_at: Instant::now(),
             viewing: HashMap::new(),
             root,
             offset,
@@ -373,6 +390,20 @@ impl App {
             if self.active.get(&a).is_some_and(|n| n.run_id == r.run_id) {
                 continue;
             }
+            // Views this run produced are no longer current: read their metadata again.
+            let produced: Vec<ViewRef> = self
+                .view_panes
+                .iter()
+                .filter(|(_, p)| {
+                    p.meta
+                        .as_ref()
+                        .is_some_and(|m| m.source_run_id.as_ref() == Some(&r.run_id))
+                })
+                .map(|(v, _)| v.clone())
+                .collect();
+            for v in produced {
+                self.load_view(&v);
+            }
             // The run ended: fetch its final record for the outcome.
             self.last.insert(
                 a.clone(),
@@ -397,6 +428,7 @@ impl App {
         if let Some(a) = self.selected_ref() {
             self.sync_pane(&a);
         }
+        self.settle_notice();
         self.request_status();
     }
 
@@ -448,7 +480,8 @@ impl App {
     }
 
     pub fn handle(&mut self, ev: Event) {
-        self.refresh_branch(false);
+        // A busy event stream can starve the idle tick; its checks are rate-limited.
+        self.tick();
         match ev {
             Event::Input(crossterm::event::Event::Key(k)) => self.key(k),
             Event::Input(crossterm::event::Event::Paste(t)) => {
@@ -491,7 +524,7 @@ impl App {
                         } else {
                             format!("started {a} ({})", acc.run_id)
                         };
-                        self.info(what);
+                        self.info_run(&a, &acc.run_id, what);
                         self.viewing.remove(&a);
                         if let Some(p) = self.panes.get_mut(&a)
                             && p.run_id.as_ref() != Some(&acc.run_id)
@@ -510,7 +543,10 @@ impl App {
             Event::Stopped(a, res) => {
                 self.pending.remove(&a);
                 match res {
-                    Ok(s) => self.info(format!("stopping {a} ({})", s.run_id)),
+                    Ok(s) => {
+                        let what = format!("stopping {a} ({})", s.run_id);
+                        self.info_run(&a, &s.run_id, what)
+                    }
                     Err(e) => {
                         self.restart_after.remove(&a);
                         self.error_info(&format!("{a} did not stop"), &e);
@@ -798,12 +834,30 @@ impl App {
 
     pub fn tick(&mut self) {
         self.refresh_branch(false);
-        if self
-            .notice
-            .as_ref()
-            .is_some_and(|n| n.at.elapsed().as_secs() >= NOTICE_SECS)
-        {
+        self.poll_views();
+        if self.notice.as_ref().is_some_and(|n| {
+            n.at.elapsed().as_secs() >= if n.error { NOTICE_SECS } else { INFO_SECS }
+        }) {
             self.notice = None;
+        }
+    }
+
+    /// Reads open views again while their freshness or durability can still change without
+    /// a new revision: a save in progress, or "current" data whose producing run ended.
+    fn poll_views(&mut self) {
+        if self.view_poll_at.elapsed().as_millis() < VIEW_POLL_MS {
+            return;
+        }
+        self.view_poll_at = Instant::now();
+        let running: Vec<&RunId> = self.active.values().map(|r| &r.run_id).collect();
+        let due: Vec<ViewRef> = self
+            .view_panes
+            .iter()
+            .filter(|(_, p)| !p.loading && p.meta.as_ref().is_some_and(|m| m.may_change(&running)))
+            .map(|(v, _)| v.clone())
+            .collect();
+        for v in due {
+            self.load_view(&v);
         }
     }
 
@@ -814,7 +868,18 @@ impl App {
             text: text.into(),
             error: false,
             at: Instant::now(),
+            about: None,
+            seen: None,
         });
+    }
+
+    /// An info notice about one run: it goes as soon as the run moves on.
+    fn info_run(&mut self, a: &ActionRef, run_id: &RunId, text: impl Into<String>) {
+        self.info(text);
+        if let Some(n) = &mut self.notice {
+            n.about = Some((a.clone(), run_id.clone()));
+        }
+        self.settle_notice();
     }
 
     pub fn error(&mut self, text: impl Into<String>) {
@@ -822,7 +887,28 @@ impl App {
             text: text.into(),
             error: true,
             at: Instant::now(),
+            about: None,
+            seen: None,
         });
+    }
+
+    /// Clears a run notice whose run changed its lifecycle stage or ended.
+    fn settle_notice(&mut self) {
+        let Some(n) = &mut self.notice else { return };
+        let Some((a, id)) = &n.about else { return };
+        let now = self
+            .active
+            .get(a)
+            .filter(|r| &r.run_id == id)
+            .map(|r| stage(r.lifecycle));
+        let ended = now.is_none()
+            && (n.seen.is_some() || self.last.get(a).is_some_and(|l| &l.run_id == id));
+        let moved = now.is_some() && n.seen.is_some() && n.seen != now;
+        if ended || moved {
+            self.notice = None;
+        } else if now.is_some() {
+            n.seen = now;
+        }
     }
 
     fn error_info(&mut self, what: &str, e: &ErrorInfo) {
@@ -877,6 +963,8 @@ impl App {
         self.selected_entry().and_then(|e| self.entry_key(e))
     }
 
+    /// Lists the entries that match the filter, best match first (see [`rank`]); without a
+    /// filter, every entry in plugin order. `keep` stays selected if it still matches.
     fn refilter(&mut self, keep: Option<ItemRef>) {
         let words: Vec<String> = self
             .filter
@@ -884,41 +972,33 @@ impl App {
             .split_whitespace()
             .map(str::to_owned)
             .collect();
-        let hit = |hay: String| {
-            let hay = hay.to_lowercase();
-            words.iter().all(|w| hay.contains(w.as_str()))
-        };
-        let mut out = Vec::new();
+        let mut out: Vec<((u8, std::cmp::Reverse<usize>), Entry)> = Vec::new();
         for p in &self.plugin_order {
             for (n, i) in self.items.iter().enumerate() {
-                if i.action_ref.plugin.as_str() == p
-                    && hit(format!(
-                        "{} {} {} {}",
-                        i.action_ref,
-                        i.title,
-                        i.description,
-                        i.tags.join(" ")
-                    ))
-                {
-                    out.push(Entry::Action(n));
+                if i.action_ref.plugin.as_str() != p {
+                    continue;
+                }
+                let r = i.action_ref.to_string();
+                let id = i.action_ref.action.to_string();
+                if let Some(k) = rank(&words, &r, &id, &i.title, &i.tags, &[], &i.description) {
+                    out.push((k, Entry::Action(n)));
                 }
             }
             for (n, v) in self.views.iter().enumerate() {
-                if v.view_ref.plugin.as_str() == p
-                    && hit(format!(
-                        "{} {} {} {} {}",
-                        v.view_ref,
-                        v.title,
-                        v.description,
-                        v.tags.join(" "),
-                        crate::views::kind_word(v.kind)
-                    ))
-                {
-                    out.push(Entry::View(n));
+                if v.view_ref.plugin.as_str() != p {
+                    continue;
+                }
+                let r = v.view_ref.to_string();
+                let id = v.view_ref.view.to_string();
+                let kind = [crate::views::kind_word(v.kind).to_owned()];
+                if let Some(k) = rank(&words, &r, &id, &v.title, &v.tags, &kind, &v.description) {
+                    out.push((k, Entry::View(n)));
                 }
             }
         }
-        self.visible = out;
+        // A stable sort keeps the list order among equal matches.
+        out.sort_by_key(|(k, _)| *k);
+        self.visible = out.into_iter().map(|(_, e)| e).collect();
         self.selected = keep
             .and_then(|k| {
                 self.visible
@@ -930,6 +1010,15 @@ impl App {
     }
 
     fn on_select(&mut self) {
+        let sel = self.selected_ref();
+        if self
+            .notice
+            .as_ref()
+            .and_then(|n| n.about.as_ref())
+            .is_some_and(|(a, _)| Some(a) != sel.as_ref())
+        {
+            self.notice = None;
+        }
         if let Some(v) = self.selected_view() {
             let r = v.view_ref.clone();
             if !self.view_panes.contains_key(&r) {
@@ -1160,8 +1249,12 @@ impl App {
                     v.push(bind("Ctrl-U", "clear", Cmd::Escape));
                 }
                 if !f.pending {
+                    // Only a process restarts; a task runs again.
+                    let process = self
+                        .item(&f.action_ref)
+                        .is_some_and(|i| i.mode == ActionMode::Process);
                     let w = match f.intent {
-                        Intent::Restart => "restart",
+                        Intent::Restart if process => "restart",
                         _ => "run",
                     };
                     v.push(bind("Enter", w, Cmd::Open));
@@ -1194,7 +1287,10 @@ impl App {
                 v.push(bind("Esc", "close", Cmd::Escape));
                 return v;
             }
-            Modal::Help => {
+            Modal::Help { max, .. } => {
+                if *max > 0 {
+                    v.push(bind("j/k", "scroll", Cmd::Down));
+                }
                 v.push(bind("Esc/?", "close help", Cmd::Escape));
                 return v;
             }
@@ -1390,6 +1486,8 @@ impl App {
                 }
             }
             Focus::Logs => {
+                // First, so the footer keeps it at narrow widths.
+                v.push(bind("Esc", "back", Cmd::Escape));
                 if rows > 0 {
                     v.push(bind("j/k", "move", Cmd::Down));
                     v.push(hidden("PgUp/PgDn", "page", Cmd::PageUp));
@@ -1594,9 +1692,9 @@ impl App {
                         }
                         let text = text.clone();
                         if !logs {
+                            // The best match is selected as the filter changes.
                             self.filter = text;
-                            let keep = self.selected_key();
-                            self.refilter(keep);
+                            self.refilter(None);
                             self.on_select();
                         }
                     }
@@ -1729,13 +1827,22 @@ impl App {
                 }
                 return;
             }
-            Modal::Help => {
-                if matches!(
-                    k.code,
-                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter
-                ) || (ctrl && k.code == KeyCode::Char('c'))
-                {
-                    self.modal = Modal::None;
+            Modal::Help { .. } => {
+                let Modal::Help { top, max } = &mut self.modal else {
+                    return;
+                };
+                match k.code {
+                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
+                        self.modal = Modal::None
+                    }
+                    KeyCode::Char('c') if ctrl => self.modal = Modal::None,
+                    KeyCode::Char('j') | KeyCode::Down => *top = (*top + 1).min(*max),
+                    KeyCode::Char('k') | KeyCode::Up => *top = top.saturating_sub(1),
+                    KeyCode::PageDown | KeyCode::Char(' ') => *top = (*top + 10).min(*max),
+                    KeyCode::PageUp => *top = top.saturating_sub(10),
+                    KeyCode::Char('g') | KeyCode::Home => *top = 0,
+                    KeyCode::Char('G') | KeyCode::End => *top = *max,
+                    _ => {}
                 }
                 return;
             }
@@ -1811,16 +1918,22 @@ impl App {
     }
 
     fn apply_search(&mut self) {
-        if let Modal::Search { logs, text, .. } = std::mem::replace(&mut self.modal, Modal::None)
-            && logs
-        {
-            if text.is_empty() {
-                self.log_query = None;
-                return;
-            }
-            self.log_query = Some(text.clone());
-            self.find(&text, true);
+        let Modal::Search { logs, text, .. } = std::mem::replace(&mut self.modal, Modal::None)
+        else {
+            return;
+        };
+        if !logs {
+            // Enter puts the cursor on the best match.
+            self.selected = 0;
+            self.on_select();
+            return;
         }
+        if text.is_empty() {
+            self.log_query = None;
+            return;
+        }
+        self.log_query = Some(text.clone());
+        self.find(&text, true);
     }
 
     fn find(&mut self, q: &str, older: bool) {
@@ -1986,7 +2099,7 @@ impl App {
                     self.find(&q, cmd == Cmd::NextMatch);
                 }
             }
-            Cmd::Help => self.modal = Modal::Help,
+            Cmd::Help => self.modal = Modal::Help { top: 0, max: 0 },
             Cmd::Attach => {
                 if let Some((a, run_id)) = self.attach_target() {
                     self.term.open(a, run_id, self.io.events.clone());
@@ -2023,6 +2136,8 @@ impl App {
                     }
                 }
             }
+            // Esc leaves the view focus, like Tab.
+            (Cmd::Escape, Focus::Logs) => self.focus = Focus::List,
             (Cmd::Restart, _) => {
                 self.load_view(&r);
                 self.info(format!("reading {r} again"));
@@ -2151,6 +2266,64 @@ impl App {
     }
 }
 
+/// How well one catalog entry matches the filter words, like `lyra` catalog search:
+/// `None` when no word matches; otherwise the best tier over all words (0 exact ref or ID,
+/// 1 exact title, 2 ref/ID/title prefix, 3 ref/ID/title substring, 4 tag, 5 description),
+/// then more matched words first. `extra_tags` match like tags (a view's kind word).
+fn rank(
+    words: &[String],
+    item_ref: &str,
+    id: &str,
+    title: &str,
+    tags: &[String],
+    extra_tags: &[String],
+    description: &str,
+) -> Option<(u8, std::cmp::Reverse<usize>)> {
+    if words.is_empty() {
+        return Some((0, std::cmp::Reverse(0)));
+    }
+    let (item_ref, id, title) = (
+        item_ref.to_lowercase(),
+        id.to_lowercase(),
+        title.to_lowercase(),
+    );
+    let description = description.to_lowercase();
+    let names = [&item_ref, &id, &title];
+    let tier = |w: &str| -> Option<u8> {
+        if item_ref == w || id == w {
+            Some(0)
+        } else if title == w {
+            Some(1)
+        } else if names.iter().any(|n| n.starts_with(w)) {
+            Some(2)
+        } else if names.iter().any(|n| n.contains(w)) {
+            Some(3)
+        } else if tags
+            .iter()
+            .chain(extra_tags)
+            .any(|t| t.to_lowercase().contains(w))
+        {
+            Some(4)
+        } else if description.contains(w) {
+            Some(5)
+        } else {
+            None
+        }
+    };
+    let tiers: Vec<u8> = words.iter().filter_map(|w| tier(w)).collect();
+    let best = tiers.iter().min()?;
+    Some((*best, std::cmp::Reverse(tiers.len())))
+}
+
+/// Lifecycle stages a run notice outlives: a started run stays "started" while it runs.
+fn stage(l: Lifecycle) -> u8 {
+    match l {
+        Lifecycle::Starting | Lifecycle::Running => 0,
+        Lifecycle::Stopping { .. } => 1,
+        Lifecycle::Finished { .. } => 2,
+    }
+}
+
 fn start_word(item: &Item) -> &'static str {
     match item.mode {
         ActionMode::Process => "start",
@@ -2162,5 +2335,209 @@ fn inputs_of(schema: Option<&JsonObject>) -> Inputs {
     match schema {
         Some(s) if form::has_fields(s) => Inputs::Form(s.clone()),
         _ => Inputs::Free,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app() -> App {
+        let (control, _) = tokio::sync::mpsc::unbounded_channel();
+        let (read, _) = tokio::sync::mpsc::unbounded_channel();
+        let (events, _) = tokio::sync::mpsc::unbounded_channel();
+        let root = lyra_protocol::ids::AbsolutePath::parse("/tmp/lyra-tui-test".into()).unwrap();
+        let paths = lyra_protocol::paths::WorkspacePaths::new(root);
+        App::new(
+            "/tmp/lyra-tui-test".into(),
+            time::UtcOffset::UTC,
+            Io {
+                control,
+                read,
+                events,
+                paths,
+            },
+        )
+    }
+
+    fn key(a: &mut App, code: KeyCode) {
+        a.key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn add_view(a: &mut App, r: &str, kind: ViewKind) {
+        let view_ref: ViewRef = r.parse().unwrap();
+        let plugin = view_ref.plugin.to_string();
+        if !a.plugin_order.contains(&plugin) {
+            a.plugin_order.push(plugin);
+        }
+        a.views.push(ViewItem {
+            view_ref,
+            title: r.into(),
+            description: String::new(),
+            tags: Vec::new(),
+            kind,
+        });
+        a.refilter(None);
+    }
+
+    fn add_action(a: &mut App, r: &str, title: &str, tags: &[&str], description: &str) {
+        let action_ref: ActionRef = r.parse().unwrap();
+        let plugin = action_ref.plugin.to_string();
+        if !a.plugin_order.contains(&plugin) {
+            a.plugin_order.push(plugin);
+        }
+        a.items.push(Item {
+            action_ref,
+            title: title.into(),
+            description: description.into(),
+            tags: tags.iter().map(|t| (*t).to_owned()).collect(),
+            mode: ActionMode::Task,
+            enabled: true,
+            definition_hash: Digest::of_bytes(r.as_bytes()),
+        });
+        a.refilter(None);
+    }
+
+    fn search(a: &mut App, text: &str) -> Vec<String> {
+        key(a, KeyCode::Char('/'));
+        for c in text.chars() {
+            key(a, KeyCode::Char(c));
+        }
+        key(a, KeyCode::Enter);
+        a.visible
+            .iter()
+            .filter_map(|&e| a.entry_key(e).map(|k| k.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn filter_ranks_the_best_match_first() {
+        let mut a = app();
+        add_action(
+            &mut a,
+            "dev.typecheck",
+            "Typecheck",
+            &[],
+            "Run the type checker.",
+        );
+        add_action(&mut a, "dev.check", "Check", &[], "Run every check.");
+        add_action(&mut a, "dev.lint", "Lint", &[], "Lint the code.");
+        add_action(
+            &mut a,
+            "style.fix",
+            "Fix style",
+            &["lint"],
+            "Formats files.",
+        );
+        add_action(&mut a, "dev.test", "Test", &[], "Run the tests.");
+        assert_eq!(search(&mut a, "lint"), ["dev.lint", "style.fix"]);
+        assert_eq!(a.selected_ref().unwrap().to_string(), "dev.lint");
+        assert_eq!(search(&mut a, "check"), ["dev.check", "dev.typecheck"]);
+        assert_eq!(a.selected_ref().unwrap().to_string(), "dev.check");
+        // Any word matches; more matched words rank higher within a tier.
+        assert_eq!(
+            search(&mut a, "test tests"),
+            ["dev.test"],
+            "one entry matches both words"
+        );
+        assert_eq!(search(&mut a, "type every"), ["dev.typecheck", "dev.check"]);
+        // Ties keep the list order.
+        assert_eq!(
+            search(&mut a, "run"),
+            ["dev.typecheck", "dev.check", "dev.test"]
+        );
+    }
+
+    fn run(a: &str, id: &RunId, lifecycle: Lifecycle) -> RunSummary {
+        RunSummary {
+            run_id: id.clone(),
+            action_ref: Some(a.parse().unwrap()),
+            lifecycle,
+            reported_health: lyra_protocol::run::ReportedHealth::unknown(),
+            definition_hash: Digest::of_bytes(a.as_bytes()),
+            started_at: Timestamp::now(),
+        }
+    }
+
+    #[test]
+    fn run_notices_go_when_the_run_moves_on() {
+        let mut a = app();
+        add_action(&mut a, "dev.web", "Web", &[], "");
+        add_action(&mut a, "dev.lint", "Lint", &[], "");
+        let web: ActionRef = "dev.web".parse().unwrap();
+        let id: RunId = "r_0000000000004000800000000000000a".parse().unwrap();
+        a.apply_runs(None, vec![run("dev.web", &id, Lifecycle::Starting)]);
+        a.info_run(&web, &id, "started dev.web");
+        // Starting to running keeps the notice.
+        a.apply_runs(None, vec![run("dev.web", &id, Lifecycle::Running)]);
+        assert!(a.notice.is_some());
+        // Another selected item drops it.
+        key(&mut a, KeyCode::Char('j'));
+        assert!(a.notice.is_none());
+        key(&mut a, KeyCode::Char('k'));
+        let stopping = Lifecycle::Stopping {
+            reason: lyra_protocol::run::StopReason::User,
+        };
+        a.apply_runs(None, vec![run("dev.web", &id, stopping)]);
+        a.info_run(&web, &id, "stopping dev.web");
+        assert!(a.notice.is_some());
+        // The run ended.
+        a.apply_runs(None, vec![]);
+        assert!(a.notice.is_none());
+        // Errors stay.
+        a.error("dev.web did not stop");
+        a.apply_runs(None, vec![]);
+        key(&mut a, KeyCode::Char('j'));
+        assert!(a.notice.is_some());
+    }
+
+    #[test]
+    fn a_task_form_runs_again_and_a_process_form_restarts() {
+        let mut a = app();
+        add_action(&mut a, "dev.test", "Test", &[], "");
+        let r: ActionRef = "dev.test".parse().unwrap();
+        let schema: JsonObject = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": {"only": {"type": "string"}}
+        }))
+        .unwrap();
+        let hash = a.items[0].definition_hash.clone();
+        a.inputs.insert(r.clone(), (hash, Inputs::Form(schema)));
+        a.last.insert(
+            r,
+            LastRun {
+                run_id: "r_0000000000004000800000000000000a".parse().unwrap(),
+                lifecycle: Lifecycle::Finished {
+                    outcome: lyra_protocol::run::Outcome::Succeeded,
+                },
+                exit: None,
+                ended_at: None,
+            },
+        );
+        key(&mut a, KeyCode::Char('r'));
+        let enter = |a: &App| {
+            a.bindings()
+                .into_iter()
+                .find(|b| b.keys == "Enter")
+                .map(|b| b.label)
+        };
+        assert_eq!(enter(&a).as_deref(), Some("run"));
+        a.items[0].mode = ActionMode::Process;
+        assert_eq!(enter(&a).as_deref(), Some("restart"));
+    }
+
+    #[test]
+    fn esc_leaves_the_view_focus() {
+        let mut a = app();
+        add_view(&mut a, "dev.grid", ViewKind::Table);
+        key(&mut a, KeyCode::Enter);
+        assert!(a.focus == Focus::Logs);
+        assert!(
+            a.bindings()
+                .iter()
+                .any(|b| b.footer && b.keys == "Esc" && b.label == "back")
+        );
+        key(&mut a, KeyCode::Esc);
+        assert!(a.focus == Focus::List);
     }
 }

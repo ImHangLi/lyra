@@ -32,6 +32,20 @@ pub struct Meta {
     pub definition_hash: Digest,
 }
 
+impl Meta {
+    /// Whether the host may now report other freshness or durability for this revision:
+    /// the save is still in progress, or the data is "current" but its run is not active.
+    pub fn may_change(&self, running: &[&RunId]) -> bool {
+        self.revision.is_some()
+            && (self.durability == Durability::Buffered
+                || (self.freshness == Freshness::Current
+                    && self
+                        .source_run_id
+                        .as_ref()
+                        .is_none_or(|r| !running.contains(&r))))
+    }
+}
+
 pub enum Body {
     Empty,
     Reference(String),
@@ -718,5 +732,39 @@ impl ViewPane {
             Style::default().add_modifier(Modifier::DIM),
         )));
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn meta(freshness: Freshness, durability: Durability, run: Option<&RunId>) -> Meta {
+        Meta {
+            revision: Some(ViewRevision::new(1).unwrap()),
+            recorded_at: None,
+            source_run_id: run.cloned(),
+            source_kind: None,
+            freshness,
+            freshness_reason: None,
+            durability,
+            definition_hash: Digest::of_bytes(b"v"),
+        }
+    }
+
+    #[test]
+    fn metadata_is_read_again_until_it_settles() {
+        let run: RunId = "r_0000000000004000800000000000000a".parse().unwrap();
+        let other: RunId = "r_0000000000004000800000000000000b".parse().unwrap();
+        // The producing run is still active and the data is saved: nothing can change.
+        let m = meta(Freshness::Current, Durability::Committed, Some(&run));
+        assert!(!m.may_change(&[&run]));
+        // The run ended: the host now reports historical.
+        assert!(m.may_change(&[&other]));
+        // A save in progress becomes committed.
+        let m = meta(Freshness::Historical, Durability::Buffered, Some(&run));
+        assert!(m.may_change(&[]));
+        let m = meta(Freshness::Historical, Durability::Committed, Some(&run));
+        assert!(!m.may_change(&[]));
     }
 }

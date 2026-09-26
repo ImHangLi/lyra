@@ -85,7 +85,7 @@ impl Field {
         match &self.kind {
             Kind::Boolean => h.push("Space: true/false/unset".to_owned()),
             Kind::Enum(vals) => h.push(format!(
-                "Space/Left/Right: {}",
+                "Space/Left/Right: {} · Backspace: unset",
                 vals.iter().map(show).collect::<Vec<_>>().join(" | ")
             )),
             Kind::Json => h.push("JSON".to_owned()),
@@ -121,15 +121,21 @@ impl Field {
             Kind::Enum(v) => v.len(),
             _ => return,
         };
-        // Order: unset → 0 → 1 → ... → unset.
-        self.choice = match (self.choice, forward) {
-            (None, true) => Some(0),
-            (None, false) => n.checked_sub(1),
-            (Some(i), true) if i + 1 < n => Some(i + 1),
-            (Some(_), true) => None,
-            (Some(0), false) => None,
-            (Some(i), false) => Some(i - 1),
-        };
+        if n == 0 {
+            return;
+        }
+        // The values form a ring. An unset field stands for its default, so it moves on
+        // from the default's position; Backspace makes it unset again.
+        let at = self.choice.or_else(|| match (&self.kind, &self.default) {
+            (Kind::Enum(v), Some(d)) => v.iter().position(|x| x == d),
+            _ => None,
+        });
+        self.choice = Some(match (at, forward) {
+            (None, true) => 0,
+            (None, false) => n - 1,
+            (Some(i), true) => (i + 1) % n,
+            (Some(i), false) => (i + n - 1) % n,
+        });
         self.error = None;
     }
 
@@ -460,5 +466,43 @@ impl Form {
         } else {
             format!("[{}] {}", e.code, e.message)
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn choice_field(default: Option<&str>) -> Field {
+        Field {
+            name: "scope".into(),
+            title: "Scope".into(),
+            description: String::new(),
+            kind: Kind::Enum(vec!["all".into(), "changed".into(), "staged".into()]),
+            required: false,
+            default: default.map(Value::from),
+            write_only: false,
+            buf: String::new(),
+            choice: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn space_moves_to_the_next_choice() {
+        let mut f = choice_field(Some("changed"));
+        // Unset means the default, so the next value follows it.
+        f.cycle(true);
+        assert_eq!(f.shown(), "staged");
+        // The last value wraps to the first, never to unset.
+        f.cycle(true);
+        assert_eq!(f.shown(), "all");
+        f.cycle(true);
+        assert_eq!(f.shown(), "changed");
+        f.cycle(false);
+        assert_eq!(f.shown(), "all");
+        let mut f = choice_field(None);
+        f.cycle(true);
+        assert_eq!(f.shown(), "all");
     }
 }
