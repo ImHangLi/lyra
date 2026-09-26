@@ -1,7 +1,7 @@
 [package]
 name = "lyra-cli"
 description = "The lyra command-line entry point"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 
 [[bin]]
@@ -10,15 +10,15 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
-lyra-client = { version = "0.3.0", path = "../lyra-client" }
-lyra-host = { version = "0.3.0", path = "../lyra-host" }
-lyra-discovery = { version = "0.3.0", path = "../lyra-discovery" }
-lyra-protocol = { version = "0.3.0", path = "../lyra-protocol" }
+lyra-client = { version = "0.4.0", path = "../lyra-client" }
+lyra-host = { version = "0.4.0", path = "../lyra-host" }
+lyra-discovery = { version = "0.4.0", path = "../lyra-discovery" }
+lyra-protocol = { version = "0.4.0", path = "../lyra-protocol" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 rustix = { version = "1.1.5", features = ["process"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "io-util", "signal"] }
-lyra-tui = { version = "0.3.0", path = "../lyra-tui" }
+lyra-tui = { version = "0.4.0", path = "../lyra-tui" }
 
 [lints]
 workspace = true
