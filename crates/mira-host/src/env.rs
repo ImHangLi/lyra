@@ -86,10 +86,7 @@ pub fn compose(
     put("MIRA_RUN_ID", &host.run_id);
     put("MIRA_INPUT_FILE", &host.input_file);
     put("MIRA_CONFIG_FILE", &host.config_file);
-    for (k, v) in nested_vars(
-        std::env::current_exe().ok(),
-        |k| std::env::var(k).ok(),
-    ) {
+    for (k, v) in nested_vars(std::env::current_exe().ok(), |k| std::env::var(k).ok()) {
         env.insert(k, v);
     }
     Ok(ChildEnv(env))

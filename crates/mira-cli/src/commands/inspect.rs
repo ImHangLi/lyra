@@ -65,7 +65,6 @@ pub fn path_label(c: PathClass) -> &'static str {
     }
 }
 
-
 pub fn status(ctx: &Ctx) -> ExitCode {
     block_on(async {
         let mut client = match ctx.client(&ConnectOptions::cli()).await {
@@ -201,7 +200,11 @@ pub fn catalog(ctx: &Ctx, args: CatalogArgs) -> ExitCode {
 }
 
 /// Counts the catalog items after `cursor` for the `N more` line (text mode only).
-async fn count_rest(client: &mut mira_client::Client, p: &CatalogListParams, cursor: String) -> String {
+async fn count_rest(
+    client: &mut mira_client::Client,
+    p: &CatalogListParams,
+    cursor: String,
+) -> String {
     let mut n = 0usize;
     let mut next = Some(cursor);
     for _ in 0..20 {
@@ -271,38 +274,42 @@ pub fn describe(ctx: &Ctx, item: String, include_schema: bool, max_bytes: Option
                     _ => None,
                 };
                 ctx.emit(&reply, |d| {
-                let mut s = format!(
-                    "{}  {}\n  {}\n  plugin: {} ({})",
-                    d.item.item_ref, d.item.title, d.item.description, d.plugin.name, d.plugin.id
-                );
-                if let Some(a) = &d.action {
-                    s.push_str(&format!(
-                        "\n  {} ({} runner), terminal {}, cwd {}",
-                        mode_text(a.mode),
-                        a.runner,
-                        words(&a.terminal),
-                        a.cwd
-                    ));
-                    if let Some(line) = &schedule {
-                        s.push_str(&format!("\n  schedule: {line}"));
-                    }
-                    if !a.effects.is_empty() {
-                        s.push_str(&format!("\n  effects: {}", a.effects.join(", ")));
-                    }
-                }
-                if let Some(v) = &d.view {
-                    s.push_str(&format!(
-                        "\n  {} view, kept {}",
-                        words(&v.view_kind),
-                        match v.persistence {
-                            mira_protocol::manifest::Persistence::Session => "for the session",
-                            mira_protocol::manifest::Persistence::Last => "until replaced",
+                    let mut s = format!(
+                        "{}  {}\n  {}\n  plugin: {} ({})",
+                        d.item.item_ref,
+                        d.item.title,
+                        d.item.description,
+                        d.plugin.name,
+                        d.plugin.id
+                    );
+                    if let Some(a) = &d.action {
+                        s.push_str(&format!(
+                            "\n  {} ({} runner), terminal {}, cwd {}",
+                            mode_text(a.mode),
+                            a.runner,
+                            words(&a.terminal),
+                            a.cwd
+                        ));
+                        if let Some(line) = &schedule {
+                            s.push_str(&format!("\n  schedule: {line}"));
                         }
-                    ));
-                }
-                s.push_str(&format!("\n  try: {}", d.invoke_hint.join(" ")));
-                s
-            })
+                        if !a.effects.is_empty() {
+                            s.push_str(&format!("\n  effects: {}", a.effects.join(", ")));
+                        }
+                    }
+                    if let Some(v) = &d.view {
+                        s.push_str(&format!(
+                            "\n  {} view, kept {}",
+                            words(&v.view_kind),
+                            match v.persistence {
+                                mira_protocol::manifest::Persistence::Session => "for the session",
+                                mira_protocol::manifest::Persistence::Last => "until replaced",
+                            }
+                        ));
+                    }
+                    s.push_str(&format!("\n  try: {}", d.invoke_hint.join(" ")));
+                    s
+                })
             }
             Err(e) => ctx.fail(client.context(), e.to_error_info()),
         }
@@ -315,7 +322,11 @@ async fn schedule_line(ctx: &Ctx, client: &mut mira_client::Client, action: &str
     let known = match client.status().await {
         Ok(r) => r
             .data()
-            .and_then(|s| s.schedules.iter().find(|x| x.action_ref.to_string() == action))
+            .and_then(|s| {
+                s.schedules
+                    .iter()
+                    .find(|x| x.action_ref.to_string() == action)
+            })
             .map(|x| (x.every_ms, x.enabled)),
         Err(_) => None,
     };
@@ -333,7 +344,11 @@ async fn schedule_line(ctx: &Ctx, client: &mut mira_client::Client, action: &str
             })
         })
     });
-    let on = if known.is_some_and(|(_, on)| on) { "on" } else { "off" };
+    let on = if known.is_some_and(|(_, on)| on) {
+        "on"
+    } else {
+        "off"
+    };
     match every {
         Some(ms) => format!("{}, {on}", crate::human::interval(ms)),
         None => on.to_owned(),
