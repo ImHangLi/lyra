@@ -48,6 +48,67 @@ pub struct RunLog {
     pub truncated: u64,
     pub write_error: Option<String>,
     partial: [Vec<u8>; 2],
+    /// Per-stream ANSI escape state, so sequences split across reads are still removed.
+    ansi: [AnsiStrip; 2],
+}
+
+/// Removes ANSI escape sequences from pipe output: CSI (`ESC [ ... final`), OSC, DCS, SOS,
+/// PM, and APC strings (`ESC ] ... BEL` or `ESC ] ... ESC \`), and two-byte `ESC x`. Only the
+/// parser state is kept between reads, so memory stays bounded. A newline always ends an
+/// open sequence and is kept, so a stray ESC cannot hide the following lines.
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+enum AnsiStrip {
+    #[default]
+    Ground,
+    Esc,
+    EscIntermediate,
+    Csi,
+    Str,
+    StrEsc,
+}
+
+impl AnsiStrip {
+    fn feed(&mut self, bytes: &[u8], out: &mut Vec<u8>) {
+        for &b in bytes {
+            if b == b'\n' {
+                *self = Self::Ground;
+                out.push(b);
+                continue;
+            }
+            *self = match (*self, b) {
+                (Self::Ground, 0x1b) => Self::Esc,
+                (Self::Ground, _) => {
+                    out.push(b);
+                    Self::Ground
+                }
+                (Self::Esc, b'[') => Self::Csi,
+                (Self::Esc, b']' | b'P' | b'X' | b'^' | b'_') => Self::Str,
+                (Self::Esc, 0x20..=0x2f) => Self::EscIntermediate,
+                (Self::Esc, 0x1b) => Self::Esc,
+                (Self::Esc, 0x80..) => {
+                    // Not an escape sequence: keep the byte so UTF-8 text stays intact.
+                    out.push(b);
+                    Self::Ground
+                }
+                (Self::Esc, _) => Self::Ground,
+                (Self::EscIntermediate, 0x20..=0x2f) => Self::EscIntermediate,
+                (Self::EscIntermediate, _) => Self::Ground,
+                (Self::Csi, 0x20..=0x3f) => Self::Csi,
+                (Self::Csi, 0x1b) => Self::Esc,
+                (Self::Csi, 0x40..=0x7e) => Self::Ground,
+                (Self::Csi, _) => {
+                    out.push(b);
+                    Self::Ground
+                }
+                (Self::Str, 0x07) => Self::Ground,
+                (Self::Str, 0x1b) => Self::StrEsc,
+                (Self::Str, _) => Self::Str,
+                (Self::StrEsc, b'\\') => Self::Ground,
+                (Self::StrEsc, 0x1b) => Self::StrEsc,
+                (Self::StrEsc, _) => Self::Str,
+            };
+        }
+    }
 }
 
 fn segment_name(n: u32) -> String {
@@ -87,6 +148,7 @@ impl RunLog {
             truncated: 0,
             write_error: None,
             partial: [Vec::new(), Vec::new()],
+            ansi: [AnsiStrip::Ground; 2],
         };
         if let Err(e) = std::fs::DirBuilder::new()
             .recursive(true)
@@ -144,6 +206,7 @@ impl RunLog {
             truncated: 0,
             write_error: None,
             partial: [Vec::new(), Vec::new()],
+            ansi: [AnsiStrip::Ground; 2],
         }
     }
 
@@ -292,7 +355,7 @@ impl RunLog {
         };
         let mut out = Vec::new();
         let mut buf = std::mem::take(&mut self.partial[idx]);
-        buf.extend_from_slice(bytes);
+        self.ansi[idx].feed(bytes, &mut buf);
         let mut start = 0;
         while let Some(pos) = buf[start..].iter().position(|b| *b == b'\n') {
             let mut line = &buf[start..start + pos];
@@ -486,6 +549,20 @@ mod tests {
         assert!(log.partial[0].len() <= MAX_LOG_TEXT_BYTES);
         assert!(records.len() >= 7);
         assert!(records.iter().all(|r| r.truncated));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn escape_sequences_are_removed_across_reads() {
+        let dir = scratch("ansi");
+        let mut log = RunLog::create(dir.clone(), 1024 * 1024);
+        let mut records = log.push_bytes(LogStream::Stdout, b"a\x1b[?25hb\x1b[2");
+        records.extend(log.push_bytes(
+            LogStream::Stdout,
+            b"Kc\n\x1b]0;title\x07d\x1b]8;;u\x1b\\e\x1b7f\n",
+        ));
+        let texts: Vec<_> = records.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts, ["abc", "def"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
