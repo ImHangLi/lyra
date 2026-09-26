@@ -11,13 +11,13 @@ lock=(); [[ -f "$HOME/.codex/scripts/with-heavy-check-lock.py" ]] && lock=(pytho
 mkdir -p dist
 for t in "${targets[@]}"; do
   rustup target add "$t" >/dev/null
-  "${lock[@]}" cargo build --release --locked --target "$t" -p lyra-cli
-  name="lyra-${version}-${t}"
+  "${lock[@]}" cargo build --release --locked --target "$t" -p mira-cli
+  name="mira-${version}-${t}"
   stage="$(mktemp -d)/$name"
   mkdir -p "$stage"
-  cp "target/$t/release/lyra" "$stage/lyra"
+  cp "target/$t/release/mira" "$stage/mira"
   cp README.md "$stage/"
   tar -C "$(dirname "$stage")" -czf "dist/$name.tar.gz" "$name"
   (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
-  echo "dist/$name.tar.gz ($(file -b "$stage/lyra" | cut -d, -f1-2))"
+  echo "dist/$name.tar.gz ($(file -b "$stage/mira" | cut -d, -f1-2))"
 done

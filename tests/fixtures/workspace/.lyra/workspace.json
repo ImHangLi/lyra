@@ -1,8 +1,0 @@
-{
-  "api": 1,
-  "name": "Lyra test workspace",
-  "plugins": ["plugins/dev", "plugins/markers", "plugins/file-check", "plugins/agent-updates", "plugins/bad-frames"],
-  "autostart": [],
-  "ui": {"theme": "terminal", "mouse": false},
-  "meta": {}
-}

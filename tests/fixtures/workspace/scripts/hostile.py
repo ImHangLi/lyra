@@ -2,13 +2,13 @@
 """Writes sequences that act on a real terminal, split across writes, then plain text.
 
 A safe host keeps them away from clients: the clipboard, window title, and window size of
-the terminal that shows Lyra must not change.
+the terminal that shows Mira must not change.
 """
 import base64
 import os
 import time
 
-clip = base64.b64encode(b"lyra-hostile-clipboard").decode()
+clip = base64.b64encode(b"mira-hostile-clipboard").decode()
 parts = [
     "before: plain text\r\n",
     "\x1b]5", "2;c;", clip[:6], clip[6:], "\x07",  # OSC 52 clipboard write, chunked

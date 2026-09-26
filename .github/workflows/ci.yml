@@ -33,12 +33,12 @@ jobs:
         run: scripts/check-contract.sh
       - name: Smoke (validate the test workspace and run a task)
         env:
-          LYRA_DATA_HOME: ${{ runner.temp }}/lyra-data
-          LYRA_RUNTIME_DIR: /tmp/lyra-ci
+          MIRA_DATA_HOME: ${{ runner.temp }}/mira-data
+          MIRA_RUNTIME_DIR: /tmp/mira-ci
         run: |
-          target/debug/lyra validate tests/fixtures/workspace/.lyra --json
+          target/debug/mira validate tests/fixtures/workspace/.mira --json
           cd tests/fixtures/workspace
-          ../../../target/debug/lyra run dev.check --json
-          ../../../target/debug/lyra run markers.scan --json
-          ../../../target/debug/lyra view markers.table --json > /dev/null
-          ../../../target/debug/lyra down --wait --json
+          ../../../target/debug/mira run dev.check --json
+          ../../../target/debug/mira run markers.scan --json
+          ../../../target/debug/mira view markers.table --json > /dev/null
+          ../../../target/debug/mira down --wait --json

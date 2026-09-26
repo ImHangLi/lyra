@@ -55,7 +55,7 @@ Performance numbers are in [performance.md](performance.md). Real-project record
 | CONFIG-01 | pass | #26 | Of two concurrent applies, one succeeds and one gets REVISION_CONFLICT |
 | CONFIG-02 | pass | #26 | Invalid or partial disk config blocks new invokes; `reload` recovers |
 | CONFIG-03 | pass | #26 | A changed or disabled definition never restarts a run; it can still be stopped |
-| AGENT-01 | pass | #33, #34, [onboarding](onboarding.md) | Real agent setup with Claude (FastAPI, the Lyra template, saas-starter), Codex (the Lyra template), and a generic agent (Flask). On Outline the setup was checked for structure only |
+| AGENT-01 | pass | #33, #34, [onboarding](onboarding.md) | Real agent setup with Claude (FastAPI, saas-starter) and a generic agent (Flask). On Outline the setup was checked for structure only |
 | AGENT-02 | pass | #33, #34 | A new agent session reuses the existing tool |
 | AGENT-03 | pass | #33 | The agent added a structured plugin with no Core change |
 | AGENT-04 | pass | #31 | Reads are bounded by default and scoped to the run |
@@ -71,15 +71,15 @@ Performance numbers are in [performance.md](performance.md). Real-project record
 Checked on v0.2.0, on 2026-09-26, on the verification Mac (M5 Pro, macOS 27.2).
 - Setup: a background session with a 2-minute TTL (expiring at 17:27:55), `dev.heartbeat` scheduled every 2 s, and `dev.web` running.
 - `pmset sleepnow` at 17:26:41. The power log shows sleep at 17:26:46, a 10 s maintenance dark wake at 17:27:05, sleep again at 17:27:15, and a keyboard wake at 17:30:46.
-- **Expiry across sleep:** the TTL passed while the Mac was asleep. On wake, the host stopped the session at once. `dev.web` ended at 17:30:45 with `stop_reason: ttl_expired`, and `lyra status` showed no session 1 s after the wake.
+- **Expiry across sleep:** the TTL passed while the Mac was asleep. On wake, the host stopped the session at once. `dev.web` ended at 17:30:45 with `stop_reason: ttl_expired`, and `mira status` showed no session 1 s after the wake.
 - **No replay of missed ticks:** the heartbeat ran every 2 s while awake, and 6 times during the 10 s dark wake, when macOS lets processes run. It did not run during deep sleep. After the wake no burst happened: 30 runs before the wake, and the same 30 at wake +1 s, +10 s, +30 s, and +60 s. No two runs overlapped.
 
 ## Remaining limits
 
-- **Real terminals (partial):** before v0.2.0 the TUI ran in real Terminal.app and Ghostty (200x59) windows. A small proxy passed the output through to the window and typed scripted keys. Only the Lyra window was captured.
+- **Real terminals (partial):** before v0.2.0 the TUI ran in real Terminal.app and Ghostty (200x59) windows. A small proxy passed the output through to the window and typed scripted keys. Only the Mira window was captured.
   - Checked: the home screen, a running service with live logs, the run history, help, search, and the terminal restore on quit. After SIGTERM in Terminal.app, `stty` showed `icanon isig echo`.
   - Not run: native text selection and copy by hand. iTerm2 is not installed.
 - **Not run:**
-  - Outline startup. A full Outline install needs several GB of dependencies. Docker itself now works: the FastAPI Compose services start and stop through Lyra with their volumes kept.
+  - Outline startup. A full Outline install needs several GB of dependencies. Docker itself now works: the FastAPI Compose services start and stop through Mira with their volumes kept.
 - **Out of scope:** the x86_64 build and M2 hardware. Every target machine is Apple Silicon M3 or later.
 - **Few automated tests:** the owner authorized a small, focused set after the release review; CI runs them (23 at v0.2.0). They cover bounded log tails, escape stripping, env-file errors that hide values, `input --text` parsing, process-group identity, catalog and TUI search ranking, discovery exclusions, and several TUI behaviors. The other evidence is the recorded live runs, CI, and `scripts/check-contract.sh`.

@@ -1,3 +1,3 @@
 # Fixture TypeScript monorepo
 
-Input fixture for `lyra setup --json`. Not a real project.
+Input fixture for `mira setup --json`. Not a real project.

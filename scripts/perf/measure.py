@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Reproducible latency measurements for the lyra binary (§19). Prints JSON with p50/p95/p99/max.
+"""Reproducible latency measurements for the mira binary (§19). Prints JSON with p50/p95/p99/max.
 
-Usage: scripts/perf/measure.py --lyra target/release/lyra [--samples 50] [--flood-seconds 60]
-Runs in a scratch copy of tests/fixtures/workspace with LYRA_DATA_HOME/LYRA_RUNTIME_DIR under /tmp,
+Usage: scripts/perf/measure.py --mira target/release/mira [--samples 50] [--flood-seconds 60]
+Runs in a scratch copy of tests/fixtures/workspace with MIRA_DATA_HOME/MIRA_RUNTIME_DIR under /tmp,
 so it never touches ~/Library. It stops everything it starts.
 """
 import argparse, json, os, platform, shutil, statistics, subprocess, sys, tempfile, time
@@ -21,32 +21,32 @@ def summary(xs):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--lyra", required=True)
+    ap.add_argument("--mira", required=True)
     ap.add_argument("--samples", type=int, default=50)
     ap.add_argument("--flood-seconds", type=float, default=60)
     ap.add_argument("--flood-rounds", type=int, default=3)
     a = ap.parse_args()
-    lyra = os.path.abspath(a.lyra)
-    scratch = tempfile.mkdtemp(prefix="lyra-perf-", dir="/tmp")
-    env = dict(os.environ, LYRA_DATA_HOME=f"{scratch}/data", LYRA_RUNTIME_DIR=f"{scratch}/run")
+    mira = os.path.abspath(a.mira)
+    scratch = tempfile.mkdtemp(prefix="mira-perf-", dir="/tmp")
+    env = dict(os.environ, MIRA_DATA_HOME=f"{scratch}/data", MIRA_RUNTIME_DIR=f"{scratch}/run")
     root = f"{scratch}/pg"
     shutil.copytree(os.path.join(os.path.dirname(__file__), "../../tests/fixtures/workspace"), root)
 
     def run(*args, check=True):
         t = time.perf_counter()
-        p = subprocess.run([lyra, *args, "--json"], cwd=root, env=env, capture_output=True, text=True)
+        p = subprocess.run([mira, *args, "--json"], cwd=root, env=env, capture_output=True, text=True)
         dt = time.perf_counter() - t
         if check and p.returncode != 0:
             raise SystemExit(f"{args} failed: {p.stdout} {p.stderr}")
         return dt, p
 
     def stop_host():
-        subprocess.run(["pkill", "-f", f"lyra __host --root {os.path.realpath(root)}"], capture_output=True)
+        subprocess.run(["pkill", "-f", f"mira __host --root {os.path.realpath(root)}"], capture_output=True)
         time.sleep(0.3)
 
     out = {"machine": {"platform": platform.platform(), "machine": platform.machine(),
                        "cpu": subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True).stdout.strip()},
-           "binary": lyra, "samples": a.samples}
+           "binary": mira, "samples": a.samples}
     try:
         # Cold: no host running; each sample starts a host.
         cold = []
