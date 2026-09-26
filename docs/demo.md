@@ -19,7 +19,7 @@ The demo shows the main path: a project launchpad (UC-01), then saving a one-off
 | 3:50–4:00 | The README install line | One native binary, no Node. Your agent sets it up. |
 
 **Numbers you may quote**, all measured (see `docs/verification/performance.md`, Apple M5 Pro, release build):
-- warm TUI first frame p95 11 ms;
+- warm TUI first frame p95 10 ms;
 - navigation p95 3 ms;
 - `lyra status` p95 7.5 ms.
 
