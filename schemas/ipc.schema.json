@@ -2371,6 +2371,44 @@
       ],
       "type": "string"
     },
+    "SessionStopData": {
+      "additionalProperties": false,
+      "description": "Result of `session.stop`: the resulting session state and what the call stopped.",
+      "properties": {
+        "session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The session after the call; `null` once it has ended."
+        },
+        "stopped_runs": {
+          "description": "Active runs this call asked to stop.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stopped_session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The session this call stopped; `null` when no session was running."
+        }
+      },
+      "required": [
+        "stopped_runs"
+      ],
+      "type": "object"
+    },
     "SourceKind": {
       "enum": [
         "plugin",
@@ -4023,7 +4061,7 @@
         "$ref": "#/$defs/Empty"
       },
       "result": {
-        "$ref": "#/$defs/SessionData"
+        "$ref": "#/$defs/SessionStopData"
       }
     },
     "storage.clear": {

@@ -582,6 +582,20 @@ pub fn keep(ctx: &Ctx, ttl: &str) -> ExitCode {
     })
 }
 
+fn stop_text(d: &SessionStopData) -> String {
+    match &d.stopped_session {
+        None => "no session".into(),
+        Some(id) => {
+            let state = if d.session.is_some() {
+                "; stopping"
+            } else {
+                ""
+            };
+            format!("stopped session {id} and {} run(s){state}", d.stopped_runs)
+        }
+    }
+}
+
 pub fn down(ctx: &Ctx, wait: bool) -> ExitCode {
     block_on(async {
         let mut client = match connect(ctx).await {
@@ -589,19 +603,27 @@ pub fn down(ctx: &Ctx, wait: bool) -> ExitCode {
             Err(code) => return code,
         };
         let reply = match client
-            .call::<_, SessionData>(Method::SessionStop, &Empty {})
+            .call::<_, SessionStopData>(Method::SessionStop, &Empty {})
             .await
         {
             Ok(r) => r,
             Err(e) => return ctx.fail(client.context(), e.to_error_info()),
         };
         if wait {
+            let (stopped_session, stopped_runs) = reply
+                .data()
+                .map(|d| (d.stopped_session.clone(), d.stopped_runs))
+                .unwrap_or_default();
             let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
             loop {
                 match client.status().await {
                     Ok(s) if s.data().is_some_and(|d| d.session.is_none()) => {
-                        return ctx
-                            .emit(&s.map(|d| SessionData { session: d.session }), session_text);
+                        let s = s.map(|d| SessionStopData {
+                            session: d.session,
+                            stopped_session,
+                            stopped_runs,
+                        });
+                        return ctx.emit(&s, stop_text);
                     }
                     Ok(_) if tokio::time::Instant::now() < deadline => {
                         tokio::time::sleep(POLL).await
@@ -619,7 +641,7 @@ pub fn down(ctx: &Ctx, wait: bool) -> ExitCode {
                 }
             }
         }
-        ctx.emit(&reply, session_text)
+        ctx.emit(&reply, stop_text)
     })
 }
 
