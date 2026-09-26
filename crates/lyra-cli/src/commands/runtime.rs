@@ -7,12 +7,13 @@ use std::time::Duration;
 
 use lyra_client::{Client, ConnectOptions};
 use lyra_protocol::error::{ErrorCode, ErrorInfo};
-use lyra_protocol::ids::{ActionRef, RequestKey, RunId};
+use lyra_protocol::ids::{ActionRef, ItemRef, RequestKey, RunId};
 use lyra_protocol::ipc::*;
 use lyra_protocol::limits::MAX_PUBLIC_REPLY_BYTES;
 use lyra_protocol::manifest::TimeoutWire;
 use lyra_protocol::reply::{PublicReply, ReplyContext};
 use lyra_protocol::run::{Lifecycle, Outcome, RunRecord};
+use lyra_protocol::schema_profile::SchemaDoc;
 use serde_json::{Map, Value};
 
 use super::ctx::{Ctx, block_on};
@@ -410,6 +411,52 @@ pub fn stop(ctx: &Ctx, target: &str, wait: bool) -> ExitCode {
     })
 }
 
+/// Validates `input` against the action's input schema the same way the host does.
+async fn precheck_input(
+    client: &mut Client,
+    action_ref: &ActionRef,
+    input: &Map<String, Value>,
+) -> Result<(), ErrorInfo> {
+    let Ok(item_ref) = action_ref.to_string().parse::<ItemRef>() else {
+        return Ok(());
+    };
+    let reply: PublicReply<ItemDescription> = client
+        .call(
+            Method::ItemDescribe,
+            &ItemDescribeParams {
+                item_ref,
+                include_schema: true,
+                max_bytes: None,
+            },
+        )
+        .await
+        .map_err(|e| e.to_error_info())?;
+    let Some(schema) = reply
+        .data()
+        .and_then(|d| d.action.as_ref())
+        .and_then(|a| a.input_schema.as_ref())
+    else {
+        return Ok(());
+    };
+    // The host already accepted this schema; if it cannot be rebuilt here, let the host decide.
+    let Ok(doc) = SchemaDoc::check(schema, "/input_schema", true) else {
+        return Ok(());
+    };
+    let Ok(validator) = doc.compile() else {
+        return Ok(());
+    };
+    let issues = doc.validate(
+        &validator,
+        &Value::Object(doc.effective_input(input)),
+        "/input",
+    );
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues.to_error_info())
+    }
+}
+
 pub fn restart(ctx: &Ctx, action: &str, input: Option<&str>) -> ExitCode {
     block_on(async {
         let prepared =
@@ -422,6 +469,10 @@ pub fn restart(ctx: &Ctx, action: &str, input: Option<&str>) -> ExitCode {
             Ok(c) => c,
             Err(code) => return code,
         };
+        // Reject bad input before anything is stopped.
+        if let Err(e) = precheck_input(&mut client, &action_ref, &input).await {
+            return ctx.fail(client.context(), e);
+        }
         // Stop the current instance (if any) and wait, then start with the current definition.
         let stopped = client
             .call::<_, StopAccepted>(
