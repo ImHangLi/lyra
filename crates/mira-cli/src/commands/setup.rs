@@ -226,7 +226,7 @@ fn render(r: &SetupReport) -> String {
 /// The instruction a person gives their agent after `mira setup`. No apostrophes, so it can
 /// be quoted with single quotes in a shell.
 const AGENT_PROMPT: &str = "Set up Mira for this repository. Follow the mira skill: run \
-`mira setup --json`, read the docs and scripts, create tools for the real dev commands, \
+`mira setup --json`, read the docs and scripts, create plugins for the real dev commands, \
 validate and apply them, run `mira doctor`, verify one tool, and tell me what is ready and \
 what is not.";
 
@@ -302,7 +302,7 @@ fn found_summary(facts: &[Fact]) -> String {
 }
 
 /// `mira setup` for people: install the agent skills, then print the one command that lets
-/// the agent create the tools. Never runs project code and never starts an agent.
+/// the agent create the plugins. Never runs project code and never starts an agent.
 pub fn guided(project: Option<&Path>, agent: Option<AgentKind>) -> ExitCode {
     use std::io::IsTerminal;
     let cwd = match std::env::current_dir() {
@@ -352,12 +352,10 @@ pub fn guided(project: Option<&Path>, agent: Option<AgentKind>) -> ExitCode {
     let changed = skills.written.len() + skills.updated.len();
     let skills_line = match (kind, changed) {
         (_, 0) => "agent skills are up to date".to_owned(),
-        (AgentKind::Claude, _) => {
-            "installed the agent skills for Claude Code and Codex (.claude/skills, .agents/skills)"
-                .to_owned()
-        }
-        _ => "installed the agent skills (.agents/skills; Codex and other agents read them)"
+        (AgentKind::Claude, _) => "wrote .agents/skills and .claude/skills (add them to \
+             .gitignore unless your team shares them)"
             .to_owned(),
+        _ => "wrote .agents/skills (add it to .gitignore unless your team shares it)".to_owned(),
     };
     let mut out = format!(
         "Mira setup in {}\n  ✓ {skills_line}",
@@ -371,15 +369,15 @@ pub fn guided(project: Option<&Path>, agent: Option<AgentKind>) -> ExitCode {
     }
     if selected.is_setup() {
         out.push_str(
-            "\n  ✓ this project already has Mira tools\n\nOpen the workbench with `mira`. \
-             To add a tool, ask your agent in plain words (the mira-extend skill saves it).",
+            "\n\nThis project already has Mira plugins. Run `mira`. To add a plugin, edit \
+             .mira/plugins/ and run `mira reload`, or ask your agent.",
         );
         println!("{out}");
         return ExitCode::SUCCESS;
     }
     let facts = mira_discovery::discover(root, false).discovery.facts;
     out.push_str(&format!("\n  ✓ {}", found_summary(&facts)));
-    out.push_str("\n\nNext, let your agent create the tools (a few minutes; it reads, it does not deploy):\n");
+    out.push_str("\n\nGive your agent this prompt. It saves the repo's commands as plugins:\n");
     let quoted = format!("'{AGENT_PROMPT}'");
     let mut runners = Vec::new();
     if has_claude || kind == AgentKind::Claude {
@@ -394,11 +392,10 @@ pub fn guided(project: Option<&Path>, agent: Option<AgentKind>) -> ExitCode {
         out.push_str(&format!("\n{}\n", runners.join("\n")));
     }
     let copied = std::io::stdout().is_terminal() && copy_to_clipboard(AGENT_PROMPT);
-    out.push_str(if copied {
-        "\nThe prompt is on your clipboard. When the agent is done, run `mira`."
-    } else {
-        "\nWhen the agent is done, run `mira`."
-    });
+    if copied {
+        out.push_str("\nCopied the prompt to your clipboard.");
+    }
+    out.push_str("\nWhen the agent is done, run `mira`.");
     println!("{out}");
     ExitCode::SUCCESS
 }
