@@ -363,12 +363,25 @@ pub fn exec(ctx: &Ctx, label: String, argv: Vec<String>, request_key: Option<Str
     })
 }
 
+/// `lyra stop` data. With `--wait`, the finished run record plus the `state` field that
+/// `lyra stop` returns without `--wait`.
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum StopData {
+    Accepted(StopAccepted),
+    Finished {
+        #[serde(flatten)]
+        record: Box<RunRecord>,
+        state: Lifecycle,
+    },
+}
+
 async fn stop_target(
     ctx: &Ctx,
     client: &mut Client,
     target: RunTarget,
     wait: bool,
-) -> Result<PublicReply<StopAccepted>, ExitCode> {
+) -> Result<PublicReply<StopData>, ExitCode> {
     let reply: PublicReply<StopAccepted> = client
         .call(Method::RunStop, &RunStopParams { target })
         .await
@@ -381,15 +394,15 @@ async fn stop_target(
         if let Some(rec) = fin.data() {
             return Ok(PublicReply::success(
                 ctx2,
-                StopAccepted {
-                    run_id,
+                StopData::Finished {
                     state: rec.lifecycle,
+                    record: Box::new(rec.clone()),
                 },
                 reply.meta().clone(),
             ));
         }
     }
-    Ok(reply)
+    Ok(reply.map(StopData::Accepted))
 }
 
 pub fn stop(ctx: &Ctx, target: &str, wait: bool) -> ExitCode {
@@ -403,8 +416,9 @@ pub fn stop(ctx: &Ctx, target: &str, wait: bool) -> ExitCode {
             Err(code) => return code,
         };
         match stop_target(ctx, &mut client, target, wait).await {
-            Ok(reply) => ctx.emit(&reply, |s| {
-                format!("{}  {}", s.run_id, lifecycle_text(&s.state))
+            Ok(reply) => ctx.emit(&reply, |d| match d {
+                StopData::Accepted(s) => format!("{}  {}", s.run_id, lifecycle_text(&s.state)),
+                StopData::Finished { record, .. } => run_text(record),
             }),
             Err(code) => code,
         }
