@@ -35,6 +35,8 @@ const FRAME_GAP: Duration = Duration::from_millis(33);
 const TICK: Duration = Duration::from_secs(1);
 /// Events handled before a redraw gets a chance.
 const EVENT_BATCH: usize = 4096;
+/// How long the background color query (OSC 11) may delay the first frame.
+const BACKGROUND_WAIT: Duration = Duration::from_millis(100);
 
 pub enum TuiEnd {
     /// The workspace has no configuration; nothing was opened.
@@ -45,6 +47,16 @@ pub enum TuiEnd {
 
 /// Opens the TUI for a workspace. The caller has checked that stdin and stdout are TTYs.
 pub fn run(paths: WorkspacePaths) -> Result<TuiEnd, ErrorInfo> {
+    if theme::term_is_dumb() {
+        return Err(ErrorInfo::new(
+            ErrorCode::TTY_REQUIRED,
+            "TERM=dumb cannot show the full-screen TUI",
+        )
+        .with_next_action(
+            &["mira", "status"],
+            "`mira status` prints the same state as plain text; add `--json` for structured output.",
+        ));
+    }
     // Read the local offset while the process is still single-threaded.
     let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -129,15 +141,19 @@ async fn serve(paths: WorkspacePaths, offset: time::UtcOffset) -> Result<TuiEnd,
     }
     let _ = read_tx.send(Read::Recent);
 
+    let color = theme::ColorMode::detect();
+    theme::detect_glyphs();
     let mut guard = term::TerminalGuard::enter().map_err(|e| {
         ErrorInfo::new(
             ErrorCode::INTERNAL,
             format!("cannot open the terminal: {e}"),
         )
     })?;
+    // The query must finish before the input thread starts, so its reply is not read as keys.
+    let bg = background(color);
     spawn_input(tx.clone());
+    let look = theme::Theme::new(color, bg);
 
-    let color = theme::ColorMode::detect();
     let mut last_draw = Instant::now() - FRAME_GAP;
     let mut dirty = true;
     let mut urgent = true;
@@ -145,7 +161,7 @@ async fn serve(paths: WorkspacePaths, offset: time::UtcOffset) -> Result<TuiEnd,
         if dirty && (urgent || last_draw.elapsed() >= FRAME_GAP) {
             if guard
                 .terminal
-                .draw(|f| ui::draw(f, &mut app, color))
+                .draw(|f| ui::draw(f, &mut app, &look))
                 .is_err()
             {
                 app.quit
@@ -201,6 +217,20 @@ async fn serve(paths: WorkspacePaths, offset: time::UtcOffset) -> Result<TuiEnd,
     // Restore the outer terminal now; the host finishes any stop on its own.
     drop(guard);
     Ok(TuiEnd::Closed(message))
+}
+
+/// The terminal background: `MIRA_THEME=light|dark` when set, else the terminal's reply
+/// to OSC 11, else `COLORFGBG`, else unknown.
+fn background(color: theme::ColorMode) -> theme::Background {
+    use theme::Background;
+    if !color.enabled() {
+        return Background::Unknown;
+    }
+    let var = |k: &str| std::env::var(k).ok();
+    Background::from_override(var("MIRA_THEME").as_deref())
+        .or_else(|| term::query_background(BACKGROUND_WAIT).map(Background::from_rgb))
+        .or_else(|| Background::from_colorfgbg(var("COLORFGBG").as_deref()))
+        .unwrap_or(Background::Unknown)
 }
 
 /// Terminal input on a plain thread; it ends with the process.
