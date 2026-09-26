@@ -497,12 +497,47 @@ pub struct TerminalRunParams {
     pub run_id: RunId,
 }
 
+/// `terminal.snapshot`: one consistent read of the virtual screen (§13.2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalSnapshotParams {
+    pub run_id: RunId,
+    /// First screen row to return (0-based); default 0.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    #[schemars(with = "u16")]
+    pub row_start: Option<u16>,
+    /// Rows to return; default all remaining rows.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    #[schemars(with = "u16")]
+    pub row_count: Option<u16>,
+    /// Include per-row style runs for the returned rows.
+    #[serde(default)]
+    pub include_style: bool,
+    /// Reply byte budget; rows past it are omitted and `meta.truncated` is set.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    #[schemars(with = "u32")]
+    pub max_bytes: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TerminalInput {
     /// Literal text; no Enter is appended.
     Text { text: String },
-    /// A named key such as `enter`, `esc`, `ctrl-c`, `up`.
+    /// A named key: enter, tab, escape, backspace, delete, up, down, left, right, ctrl-c,
+    /// ctrl-d, ctrl-z, ctrl-right-bracket.
     Key { key: String },
     /// Bracketed paste when the child enabled it.
     Paste { text: String },
@@ -520,6 +555,10 @@ pub struct TerminalInputParams {
     )]
     #[schemars(with = "ScreenRevision")]
     pub expected_screen_revision: Option<ScreenRevision>,
+    /// Reply with the current screen at once instead of waiting for the program to react
+    /// (interactive clients that follow `terminal` stream events).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reply_now: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -874,12 +913,56 @@ pub struct TerminalSnapshot {
     pub screen_revision: ScreenRevision,
     pub cols: u16,
     pub rows: u16,
-    /// Visible screen rows as plain text; styles are not included in this form.
+    /// Screen row of `lines[0]`.
+    #[serde(default)]
+    pub row_start: u16,
+    /// Screen rows as plain text without control sequences, from `row_start` on.
     pub lines: Vec<String>,
     pub cursor: TerminalCursor,
     pub alternate_screen: bool,
     pub input_owner: Option<ClientId>,
     pub exited: bool,
+    /// Style runs for the returned rows when `include_style` was set; cells without a run
+    /// use the terminal default style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub styles: Option<Vec<TerminalStyleRow>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalStyleRow {
+    pub row: u16,
+    pub runs: Vec<TerminalStyleRun>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalStyleRun {
+    pub start_cell: u16,
+    pub cell_count: u16,
+    pub fg: TerminalColor,
+    pub bg: TerminalColor,
+    pub modifiers: Vec<TerminalModifier>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TerminalColor {
+    Default,
+    Indexed { index: u8 },
+    Rgb { r: u8, g: u8, b: u8 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalModifier {
+    Bold,
+    Dim,
+    Italic,
+    Underline,
+    Reverse,
+    Hidden,
+    Strikethrough,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1141,7 +1224,7 @@ methods! {
     ConfigApply = "config.apply", ConfigApplyParams => ConfigApplied, stream: false;
     ConfigReload = "config.reload", Empty => ConfigApplied, stream: false;
     ScheduleSet = "schedule.set", ScheduleSetParams => ScheduleData, stream: false;
-    TerminalSnapshotM = "terminal.snapshot", TerminalRunParams => TerminalSnapshot, stream: false;
+    TerminalSnapshotM = "terminal.snapshot", TerminalSnapshotParams => TerminalSnapshot, stream: false;
     TerminalAcquire = "terminal.acquire", TerminalRunParams => Ack, stream: false;
     TerminalRelease = "terminal.release", TerminalRunParams => Ack, stream: false;
     TerminalInputM = "terminal.input", TerminalInputParams => TerminalSnapshot, stream: false;

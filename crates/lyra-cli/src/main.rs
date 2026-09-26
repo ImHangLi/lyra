@@ -212,6 +212,54 @@ enum Command {
         #[arg(value_enum)]
         switch: commands::schedule::Switch,
     },
+    /// Read the screen of an interactive (PTY) run as plain text with its screen revision.
+    ///
+    /// This is the current virtual screen, not a log; `lyra logs RUN` holds the transcript.
+    /// Agent flow: `lyra up --background`, `lyra run ACTION --no-wait` for a PTY action, then
+    /// alternate `lyra terminal RUN` and `lyra input RUN ...` until the program finishes.
+    #[command(verbatim_doc_comment)]
+    Terminal {
+        #[arg(value_name = "RUN")]
+        run: String,
+        /// Reply byte budget (default 32 KiB); rows past it are cut and meta.truncated is set.
+        #[arg(long, value_name = "N")]
+        max_bytes: Option<u32>,
+    },
+    /// Type into an interactive (PTY) run; prints the screen after the program reacts.
+    ///
+    /// Usage: lyra input RUN (--text TEXT | --key KEY) [--expected-screen-revision N]
+    ///
+    /// Inside `input`, --text is the input text, not the output-mode flag; output is JSON
+    /// unless stdout is a terminal.
+    /// Each call takes the input lock for that one write and fails with INPUT_BUSY while
+    /// another client (for example the TUI) holds it. --text is sent as UTF-8 exactly as
+    /// given and never adds Enter; send `--key enter` separately.
+    /// Keys: enter, tab, escape, backspace, delete, up, down, left, right, ctrl-c, ctrl-d,
+    /// ctrl-z, ctrl-right-bracket.
+    /// With --expected-screen-revision N nothing is written and SCREEN_CHANGED is returned
+    /// when the screen moved past revision N (read it with `lyra terminal RUN`).
+    /// Example: lyra run dev.prompt --no-wait; lyra terminal RUN;
+    ///          lyra input RUN --text Ada; lyra input RUN --key enter
+    #[command(verbatim_doc_comment)]
+    Input {
+        #[arg(value_name = "RUN")]
+        run: String,
+        /// Given as `--text TEXT` (see the usage above).
+        #[arg(
+            long = "input-text",
+            value_name = "TEXT",
+            conflicts_with = "key",
+            required_unless_present = "key",
+            hide = true
+        )]
+        input_text: Option<String>,
+        /// One named key (see the list above).
+        #[arg(long, value_name = "KEY")]
+        key: Option<String>,
+        /// Refuse to write unless the screen is still at revision N.
+        #[arg(long, value_name = "N")]
+        expected_screen_revision: Option<u64>,
+    },
     /// Internal: serve the workspace host.
     #[command(name = "__host", hide = true)]
     Host {
@@ -239,8 +287,46 @@ enum ArtifactsCommand {
     },
 }
 
+/// `lyra input RUN --text TEXT` (§10.2) spells its text option like the global `--text`
+/// output flag. After the `input` subcommand, `--text` means the input text.
+fn rewrite_input_text(args: Vec<String>) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut iter = args.into_iter();
+    out.extend(iter.next());
+    let mut in_input = false;
+    while let Some(a) = iter.next() {
+        if a == "--" {
+            out.push(a);
+            out.extend(iter);
+            break;
+        }
+        if !in_input {
+            let project = a == "--project";
+            let positional = !a.starts_with('-');
+            out.push(a);
+            if project {
+                out.extend(iter.next());
+            } else if positional {
+                if out.last().is_some_and(|s| s == "input") {
+                    in_input = true;
+                } else {
+                    out.extend(iter);
+                    break;
+                }
+            }
+            continue;
+        }
+        match a.strip_prefix("--text") {
+            Some("") => out.push("--input-text".to_owned()),
+            Some(v) if v.starts_with('=') => out.push(format!("--input-text{v}")),
+            _ => out.push(a),
+        }
+    }
+    out
+}
+
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().collect();
+    let args = rewrite_input_text(std::env::args().collect());
     let cli = match Cli::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(e) => {
@@ -267,7 +353,8 @@ fn main() -> ExitCode {
                 .lines()
                 .next()
                 .unwrap_or("invalid arguments")
-                .trim_start_matches("error: ");
+                .trim_start_matches("error: ")
+                .replace("--input-text", "--text");
             return output::fail(
                 mode,
                 ReplyContext::default(),
@@ -356,6 +443,15 @@ fn main() -> ExitCode {
                 }),
             ..
         }) => commands::views::artifact_read(&ctx, id, offset, max_bytes),
+        Some(Command::Terminal { run, max_bytes }) => {
+            commands::terminal::terminal(&ctx, &run, max_bytes)
+        }
+        Some(Command::Input {
+            run,
+            input_text: text,
+            key,
+            expected_screen_revision,
+        }) => commands::terminal::input(&ctx, &run, text, key, expected_screen_revision),
         Some(Command::Paths) => commands::inspect::paths(&ctx),
         Some(Command::Doctor) => commands::inspect::doctor(&ctx),
         Some(Command::Host { root }) => match lyra_protocol::ids::AbsolutePath::from_path(&root) {

@@ -83,6 +83,8 @@ pub enum Event {
     ConnectionLost(&'static str, String),
     Copied(Result<String, String>),
     Signal(&'static str),
+    /// Facts from the attached PTY view's worker.
+    Terminal(crate::terminal::Msg),
 }
 
 pub type Tx = UnboundedSender<Event>;

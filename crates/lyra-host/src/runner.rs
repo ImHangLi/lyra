@@ -28,8 +28,8 @@ use crate::plugin_runner::{FrameOut, FrameReader, Protocol};
 
 const CLEANUP_TIMEOUT: Duration = Duration::from_millis(lyra_protocol::limits::CLEANUP_TIMEOUT_MS);
 /// After the main process exits, keep draining pipes held by leftover group members this long.
-const DRAIN_AFTER_EXIT: Duration = Duration::from_millis(500);
-const FAR: Duration = Duration::from_secs(86_400 * 365);
+pub(crate) const DRAIN_AFTER_EXIT: Duration = Duration::from_millis(500);
+pub(crate) const FAR: Duration = Duration::from_secs(86_400 * 365);
 
 pub struct CommandSpec {
     pub run_id: RunId,
@@ -71,6 +71,8 @@ pub enum RunnerEvent {
         error: ErrorInfo,
         view_hint: Option<ViewId>,
     },
+    /// PTY screen facts (coalesced screen revisions, output limit).
+    Terminal(crate::pty::TerminalEvent),
     Finished(Box<FinishedRun>),
 }
 
@@ -104,7 +106,7 @@ pub fn exit_info(status: ExitStatus) -> ExitInfo {
     }
 }
 
-fn signal_group(pid: u32, sig: Signal) {
+pub(crate) fn signal_group(pid: u32, sig: Signal) {
     if let Some(p) = i32::try_from(pid).ok().and_then(Pid::from_raw) {
         let _ = kill_process_group(p, sig);
     }
@@ -136,7 +138,8 @@ async fn read_opt<R: AsyncReadExt + Unpin>(r: &mut Option<R>, buf: &mut [u8]) ->
     }
 }
 
-struct Batcher {
+/// Collects log records and forwards them to the actor in batches.
+pub(crate) struct Batcher {
     run_id: RunId,
     log: SharedLog,
     events: EventSink,
@@ -148,6 +151,27 @@ struct Batcher {
 }
 
 impl Batcher {
+    /// A plain-log batcher (no LPP frames).
+    pub(crate) fn new(run_id: RunId, log: SharedLog, events: EventSink) -> Self {
+        Self {
+            run_id,
+            log,
+            events,
+            pending: Vec::new(),
+            frames: None,
+            outbox: Vec::new(),
+        }
+    }
+    /// Records one complete line of already plain text.
+    pub(crate) fn line(&mut self, stream: LogStream, text: &str) {
+        if let Ok(mut log) = self.log.lock() {
+            self.pending
+                .extend(log.push_line(stream, LogLevel::Info, text, false));
+        }
+        if self.pending.len() >= 256 {
+            self.send();
+        }
+    }
     fn stdout(&mut self, bytes: &[u8]) {
         match self.frames.as_mut() {
             None => self.push(LogStream::Stdout, bytes),
@@ -226,13 +250,13 @@ impl Batcher {
             self.send();
         }
     }
-    fn note(&mut self, text: &str) {
+    pub(crate) fn note(&mut self, text: &str) {
         if let Ok(mut log) = self.log.lock() {
             self.pending
                 .extend(log.push_line(LogStream::Host, LogLevel::Info, text, false));
         }
     }
-    fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) {
         if let Ok(mut log) = self.log.lock()
             && log.flush_due()
         {
@@ -240,7 +264,7 @@ impl Batcher {
         }
         self.send();
     }
-    fn finish(&mut self) {
+    pub(crate) fn finish(&mut self) {
         if let Ok(mut log) = self.log.lock() {
             self.pending.extend(log.finish_streams());
             log.flush();
@@ -356,7 +380,11 @@ async fn drive(
     (status, timed_out, stop_kind)
 }
 
-async fn run_cleanup(spec: &CommandSpec, reason: &str, batch: &mut Batcher) -> CleanupState {
+pub(crate) async fn run_cleanup(
+    spec: &CommandSpec,
+    reason: &str,
+    batch: &mut Batcher,
+) -> CleanupState {
     let Some(argv) = &spec.cleanup else {
         return CleanupState::NotNeeded;
     };
@@ -412,6 +440,22 @@ async fn run_cleanup(spec: &CommandSpec, reason: &str, batch: &mut Batcher) -> C
         None => CleanupState::Unknown {
             message: "cleanup status could not be read".into(),
         },
+    }
+}
+
+/// The `LYRA_STOP_REASON` value passed to cleanup.
+pub(crate) fn cleanup_reason(
+    timed_out: bool,
+    stop_kind: Option<StopKind>,
+    status: Option<ExitStatus>,
+) -> &'static str {
+    match (timed_out, stop_kind, status) {
+        (true, _, _) => "timed_out",
+        (_, Some(StopKind::SessionClosed), _) => "session_closed",
+        (_, Some(StopKind::Cancelled), _) => "cancelled",
+        (_, Some(StopKind::Failed), _) => "failed",
+        (_, None, Some(s)) if s.success() => "completed",
+        _ => "failed",
     }
 }
 
@@ -496,14 +540,7 @@ pub async fn supervise(
     )
     .await;
     let exit = status.map(exit_info);
-    let reason = match (timed_out, stop_kind, status) {
-        (true, _, _) => "timed_out",
-        (_, Some(StopKind::SessionClosed), _) => "session_closed",
-        (_, Some(StopKind::Cancelled), _) => "cancelled",
-        (_, Some(StopKind::Failed), _) => "failed",
-        (_, None, Some(s)) if s.success() => "completed",
-        _ => "failed",
-    };
+    let reason = cleanup_reason(timed_out, stop_kind, status);
     // Cleanup output is plain log output even for plugins.
     batch.frames = None;
     let cleanup = run_cleanup(&spec, reason, &mut batch).await;
@@ -514,7 +551,7 @@ pub async fn supervise(
         .await;
 }
 
-fn remove_temp(files: &[PathBuf]) {
+pub(crate) fn remove_temp(files: &[PathBuf]) {
     for f in files {
         let _ = std::fs::remove_file(f);
     }

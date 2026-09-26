@@ -5,5 +5,6 @@ pub mod inspect;
 pub mod runtime;
 pub mod schedule;
 pub mod setup;
+pub mod terminal;
 pub mod tui;
 pub mod views;

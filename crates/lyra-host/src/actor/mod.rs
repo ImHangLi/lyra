@@ -10,6 +10,7 @@ mod runs;
 mod schedule;
 mod session;
 mod streams;
+mod terminal;
 mod views;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -170,6 +171,7 @@ pub struct Actor {
     recent: VecDeque<(RunRecord, SharedLog)>,
     validators: HashMap<Digest, Arc<jsonschema::Validator>>,
     subs: HashMap<SubscriptionId, Sub>,
+    terminals: HashMap<RunId, terminal::TerminalEntry>,
     event_seq: EventSeq,
     storage_warnings: Vec<Warning>,
     idle_since: Option<Instant>,
@@ -251,6 +253,7 @@ impl Actor {
             recent: VecDeque::new(),
             validators: HashMap::new(),
             subs: HashMap::new(),
+            terminals: HashMap::new(),
             event_seq: EventSeq::ZERO,
             storage_warnings,
             idle_since: Some(Instant::now()),
@@ -407,6 +410,7 @@ impl Actor {
             Msg::Closed { client } => {
                 self.clients.remove(&client);
                 self.subs.retain(|_, s| s.client != client);
+                self.release_terminal_locks(&client);
                 self.controller_left(&client);
             }
             Msg::Reserved { run_id, result } => self.reserved(run_id, result),
@@ -536,6 +540,11 @@ impl Actor {
                 let _: Empty = parse!(p);
                 self.config_reload(Some(r))
             }
+            Method::TerminalSnapshotM => self.terminal_snapshot(parse!(p), r),
+            Method::TerminalAcquire => self.terminal_acquire(client, parse!(p), r),
+            Method::TerminalRelease => self.terminal_release(client, parse!(p), r),
+            Method::TerminalInputM => self.terminal_input(client, parse!(p), r),
+            Method::TerminalResize => self.terminal_resize(client, parse!(p), r),
             Method::StreamSubscribe => self.subscribe(client, parse!(p), r),
             Method::StreamUnsubscribe => self.unsubscribe(client, parse!(p), r),
             other => r.send(Err(RpcError::new(

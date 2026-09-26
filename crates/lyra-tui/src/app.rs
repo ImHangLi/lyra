@@ -18,6 +18,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::clip;
 use crate::ipc::{Control, Event, LogChunk, Read, Tx};
 use crate::logs::LogPane;
+use crate::terminal::Terminals;
 
 const MAX_PANES: usize = 8;
 const NOTICE_SECS: u64 = 8;
@@ -92,6 +93,12 @@ pub enum Cmd {
     NextMatch,
     PrevMatch,
     Help,
+    /// Attach to the selected PTY run (or retry taking its input).
+    Attach,
+    /// Leave the terminal view.
+    Detach,
+    /// Keys go to the attached program (footer entry only).
+    Forward,
 }
 
 pub struct Binding {
@@ -101,7 +108,7 @@ pub struct Binding {
     pub footer: bool,
 }
 
-fn bind(keys: &'static str, label: impl Into<String>, cmd: Cmd) -> Binding {
+pub(crate) fn bind(keys: &'static str, label: impl Into<String>, cmd: Cmd) -> Binding {
     Binding {
         keys,
         label: label.into(),
@@ -145,6 +152,7 @@ pub struct Io {
     pub control: UnboundedSender<Control>,
     pub read: UnboundedSender<Read>,
     pub events: Tx,
+    pub paths: lyra_protocol::paths::WorkspacePaths,
 }
 
 pub struct App {
@@ -179,6 +187,8 @@ pub struct App {
     pub keeping: bool,
     pub quit: Option<Quit>,
     pub narrow: bool,
+    /// The PTY attach view (§13).
+    pub term: Terminals,
     io: Io,
 }
 
@@ -215,6 +225,7 @@ impl App {
             keeping: false,
             quit: None,
             narrow: false,
+            term: Terminals::new(io.paths.clone()),
             io,
         }
     }
@@ -303,7 +314,9 @@ impl App {
     pub fn handle(&mut self, ev: Event) {
         match ev {
             Event::Input(crossterm::event::Event::Key(k)) => self.key(k),
+            Event::Input(crossterm::event::Event::Paste(s)) => self.term.paste(s),
             Event::Input(_) => {}
+            Event::Terminal(m) => self.term.handle(m),
             Event::Frame(frame) => self.frame(*frame),
             Event::StreamReset => {
                 self.info("event stream reset (this TUI fell behind); state and log tail reloaded");
@@ -355,6 +368,7 @@ impl App {
                 }
             }
             Event::Described(a, res) => {
+                self.term.note_described(&a, &res);
                 let hash = res
                     .as_ref()
                     .map(|d| d.item.definition_hash.clone())
@@ -785,6 +799,9 @@ impl App {
     /// Every key that works now. The footer shows the `footer` ones; the router accepts
     /// only these.
     pub fn bindings(&self) -> Vec<Binding> {
+        if let Some(v) = self.term.bindings() {
+            return v;
+        }
         let mut v = Vec::new();
         match &self.modal {
             Modal::Search { logs, .. } => {
@@ -846,6 +863,9 @@ impl App {
                 }
                 Some(OpenKind::NeedsInput) => v.push(bind("Enter", "inputs", Cmd::Open)),
                 _ => {}
+            }
+            if self.attach_target().is_some() {
+                v.push(bind("a", "attach terminal", Cmd::Attach));
             }
             match self.toggle_intent(item) {
                 Some(Intent::Stop) => v.push(bind("s", "stop", Cmd::Toggle)),
@@ -922,6 +942,14 @@ impl App {
             Cmd::Quit,
         ));
         v
+    }
+
+    /// The selected item's active PTY run, if it can be attached.
+    fn attach_target(&self) -> Option<(ActionRef, RunId)> {
+        let item = self.selected_item()?;
+        let run = self.active.get(&item.action_ref)?;
+        (self.term.is_pty(&item.action_ref) && run.lifecycle.is_active())
+            .then(|| (item.action_ref.clone(), run.run_id.clone()))
     }
 
     pub fn is_controller(&self) -> bool {
@@ -1010,6 +1038,9 @@ impl App {
         if k.kind == KeyEventKind::Release {
             return;
         }
+        if self.term.is_open() {
+            return self.term.key(k);
+        }
         let repeat = k.kind == KeyEventKind::Repeat;
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         match &self.modal {
@@ -1097,6 +1128,7 @@ impl App {
             (KeyCode::Char('n'), _) => Cmd::NextMatch,
             (KeyCode::Char('N'), _) => Cmd::PrevMatch,
             (KeyCode::Char('?'), _) => Cmd::Help,
+            (KeyCode::Char('a'), _) => Cmd::Attach,
             _ => return,
         };
         let navigation = matches!(
@@ -1262,6 +1294,12 @@ impl App {
                 }
             }
             Cmd::Help => self.modal = Modal::Help,
+            Cmd::Attach => {
+                if let Some((a, run_id)) = self.attach_target() {
+                    self.term.open(a, run_id, self.io.events.clone());
+                }
+            }
+            Cmd::Detach | Cmd::Forward => {}
         }
     }
 
