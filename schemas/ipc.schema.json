@@ -2196,7 +2196,13 @@
     "SessionInfo": {
       "additionalProperties": false,
       "properties": {
+        "background_lease": {
+          "default": false,
+          "description": "True when an explicit background lease keeps work running without controllers\n(`expires_at` is null for a `ttl: none` lease).",
+          "type": "boolean"
+        },
         "controller_count": {
+          "description": "Controllers, including CLIs waiting on their own task.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"

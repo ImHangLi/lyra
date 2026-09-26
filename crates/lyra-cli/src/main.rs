@@ -376,10 +376,6 @@ fn main() -> ExitCode {
         Some(Command::Setup { refresh }) => {
             commands::setup::run(mode, ctx.project.as_deref(), refresh)
         }
-        None => {
-            use clap::CommandFactory;
-            let _ = Cli::command().print_help();
-            ExitCode::SUCCESS
-        }
+        None => commands::tui::open(&ctx),
     }
 }

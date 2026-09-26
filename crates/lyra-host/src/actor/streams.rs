@@ -79,25 +79,30 @@ impl Actor {
             state_revision: self.state_revision,
         };
         let snapshot = StreamEvent::Snapshot(self.status_data());
-        // Reply, ready, and snapshot are produced in one actor step: no event can slip between.
+        // Ready and snapshot are queued in the same actor step as the reply, so no event can
+        // slip between them. If the queue cannot take them, the subscription is refused
+        // instead of being registered without its first frames.
+        let ready = self.frame(None, None, ready);
+        let snapshot = self.frame(None, None, snapshot);
+        if !(out.event(ready) && out.event(snapshot)) {
+            return r.send(self.fail(ErrorInfo::new(
+                ErrorCode::RESET_REQUIRED,
+                "the stream connection is still draining earlier events; open a new stream connection",
+            )));
+        }
         r.send(self.ok(
             Subscribed {
                 subscription_id: id.clone(),
             },
             ReplyMeta::default(),
         ));
-        let ready = self.frame(None, None, ready);
-        let snapshot = self.frame(None, None, snapshot);
-        let ok = out.event(ready) && out.event(snapshot);
         let sub = Sub {
             client: client.clone(),
             kinds: Actor::kinds_of(&p.kinds),
             refs: p.refs,
             out,
         };
-        if ok {
-            self.subs.insert(id, sub);
-        }
+        self.subs.insert(id, sub);
     }
 
     pub(super) fn unsubscribe(
