@@ -2,7 +2,7 @@
   "api": 1,
   "id": "dev",
   "name": "Development",
-  "description": "Playground commands: passing and failing checks, a long-running server, interactive terminal programs, and a counter.",
+  "description": "Test workspace commands: passing and failing checks, a long-running server, interactive terminal programs, and a counter.",
   "tags": [
     "dev"
   ],
@@ -167,11 +167,11 @@
         ]
       },
       "env_files": [
-        "scripts/playground.env"
+        "scripts/workspace.env"
       ],
       "env": {
         "LAYER": "action",
-        "API_TOKEN": "playground-secret-token"
+        "API_TOKEN": "fixture-secret-token"
       }
     },
     {

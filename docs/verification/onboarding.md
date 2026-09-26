@@ -10,9 +10,9 @@ Results use four labels: **pass**, **fail**, **blocked**, and **not-run**. "Stru
 |---|---|---|---|---|---|
 | [FastAPI full-stack template](https://github.com/fastapi/full-stack-fastapi-template) | Python (uv) + Compose + Vite | `cb740b656d7a` | pass | pass (db, mailpit, migrations, backend) | pass |
 | [Outline](https://github.com/outline/outline) | TypeScript (yarn) + Makefile + Compose | `ed4aaf274df8` | pass | not-run: dependencies not installed (yarn is not on this machine, and a full install is several GB) | not-run |
-| `examples/playground` | own fixture | this repo | pass | pass | pass |
+| `tests/fixtures/workspace` | own fixture | this repo | pass | pass | pass |
 
-The plugins the agents generated are kept as examples in `examples/onboarding/` (drafts, discovery caches, and personal files excluded).
+The plugins the agents generated are kept as examples in `examples/` (drafts, discovery caches, and personal files excluded).
 
 ## Use cases
 
@@ -36,4 +36,4 @@ The plugins the agents generated are kept as examples in `examples/onboarding/` 
 - Only Claude Code was run as the agent. Codex and generic agents use the same skill files but were not tested.
 - Outline was validated structurally only. The frontend (`bun`) and the full Compose stack of the FastAPI template were not started.
 - One agent's environment had a security-review hook, which made the agent tighten an input pattern. This record reports that behavior; the agent's other actions were unaffected.
-- The agent runs are demonstrations of the workflow. They are not measurements of productivity.
+- The agent runs show the workflow. They are not measurements of productivity.

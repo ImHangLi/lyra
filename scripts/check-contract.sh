@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract conformance: generated schemas have not drifted, the playground validates,
+# Contract conformance: generated schemas have not drifted, the test workspace validates,
 # and every negative fixture is rejected by the real validator with a deterministic code.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -13,7 +13,7 @@ for schema in schemas/*.schema.json; do
   fi
 done
 
-"$LYRA" validate examples/playground/.lyra --json >/dev/null || { echo "playground failed validation"; status=1; }
+"$LYRA" validate tests/fixtures/workspace/.lyra --json >/dev/null || { echo "test workspace failed validation"; status=1; }
 
 while read -r case code; do
   [[ -z "$case" || "$case" == \#* ]] && continue

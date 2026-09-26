@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scheduled playground task: counts TODO markers in README.md and appends to a state file."""
+"""Scheduled fixture task: counts TODO markers in README.md and appends to a state file."""
 import os, pathlib, time
 
 root = pathlib.Path(os.environ["LYRA_WORKSPACE_ROOT"])

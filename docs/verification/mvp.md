@@ -4,10 +4,10 @@ The stack (#20 → #39, then #41) was merged into `main` as GitHub stack #40 at 
 
 **Final regression** on candidate `74e99d0`, macOS 27.2 arm64:
 - `cargo fmt --check`, `cargo clippy --workspace --all-targets --locked -D warnings`, `cargo build --locked`, and `scripts/check-contract.sh` all pass.
-- One end-to-end CLI pass on the playground succeeded. It covered catalog, run, a failing run, up, start, logs, exec, a structured scan, view, publish, schedule, PTY input, apply, gc plan, storage status, doctor, the TUI first frame, and down.
+- One end-to-end CLI pass on the test workspace succeeded. It covered catalog, run, a failing run, up, start, logs, exec, a structured scan, view, publish, schedule, PTY input, apply, gc plan, storage status, doctor, the TUI first frame, and down.
 - Nothing was left running, and there were no uncommitted files.
 
-**After the merge**, on `main` at `039c0c3`: CI passed (format, clippy, build, contract, and a live smoke). The same checks and a CLI pass on the playground passed locally, and the released binary passed the install and first-use checks in [release.md](release.md).
+**After the merge**, on `main` at `039c0c3`: CI passed (format, clippy, build, contract, and a live smoke). The same checks and a CLI pass on the test workspace passed locally, and the released binary passed the install and first-use checks in [release.md](release.md).
 
 Performance numbers are in [performance.md](performance.md). Real-project records are in [onboarding.md](onboarding.md), and install checks are in [release.md](release.md).
 
