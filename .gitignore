@@ -10,3 +10,4 @@
 # Local agent state and worktrees
 /.claude/
 /dist/
+__pycache__/
