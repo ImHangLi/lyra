@@ -196,6 +196,11 @@ def publish(stats, settings, interval=None):
     emit({"type": "view", "view_id": "processes", "op": "replace", "data": table(stats)})
 
 
+def publish_last(stats, settings):
+    """The snapshot goes to its own view, which the host keeps across sessions."""
+    emit({"type": "view", "view_id": "last", "op": "replace", "data": overview(stats, settings)})
+
+
 # --- Actions -----------------------------------------------------------------
 
 
@@ -234,7 +239,7 @@ def snapshot(settings):
     before, before_at = processes(), time.monotonic()
     time.sleep(1)
     stats, _, _ = sample(before, before_at)
-    publish(stats, settings)
+    publish_last(stats, settings)
     c, m, d = stats["cpu"], stats["memory"], stats["disk"]
     mem_pct = 100.0 * m["used"] / m["total"]
     disk_pct = 100.0 * d["used"] / d["total"]

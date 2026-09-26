@@ -9,14 +9,18 @@ It uses only the Python 3 standard library and local counters (`ps`, `sysctl`, `
 | Ref | Kind | What it does |
 |---|---|---|
 | `system.watch` | process | Samples every `interval_s` seconds and replaces the two views. Runs until you stop it. |
-| `system.snapshot` | task | Takes one sample, replaces the two views, and returns the numbers as the result. |
-| `system.overview` | text view | The dashboard: CPU, memory, and disk bars, then the top processes. |
+| `system.snapshot` | task | Takes one sample, saves it in `system.last`, and returns the numbers as the result. |
+| `system.overview` | text view | The live dashboard: CPU, memory, and disk bars, then the top processes. |
 | `system.processes` | table view | The 15 busiest processes: PID, name, CPU %, memory MiB. |
+| `system.last` | text view | The dashboard from the last `system.snapshot`. |
+
+Live dashboards use `"persistence": "session"`, so the host keeps them in memory and does not save every tick; snapshot results such as `system.last` use the default (`last`), so they are kept after the session ends.
 
 ```sh
 mira start system.watch        # keep it running (in the TUI: select "System monitor" and start it)
 mira view system.overview      # read the dashboard
 mira run system.snapshot       # one sample, no process left running
+mira view system.last          # the saved snapshot
 mira stop system.watch
 ```
 

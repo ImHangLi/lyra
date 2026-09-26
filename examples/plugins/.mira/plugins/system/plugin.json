@@ -36,7 +36,7 @@
     {
       "id": "snapshot",
       "title": "System snapshot",
-      "description": "Take one sample, replace the System and Processes views, and return the numbers as the result. Use it to read the numbers without a running monitor.",
+      "description": "Take one sample, save it in the Last snapshot view, and return the numbers as the result. Use it to read the numbers without a running monitor.",
       "mode": "task",
       "run": {"kind": "plugin"},
       "timeout": {"kind": "after", "ms": 30000},
@@ -59,7 +59,8 @@
     }
   ],
   "views": [
-    {"id": "overview", "title": "System", "kind": "text"},
-    {"id": "processes", "title": "Processes", "kind": "table"}
+    {"id": "overview", "title": "System", "kind": "text", "persistence": "session"},
+    {"id": "processes", "title": "Processes", "kind": "table", "persistence": "session"},
+    {"id": "last", "title": "Last snapshot", "kind": "text"}
   ]
 }
