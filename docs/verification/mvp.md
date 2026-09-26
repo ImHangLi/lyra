@@ -1,6 +1,6 @@
 # MVP verification index (LYR-18)
 
-The stack (#20 → #39, then #41) was merged into `main` as GitHub stack #40 at `039c0c3`, and `v0.1.0` was tagged on that commit. Every row below points to the PR whose description records the live evidence. Results use four labels: **pass**, **fail**, **blocked**, and **not-run**. A "pass" with a note means the main case passed and the note names a part that was not run.
+The stack (#20 → #39, then #41) was merged into `main` as GitHub stack #40 at `039c0c3`, and `v0.1.0` was tagged on that commit. Every row below points to the PR whose description records the live evidence. Results use five labels: **pass**, **partial**, **fail**, **blocked**, and **not-run**. **partial** means the main case passed, but part of the pass condition was not run. A note on a "pass" row gives the scope of the evidence.
 
 **Final regression** on candidate `74e99d0`, macOS 27.2 arm64:
 - `cargo fmt --check`, `cargo clippy --workspace --all-targets --locked -D warnings`, `cargo build --locked`, and `scripts/check-contract.sh` all pass.
@@ -26,7 +26,7 @@ Performance numbers are in [performance.md](performance.md). Real-project record
 | IPC-04 | pass | #31 | 40 subscriptions during heavy churn; state was continuous or reset explicitly |
 | IPC-05 | pass | #31 | A slow subscriber is reset; `stop` and `status` stay fast; the session survives |
 | LIFE-01 | pass | #23, #28 | The last controller closing stops work; an extra controller keeps it running |
-| LIFE-02 | pass | #27 | TTL expiry and non-overlapping ticks work. **not-run:** real OS sleep and wake |
+| LIFE-02 | partial | #27 | TTL expiry and non-overlapping ticks work with shortened TTLs. **not-run:** real OS sleep and wake, which is part of the pass condition |
 | LIFE-03 | pass | #23 | Stopping one run leaves the others running |
 | LIFE-04 | pass | #23, #29 | TERM, then KILL after grace, with reaping; a failed cleanup keeps the main result |
 | LIFE-05 | pass | #34 | Compose worktrees and a port conflict: only its own resources are touched, and volumes are kept |
@@ -38,28 +38,28 @@ Performance numbers are in [performance.md](performance.md). Real-project record
 | VIEW-04 | pass | #25 | Publish works with no session; it is visible later as historical |
 | VIEW-05 | pass | #32 | No revision reuse after SIGKILL; the old CAS is rejected |
 | UI-01 | pass | #28 | Keys match the footer; key auto-repeat never triggers actions |
-| UI-02 | pass | #28 | A pinned log stays put during a flood; copy is exact |
+| UI-02 | partial | #28 | A pinned log stays put during a flood, and copy is exact. Checked in a PTY with an xterm emulator (pyte). **not-run:** copy and scroll in a real macOS terminal |
 | UI-03 | pass | #30 | CJK, emoji, long lines, and resizes render without broken characters |
 | UI-04 | pass | #28, #30 | 60×18, 80×24, and 120×40 are usable; smaller windows recover |
-| UI-05 | pass | #30 | Mouse on and off match the help. **not-run:** native selection in Terminal.app or iTerm2 by hand |
+| UI-05 | partial | #30 | Mouse on and off match the help in an emulated PTY. **not-run:** native selection in Terminal.app or iTerm2 by hand |
 | PTY-01 | pass | #29 | Esc and Ctrl-C reach the child; Ctrl-] detaches; paste arrives once |
 | PTY-02 | pass | #29 | Input lock, INPUT_BUSY, release on disconnect, stale screen revision rejected |
 | PTY-03 | pass | #29 | Only the lock holder resizes; alternate screen handled |
 | PTY-04 | pass | #29 | OSC 52 and window sequences dropped; the host clipboard is unchanged |
-| PTY-05 | pass | #29 | The terminal is restored after a UI error or panic; SIGKILL limits are documented |
+| PTY-05 | partial | #29 | The terminal is restored after a UI error or panic in an emulated PTY; SIGKILL limits are documented. **not-run:** window close in a real macOS terminal |
 | DATA-01 | pass | #32 | Per-run and workspace log quotas hold; the active run rotates |
 | DATA-02 | pass | #22 | WAL is left to SQLite; clean close and reopen; a damaged DB is never replaced |
-| DATA-03 | pass | #22, #32 | `stop` works with storage failing (4 MiB disk image). New actions are refused when a reservation cannot commit; this was verified at the storage layer |
+| DATA-03 | partial | #22, #32 | `stop` works end to end with storage failing (4 MiB disk image). New actions are refused when a reservation cannot commit, but this was verified at the storage layer only, not end to end |
 | DATA-04 | pass | #23 | Secrets are never in history or errors; temporary inputs are deleted |
 | DATA-05 | pass | #31 | Provenance flags a success from an older definition as `stale` |
 | CONFIG-01 | pass | #26 | Of two concurrent applies, one succeeds and one gets REVISION_CONFLICT |
 | CONFIG-02 | pass | #26 | Invalid or partial disk config blocks new invokes; `reload` recovers |
 | CONFIG-03 | pass | #26 | A changed or disabled definition never restarts a run; it can still be stopped |
-| AGENT-01 | pass | #33, #34 | Real agent setup on FastAPI and Outline |
+| AGENT-01 | pass | #33, #34 | Real agent (Claude) setup on FastAPI, including a run. On Outline the setup was checked for structure only |
 | AGENT-02 | pass | #33, #34 | A new agent session reuses the existing tool |
 | AGENT-03 | pass | #33 | The agent added a structured plugin with no Core change |
 | AGENT-04 | pass | #31 | Reads are bounded by default and scoped to the run |
-| VALUE-01 | pass | #34 | First setup gives runnable tools; what was not verified is listed |
+| VALUE-01 | pass | #34 | First setup gives runnable tools on FastAPI; what was not verified is listed. Outline tools were not started |
 | VALUE-02 | pass | #34 | The human stops the agent's backend run from the TUI |
 | VALUE-03 | pass | #34 | A saved command is found by a new session without the old chat |
 | VALUE-04 | pass | #33, #34 | A new plugin needed no rebuild; the TUI and CLI see the same data |
