@@ -1778,11 +1778,7 @@ impl App {
             v.push(bind("b", "background", Cmd::Keep));
         }
         v.push(bind("?", "help", Cmd::Help));
-        v.push(bind(
-            "q",
-            format!("quit ({})", self.quit_effect(true)),
-            Cmd::Quit,
-        ));
+        v.push(bind("q", self.quit_label(), Cmd::Quit));
     }
 
     /// Keys for a selected view (list or view focus).
@@ -1901,72 +1897,39 @@ impl App {
                 .is_some_and(|s| Some(&s.id) == self.attached_to.as_ref())
     }
 
-    /// What closing this TUI does to the session's work (§5.1).
-    pub fn quit_effect(&self, short: bool) -> String {
-        let runs = self.active.len() + self.adhoc_runs;
+    /// What closing this window does to the runs (§5.1).
+    pub fn close_effect(&self) -> Close {
         let Some(s) = &self.session else {
-            return if short {
-                "no session".into()
-            } else {
-                "No work session was running.".into()
-            };
+            return Close::NoSession;
         };
         if !self.is_controller() {
-            return if short {
-                "work continues".into()
-            } else {
-                "This TUI was not a controller of the current session; its work continues.".into()
-            };
+            return Close::Watching;
         }
         if s.state == SessionState::Stopping {
-            return if short {
-                "session stopping".into()
-            } else {
-                "The session was already stopping.".into()
-            };
+            return Close::Stopping;
         }
         if s.controller_count > 1 {
-            let others = s.controller_count - 1;
-            return if short {
-                "work continues".into()
-            } else {
-                format!(
-                    "Work continues: {others} other controller(s) still attached ({runs} active run(s))."
-                )
-            };
+            return Close::OtherWindows(s.controller_count as usize - 1);
         }
-        if s.background_lease && s.expires_at.is_none() {
-            return if short {
-                "kept in background".into()
-            } else {
-                format!(
-                    "Work continues under a background lease without expiry ({runs} active run(s)); `mira down` stops it."
-                )
-            };
+        if s.background_lease || s.expires_at.is_some() {
+            return Close::Kept(s.expires_at.map(|t| self.clock(t, false)));
         }
-        if let Some(t) = s.expires_at {
-            return if short {
-                format!("kept until {}", self.clock(t, false))
-            } else {
-                format!(
-                    "Work continues in the background until {} ({runs} active run(s)); `mira down` stops it.",
-                    self.clock(t, false)
-                )
-            };
-        }
-        if runs == 0 {
-            if short {
-                "ends session".into()
-            } else {
-                "This was the last controller; the session ends.".into()
-            }
-        } else if short {
-            format!("stops {runs} run{}", if runs == 1 { "" } else { "s" })
-        } else {
-            format!(
-                "This was the last controller: the host is stopping {runs} run(s) this session owned."
-            )
-        }
+        Close::Last
+    }
+
+    /// Runs that closing this window stops or leaves running.
+    pub fn run_count(&self) -> usize {
+        self.active.len() + self.adhoc_runs
+    }
+
+    /// The footer label of `q`: `quit (stops 2 runs)`, `quit (keeps running until 16:07)`.
+    pub fn quit_label(&self) -> String {
+        close_label(&self.close_effect(), self.run_count())
+    }
+
+    /// The line printed after the window closes.
+    pub fn quit_message(&self) -> String {
+        close_message(&self.close_effect(), self.run_count())
     }
 
     pub fn clock(&self, t: Timestamp, seconds: bool) -> String {
@@ -2681,6 +2644,73 @@ fn rank(
     Some((*best, std::cmp::Reverse(tiers.len())))
 }
 
+/// What closing this window does to the runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Close {
+    NoSession,
+    /// This window does not control the runs.
+    Watching,
+    Stopping,
+    /// This many other windows stay open.
+    OtherWindows(usize),
+    /// The runs keep running in the background, until this local time when set.
+    Kept(Option<String>),
+    /// The last window: its runs stop.
+    Last,
+}
+
+/// `1 run`, `2 runs`.
+pub fn runs_word(n: usize) -> String {
+    format!("{n} run{}", if n == 1 { "" } else { "s" })
+}
+
+pub fn close_label(c: &Close, runs: usize) -> String {
+    match c {
+        Close::Kept(Some(t)) => format!("quit (keeps running until {t})"),
+        Close::Kept(None) => "quit (keeps running)".into(),
+        Close::Watching | Close::OtherWindows(_) if runs > 0 => "quit (keeps running)".into(),
+        Close::Last if runs > 0 => format!("quit (stops {})", runs_word(runs)),
+        _ => "quit".into(),
+    }
+}
+
+pub fn close_message(c: &Close, runs: usize) -> String {
+    let (keep, them) = if runs == 1 {
+        ("1 run keeps running".to_owned(), "it")
+    } else {
+        (format!("{runs} runs keep running"), "them")
+    };
+    match c {
+        Close::NoSession => "Nothing was running.".into(),
+        Close::Stopping => "Mira was already stopping its runs.".into(),
+        Close::Watching | Close::Last if runs == 0 => "Nothing was running.".into(),
+        Close::Watching => format!("{keep}. `mira down` stops {them}."),
+        Close::Last => format!("Stopping {}.", runs_word(runs)),
+        Close::OtherWindows(n) => {
+            let open = if *n == 1 {
+                "Another Mira window is open.".to_owned()
+            } else {
+                format!("{n} other Mira windows are open.")
+            };
+            if runs == 0 {
+                open
+            } else {
+                format!("{open} {keep}.")
+            }
+        }
+        Close::Kept(until) => {
+            let until = until
+                .as_ref()
+                .map_or(String::new(), |t| format!(" until {t}"));
+            if runs == 0 {
+                format!("Mira keeps running in the background{until}. `mira down` stops it.")
+            } else {
+                format!("{keep}{until}. `mira down` stops {them}.")
+            }
+        }
+    }
+}
+
 /// Lifecycle stages a run notice outlives: a started run stays "started" while it runs.
 fn stage(l: Lifecycle) -> u8 {
     match l {
@@ -2929,6 +2959,30 @@ mod tests {
         assert_eq!(enter(&a).as_deref(), Some("run"));
         a.items[0].mode = ActionMode::Process;
         assert_eq!(enter(&a).as_deref(), Some("restart"));
+    }
+
+    #[test]
+    fn closing_messages_name_the_runs_in_plain_words() {
+        assert_eq!(close_message(&Close::Last, 2), "Stopping 2 runs.");
+        assert_eq!(close_label(&Close::Last, 2), "quit (stops 2 runs)");
+        assert_eq!(close_label(&Close::Last, 0), "quit");
+        assert_eq!(
+            close_message(&Close::Kept(None), 2),
+            "2 runs keep running. `mira down` stops them."
+        );
+        assert_eq!(
+            close_label(&Close::Kept(Some("16:07".into())), 2),
+            "quit (keeps running until 16:07)"
+        );
+        assert_eq!(
+            close_message(&Close::Kept(Some("16:07".into())), 1),
+            "1 run keeps running until 16:07. `mira down` stops it."
+        );
+        assert_eq!(
+            close_message(&Close::OtherWindows(1), 2),
+            "Another Mira window is open. 2 runs keep running."
+        );
+        assert_eq!(close_message(&Close::NoSession, 0), "Nothing was running.");
     }
 
     #[test]

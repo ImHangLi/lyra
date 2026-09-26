@@ -517,7 +517,7 @@ fn session_spans(app: &App, t: &Theme) -> Vec<Span<'static>> {
         }
     };
     if !app.is_controller() && app.session.is_some() {
-        out.push(Span::styled(" · observing", t.dim()));
+        out.push(Span::styled(" · watching", t.dim()));
     }
     let warnings = app.storage_warnings.len() + app.config_warnings.len();
     if warnings > 0 {
@@ -1689,7 +1689,7 @@ fn draw_rail(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
             lines.push(row("mode", mode.into(), st));
             lines.push(row(
                 "windows",
-                format!("{} controller(s)", s.controller_count),
+                format!("{} open", s.controller_count),
                 Style::default(),
             ));
             let exp = match s.expires_at {
@@ -1699,7 +1699,7 @@ fn draw_rail(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
                     left_word((e.unix_ms() - Timestamp::now().unix_ms()) / 1000)
                 ),
                 None if s.background_lease => "no expiry".into(),
-                None => "when the last window closes".into(),
+                None => "last window closes".into(),
             };
             lines.push(row("ends", exp, Style::default()));
         }
@@ -1712,9 +1712,9 @@ fn draw_rail(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     lines.push(row(
         "this window",
         if app.is_controller() {
-            "controller".into()
+            "in control".into()
         } else {
-            "observing".into()
+            "watching".into()
         },
         Style::default(),
     ));
@@ -1940,8 +1940,8 @@ fn help_lines(app: &App, t: &Theme, avail: usize) -> (Vec<Line<'static>>, usize)
         "Tabs: [ and ] switch Logs, History, and Output; 1, 2, 3 go straight to one. \
          H opens History; Enter there shows that run's logs.",
         ": runs one public mira command (not a shell). Forms: Tab moves, Enter runs.",
-        "q and Ctrl-C close this TUI; the host stops owned work only when no controller or \
-         background lease remains. b keeps work running for 2h (mira down stops it).",
+        "q and Ctrl-C close this window. When it is the last Mira window, its runs stop. \
+         b keeps them running for 2h; `mira down` stops them.",
         "If a crash leaves the terminal in raw mode, type `reset` and press Enter.",
     ];
     for n in notes {
