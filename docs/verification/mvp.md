@@ -74,4 +74,4 @@ Performance numbers are in [performance.md](performance.md). Real-project record
   - Outline startup. The Docker engine on the verification machine returned HTTP 500 for every API call, and a full Outline install needs several GB of dependencies.
   - Agent setup with Codex or a generic agent. `skills install --agent codex` and `--agent generic` write the skills to `.agents/skills`, but a headless agent run was not permitted in this environment. Setup and reuse were verified with Claude only.
 - **Out of scope:** the x86_64 build and M2 hardware. Every target machine is Apple Silicon M3 or later.
-- **No new tests:** no permanent automated tests were added, because the owner did not authorize them. The evidence is the recorded live runs, CI, and `scripts/check-contract.sh`.
+- **Few automated tests:** the owner authorized a small set after the release review. They cover the fixes in #43 and the process-group ledger: bounded log tails, env-file errors that hide values, `input --text` parsing, and never signalling a mismatched process. CI runs them. The other evidence is the recorded live runs, CI, and `scripts/check-contract.sh`.

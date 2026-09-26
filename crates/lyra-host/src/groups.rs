@@ -109,3 +109,41 @@ pub fn kill_remaining<'a>(runs: impl IntoIterator<Item = &'a RunId>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+
+    use super::*;
+
+    #[test]
+    fn identity_is_stable_for_a_live_process() {
+        let pid = std::process::id();
+        assert!(identity(pid).is_some());
+        assert_eq!(identity(pid), identity(pid));
+    }
+
+    #[test]
+    fn a_mismatched_entry_is_never_signalled() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let path = std::env::temp_dir().join(format!("lyra-test-{}-group", std::process::id()));
+        std::fs::write(&path, format!("{}\nThu Jan  1 00:00:00 1970\n", child.id())).unwrap();
+        assert_eq!(kill_if_same(&path), None);
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "the process must still run"
+        );
+        std::fs::write(
+            &path,
+            format!("{}\n{}\n", child.id(), identity(child.id()).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(kill_if_same(&path), Some(child.id()));
+        assert!(child.wait().unwrap().signal().is_some());
+        let _ = std::fs::remove_file(path);
+    }
+}

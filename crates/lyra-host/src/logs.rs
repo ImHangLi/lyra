@@ -450,3 +450,53 @@ fn read_segment(path: &Path) -> Vec<LogRecord> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lyra-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn output_without_newlines_keeps_the_tail_bounded() {
+        let dir = scratch("tail");
+        let mut log = RunLog::create(dir.clone(), 64 * 1024 * 1024);
+        let chunk = vec![b'a'; 64 * 1024];
+        let mut records = 0;
+        for _ in 0..16 {
+            records += log.push_bytes(LogStream::Stdout, &chunk).len();
+            assert!(log.partial[0].len() <= MAX_LOG_TEXT_BYTES);
+        }
+        // The last full chunk stays buffered until more output or a newline arrives.
+        assert_eq!(records, 16 * 64 * 1024 / MAX_LOG_TEXT_BYTES - 1);
+        assert_eq!(log.partial[0].len(), MAX_LOG_TEXT_BYTES);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn invalid_utf8_without_newlines_still_drains() {
+        let dir = scratch("utf8");
+        let mut log = RunLog::create(dir.clone(), 64 * 1024 * 1024);
+        let chunk = vec![0xff; 64 * 1024];
+        let records = log.push_bytes(LogStream::Stdout, &chunk);
+        assert!(log.partial[0].len() <= MAX_LOG_TEXT_BYTES);
+        assert!(records.len() >= 7);
+        assert!(records.iter().all(|r| r.truncated));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn complete_lines_are_split_on_newlines() {
+        let dir = scratch("lines");
+        let mut log = RunLog::create(dir.clone(), 1024 * 1024);
+        let records = log.push_bytes(LogStream::Stdout, b"one\r\ntwo\nthr");
+        let texts: Vec<_> = records.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts, ["one", "two"]);
+        assert_eq!(log.partial[0], b"thr");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
