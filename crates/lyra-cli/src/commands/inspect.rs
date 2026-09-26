@@ -1,7 +1,7 @@
 //! Observe-only commands: `status`, `catalog`, `describe`, `paths`, `doctor`.
 
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use lyra_client::ConnectOptions;
@@ -366,29 +366,36 @@ pub fn doctor(ctx: &Ctx) -> ExitCode {
         }
         if let Some(set) = &set {
             for lp in &set.plugins {
-                let mut programs: Vec<(String, String)> = Vec::new();
+                // (label, program, directory a relative program path resolves against)
+                let mut programs: Vec<(String, String, PathBuf)> = Vec::new();
                 if let Some(e) = &lp.plugin.entry {
-                    programs.push((format!("{} entry", lp.plugin.id), e.program().to_owned()));
+                    programs.push((
+                        format!("{} entry", lp.plugin.id),
+                        e.program().to_owned(),
+                        lp.dir.as_path().to_path_buf(),
+                    ));
                 }
                 for a in &lp.plugin.actions {
                     if let Runner::Command { argv } = &a.run {
+                        // Commands run in the action cwd, which is relative to the root.
                         programs.push((
                             format!("{}.{}", lp.plugin.id, a.id),
                             argv.program().to_owned(),
+                            paths.root.as_path().join(&a.cwd),
                         ));
                     }
                 }
-                for (what, program) in programs {
-                    let base = if what.ends_with(" entry") {
-                        lp.dir.as_path()
-                    } else {
-                        paths.root.as_path()
-                    };
-                    if !on_path(&program, base) {
+                for (what, program, base) in programs {
+                    if !on_path(&program, &base) {
+                        let place = if program.contains('/') {
+                            ""
+                        } else {
+                            " on PATH"
+                        };
                         push(
                             "executable",
                             CheckStatus::Warn,
-                            format!("{what}: `{program}` was not found on PATH"),
+                            format!("{what}: `{program}` was not found{place}"),
                         );
                     }
                 }
