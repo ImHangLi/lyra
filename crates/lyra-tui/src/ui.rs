@@ -92,6 +92,7 @@ pub fn draw(f: &mut Frame, app: &mut App, color: bool) {
         Modal::Form(_) => draw_form(f, app, &t, area),
         Modal::Output(_) => draw_output(f, app, &t, area),
         Modal::RowAction { .. } => draw_row_actions(f, app, &t, area),
+        Modal::History { .. } => draw_history(f, app, &t, area),
         _ => {}
     }
 }
@@ -113,6 +114,23 @@ fn short_root(root: &str, max: usize) -> String {
         tail.first().unwrap_or(&"")
     );
     slice_cells(&s, 0, max)
+}
+
+/// Longest branch name the header shows before it cuts the end.
+const BRANCH_MAX: usize = 24;
+/// Shortest branch and path the header keeps when both have to shrink.
+const BRANCH_MIN: usize = 12;
+const ROOT_MIN: usize = 8;
+
+/// Cuts `s` to `max` cells, marking the cut with `...`.
+fn clip_end(s: &str, max: usize) -> String {
+    if cells(s) <= max {
+        return s.to_owned();
+    }
+    if max <= 3 {
+        return slice_cells(s, 0, max);
+    }
+    format!("{}...", slice_cells(s, 0, max - 3))
 }
 
 fn draw_header(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
@@ -148,12 +166,35 @@ fn draw_header(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     }
     let rw = cells(&right);
     let left_max = (area.width as usize).saturating_sub(rw + 8);
-    let root = short_root(&app.root, left_max);
-    let gap = (area.width as usize).saturating_sub(6 + cells(&root) + rw);
+    // The path shrinks first; the branch shrinks only to leave the path its minimum.
+    let cap = left_max
+        .saturating_sub(4 + ROOT_MIN)
+        .clamp(BRANCH_MIN, BRANCH_MAX)
+        .min(left_max.saturating_sub(2));
+    let branch = app
+        .branch
+        .as_deref()
+        .map(|b| format!("({})", clip_end(&display(b), cap)))
+        .filter(|b| b.len() > 2)
+        .unwrap_or_default();
+    let root = match left_max.checked_sub(cells(&branch) + 2) {
+        _ if branch.is_empty() => short_root(&app.root, left_max),
+        Some(m) if m >= ROOT_MIN => short_root(&app.root, m),
+        _ => String::new(),
+    };
+    let sep = if root.is_empty() || branch.is_empty() {
+        ""
+    } else {
+        "  "
+    };
+    let gap =
+        (area.width as usize).saturating_sub(6 + cells(&root) + sep.len() + cells(&branch) + rw);
     let line = Line::from(vec![
         Span::styled("Lyra", t.bold()),
         Span::raw("  "),
         Span::raw(root),
+        Span::raw(sep),
+        Span::styled(branch, t.fg(Color::Cyan)),
         Span::raw(" ".repeat(gap.max(1))),
         Span::styled(right, t.bold()),
     ]);
@@ -439,6 +480,19 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     let text_w = w.saturating_sub(gutter).max(1);
     let focus = app.focus == Focus::Logs;
     let offset = app.offset;
+    let old = app.viewing.get(&a).map(|rec| {
+        let when = rec
+            .ended_at
+            .map_or(String::new(), |e| format!(" at {}", app.clock(e, true)));
+        (
+            rec.run_id.clone(),
+            format!(
+                "{} RUN · {}{when}",
+                freshness_of(rec).to_uppercase(),
+                run_word(rec.lifecycle)
+            ),
+        )
+    });
     let Some(p) = app.panes.get_mut(&a) else {
         f.render_widget(Paragraph::new("loading..."), body);
         return;
@@ -447,6 +501,10 @@ fn draw_detail(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     p.width = text_w;
     // Status bar of the log panel.
     let mut bar_text = String::from("LOGS");
+    // An older run chosen in the history list reads as history, never as the current run.
+    if let Some(rec) = old.as_ref().filter(|o| p.run_id.as_ref() == Some(&o.0)) {
+        bar_text.push_str(&format!(" · {} ·", rec.1));
+    }
     if let Some(r) = &p.run_id {
         bar_text.push_str(&format!(" {r}"));
     }
@@ -1043,4 +1101,151 @@ fn draw_row_actions(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     }
     f.render_widget(Clear, rect);
     f.render_widget(Paragraph::new(lines).block(Block::bordered()), rect);
+}
+
+/// The run's freshness word (§14.6); runs without provenance read as historical.
+fn freshness_of(rec: &lyra_protocol::run::RunRecord) -> &'static str {
+    freshness_word(
+        rec.provenance
+            .as_ref()
+            .map_or(lyra_protocol::view::Freshness::Historical, |p| p.freshness),
+    )
+}
+
+fn run_word(l: Lifecycle) -> &'static str {
+    match l {
+        Lifecycle::Starting => "starting",
+        Lifecycle::Running => "running",
+        Lifecycle::Stopping { .. } => "stopping",
+        Lifecycle::Finished { outcome } => match outcome {
+            Outcome::Succeeded => "succeeded",
+            Outcome::Failed => "failed",
+            Outcome::Cancelled => "stopped",
+            Outcome::TimedOut => "timed out",
+            Outcome::Interrupted => "interrupted",
+        },
+    }
+}
+
+fn took(ms: i64) -> String {
+    let s = ms / 1000;
+    match ms {
+        ..1000 => format!("{}ms", ms.max(0)),
+        1000..60_000 => format!("{}.{}s", s, (ms % 1000) / 100),
+        60_000..3_600_000 => format!("{}m{:02}s", s / 60, s % 60),
+        _ => format!("{}h{:02}m", s / 3600, (s % 3600) / 60),
+    }
+}
+
+/// Start time: `HH:MM:SS` today, `MM-DD HH:MM` on other days.
+fn started_word(app: &App, ts: Timestamp) -> String {
+    let at = |t: Timestamp| {
+        time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(t.unix_ms()) * 1_000_000)
+            .ok()
+            .map(|d| d.to_offset(app.offset))
+    };
+    match (at(ts), at(Timestamp::now())) {
+        (Some(d), Some(now)) if d.date() != now.date() => format!(
+            "{:02}-{:02} {:02}:{:02}",
+            u8::from(d.month()),
+            d.day(),
+            d.hour(),
+            d.minute()
+        ),
+        _ => app.clock(ts, true),
+    }
+}
+
+fn draw_history(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
+    let Modal::History {
+        action_ref,
+        runs,
+        error,
+        index,
+    } = &app.modal
+    else {
+        return;
+    };
+    let n = runs.as_ref().map_or(1, |r| r.len().max(1));
+    let rect = centered(area, 72, n as u16 + 4);
+    let w = rect.width.saturating_sub(2) as usize;
+    let shown = app.panes.get(action_ref).and_then(|p| p.run_id.as_ref());
+    let mut lines = vec![Line::from(Span::styled(
+        slice_cells(
+            &format!(
+                "{:<12}{:<13}{:<9}{:<12}{}",
+                "started", "outcome", "took", "run", "state"
+            ),
+            0,
+            w,
+        ),
+        t.dim(),
+    ))];
+    match (runs, error) {
+        (_, Some(e)) => lines.push(Line::from(Span::styled(
+            slice_cells(&display(&format!("Cannot read run history: {e}")), 0, w),
+            t.fg(Color::Red),
+        ))),
+        (None, None) => lines.push(Line::from("reading...")),
+        (Some(r), None) if r.is_empty() => lines.push(Line::from("No runs recorded yet.")),
+        (Some(r), None) => {
+            let body_h = (rect.height as usize).saturating_sub(3).max(1);
+            let skip = (index + 1).saturating_sub(body_h);
+            for (i, rec) in r.iter().enumerate().skip(skip).take(body_h) {
+                let mut outcome = run_word(rec.lifecycle).to_owned();
+                if let Some(c) = rec.exit.as_ref().and_then(|e| e.code)
+                    && c != 0
+                {
+                    outcome = format!("{outcome} ({c})");
+                }
+                let dur = match rec.ended_at {
+                    Some(e) => took(e.unix_ms() - rec.started_at.unix_ms()),
+                    None => format!("{} so far", ago(rec.started_at)),
+                };
+                let id = rec.run_id.to_string();
+                let mut state = if rec.lifecycle.is_active() {
+                    "current".to_owned()
+                } else {
+                    freshness_of(rec).to_owned()
+                };
+                if Some(&rec.run_id) == shown {
+                    state.push_str(" · shown");
+                }
+                let text = format!(
+                    "{:<12}{:<13}{:<9}{:<12}{state}",
+                    started_word(app, rec.started_at),
+                    outcome,
+                    dur,
+                    slice_cells(&id, 0, 10),
+                );
+                let st = if i == *index {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                let color = match rec.lifecycle {
+                    Lifecycle::Finished {
+                        outcome: Outcome::Succeeded,
+                    } => Style::default(),
+                    Lifecycle::Finished {
+                        outcome: Outcome::Cancelled,
+                    } => t.dim(),
+                    Lifecycle::Finished { .. } => t.fg(Color::Red),
+                    _ => t.fg(Color::Green),
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("{:<w$}", slice_cells(&text, 0, w), w = w),
+                    st.patch(color),
+                )));
+            }
+        }
+    }
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        Paragraph::new(lines).block(Block::bordered().title(format!(
+            " History · {} ",
+            slice_cells(&action_ref.to_string(), 0, w.saturating_sub(12))
+        ))),
+        rect,
+    );
 }

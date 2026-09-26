@@ -30,6 +30,8 @@ pub const KEEP_TTL_MS: u64 = 2 * 60 * 60 * 1000;
 /// Log tail size fetched when a run is opened.
 const TAIL_LIMIT: u32 = 500;
 const TAIL_BYTES: u32 = 256 * 1024;
+/// Runs shown in an action's history list.
+const HISTORY_LIMIT: u32 = 20;
 /// A subscription must confirm with `ready` within this time.
 const READY_TIMEOUT: Duration = Duration::from_secs(3);
 /// View pages use the largest reply budget so text, tree, and JSON views arrive inline.
@@ -68,6 +70,8 @@ pub enum Read {
     },
     RunGet(RunId),
     Recent,
+    /// The newest runs of one action, for the history list.
+    History(ActionRef),
     Catalog,
     /// Every page of a view's current revision.
     View(ViewRef),
@@ -104,6 +108,7 @@ pub enum Event {
     Older(RunId, Result<LogChunk, ErrorInfo>),
     Run(Result<Box<RunRecord>, ErrorInfo>),
     Recent(Result<RunList, ErrorInfo>),
+    History(ActionRef, Result<RunList, ErrorInfo>),
     Catalog(Result<CatalogList, ErrorInfo>),
     /// A reply carried a new catalog revision.
     CatalogChanged,
@@ -397,6 +402,22 @@ pub async fn read_worker(
                     note(f);
                 }
                 let _ = tx.send(Event::Recent(res.map_err(|f| f.info())));
+            }
+            Read::History(action_ref) => {
+                let params = RunListParams {
+                    action_ref: Some(action_ref.clone()),
+                    outcome: None,
+                    cursor: None,
+                    limit: Some(HISTORY_LIMIT),
+                    max_bytes: Some(MAX_REPLY_BUDGET_BYTES as u32),
+                };
+                let res = call::<_, RunList>(&mut client, Method::RunListM, &params)
+                    .await
+                    .map(|a| a.data);
+                if let Err(f) = &res {
+                    note(f);
+                }
+                let _ = tx.send(Event::History(action_ref, res.map_err(|f| f.info())));
             }
             Read::View(view_ref) => {
                 let res = read_view(&mut client, &view_ref).await;
