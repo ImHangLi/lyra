@@ -11,7 +11,6 @@ use lyra_protocol::ids::{ActionRef, ItemRef, RequestKey, RunId};
 use lyra_protocol::ipc::*;
 use lyra_protocol::limits::MAX_PUBLIC_REPLY_BYTES;
 use lyra_protocol::manifest::TimeoutWire;
-use lyra_protocol::paths::WorkspacePaths;
 use lyra_protocol::reply::{PublicReply, ReplyContext};
 use lyra_protocol::run::{Lifecycle, Outcome, RunRecord};
 use lyra_protocol::schema_profile::SchemaDoc;
@@ -611,19 +610,14 @@ fn stop_text(d: &SessionStopData) -> String {
     }
 }
 
-/// Result of [`stop_other_build_at`].
-pub(crate) enum OtherBuildStop {
-    /// The owner file or the process did not check out; nothing was signalled.
-    NotVerified,
-    /// SIGTERM was sent; `exited` tells whether the host exited within the wait.
-    Signalled { version: String, exited: bool },
-}
-
 /// Stops a host from another Lyra build (for example after an upgrade), which the protocol
 /// handshake refuses. The host's owner file must name this workspace and the process must
 /// still be that `lyra __host`; the host then shuts down its work on SIGTERM as usual.
-pub(crate) async fn stop_other_build_at(paths: &WorkspacePaths, wait: Duration) -> OtherBuildStop {
+async fn stop_other_build_host(ctx: &Ctx, cx: ReplyContext, refused: ErrorInfo) -> ExitCode {
     use rustix::process::{Pid, Signal, kill_process, test_kill_process};
+    let Ok(paths) = ctx.paths() else {
+        return ctx.fail(cx, refused);
+    };
     let owner: Option<Value> = std::fs::read(paths.owner())
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok());
@@ -652,40 +646,15 @@ pub(crate) async fn stop_other_build_at(paths: &WorkspacePaths, wait: Duration) 
             .is_some_and(|o| String::from_utf8_lossy(&o.stdout).contains("__host"))
     };
     let Some(pid) = pid.filter(|p| root_matches && is_host(*p)) else {
-        return OtherBuildStop::NotVerified;
-    };
-    if kill_process(pid, Signal::TERM).is_err() {
-        return OtherBuildStop::NotVerified;
-    }
-    // The host stops its runs within its shutdown deadline (15 s), then exits.
-    let deadline = tokio::time::Instant::now() + wait;
-    loop {
-        if test_kill_process(pid).is_err() {
-            return OtherBuildStop::Signalled {
-                version,
-                exited: true,
-            };
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return OtherBuildStop::Signalled {
-                version,
-                exited: false,
-            };
-        }
-        tokio::time::sleep(POLL).await;
-    }
-}
-
-async fn stop_other_build_host(ctx: &Ctx, cx: ReplyContext, refused: ErrorInfo) -> ExitCode {
-    let Ok(paths) = ctx.paths() else {
         return ctx.fail(cx, refused);
     };
-    let version = match stop_other_build_at(&paths, Duration::from_secs(30)).await {
-        OtherBuildStop::NotVerified => return ctx.fail(cx, refused),
-        OtherBuildStop::Signalled {
-            version,
-            exited: false,
-        } => {
+    if kill_process(pid, Signal::TERM).is_err() {
+        return ctx.fail(cx, refused);
+    }
+    // The host stops its runs within its shutdown deadline (15 s), then exits.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while test_kill_process(pid).is_ok() {
+        if tokio::time::Instant::now() >= deadline {
             return ctx.fail(
                 cx,
                 ErrorInfo::new(
@@ -694,8 +663,8 @@ async fn stop_other_build_host(ctx: &Ctx, cx: ReplyContext, refused: ErrorInfo) 
                 ),
             );
         }
-        OtherBuildStop::Signalled { version, .. } => version,
-    };
+        tokio::time::sleep(POLL).await;
+    }
     let data = SessionStopData {
         session: None,
         stopped_session: None,
