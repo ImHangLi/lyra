@@ -252,6 +252,8 @@ pub struct Io {
 
 pub struct App {
     pub root: String,
+    /// `name` from `.lyra/workspace.json`, for the header.
+    pub workspace_name: Option<String>,
     /// The workspace's git branch (or short commit); `None` outside a git repository.
     pub branch: Option<String>,
     branch_at: Instant,
@@ -320,6 +322,7 @@ impl App {
     pub fn new(root: String, offset: time::UtcOffset, io: Io) -> Self {
         let branch = crate::git::head_label(std::path::Path::new(&root));
         Self {
+            workspace_name: workspace_name(&root),
             branch,
             branch_at: Instant::now(),
             view_poll_at: Instant::now(),
@@ -410,6 +413,8 @@ impl App {
             }
         }
         self.plugin_order = order;
+        // The workspace file may have changed with the catalog.
+        self.workspace_name = workspace_name(&self.root);
         // Views that no longer exist lose their panel; the others read again.
         let known: Vec<ViewRef> = self.views.iter().map(|v| v.view_ref.clone()).collect();
         self.view_panes.retain(|r, _| known.contains(r));
@@ -2485,6 +2490,20 @@ fn stage(l: Lifecycle) -> u8 {
         Lifecycle::Stopping { .. } => 1,
         Lifecycle::Finished { .. } => 2,
     }
+}
+
+/// The non-empty `name` of the workspace file, if it has one.
+fn workspace_name(root: &str) -> Option<String> {
+    let path = std::path::Path::new(root)
+        .join(".lyra")
+        .join("workspace.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    v.get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned)
 }
 
 fn start_word(item: &Item) -> &'static str {

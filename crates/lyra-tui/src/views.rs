@@ -718,11 +718,8 @@ impl ViewPane {
         let mut head = vec![Span::raw(if first > 0 { "‹ " } else { "  " })];
         for &c in &shown {
             let cw = widths.get(c).copied().unwrap_or(3);
-            let st = if c == self.col {
-                Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-            } else {
-                Style::default().add_modifier(Modifier::BOLD)
-            };
+            // Every header cell looks the same; the selected cell is marked in its row.
+            let st = Style::default().add_modifier(Modifier::BOLD);
             head.push(Span::styled(fit(&columns[c].label, cw), st));
             head.push(Span::raw(" "));
         }

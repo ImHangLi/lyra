@@ -519,7 +519,11 @@ fn draw_header(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     let rw = line_cells(&right) + 1;
     let brand = " ◆ lyra";
     let root = app.root.trim_end_matches('/');
-    let name = display(root.rsplit('/').next().unwrap_or(root));
+    let name = display(
+        app.workspace_name
+            .as_deref()
+            .unwrap_or_else(|| root.rsplit('/').next().unwrap_or(root)),
+    );
     // Brand, two spaces, the name; then the branch chip and the path share what is left.
     let mut room = w.saturating_sub(rw + cells(brand) + 2 + 2);
     let name = ellipsize(&name, room.min(32));
@@ -793,8 +797,8 @@ fn draw_main(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         return;
     };
     let focus = app.focus == Focus::Logs;
-    let block = panel(t, panel_title(t, &display(&item.title), focus), focus)
-        .padding(Padding::horizontal(1));
+    // The card shows the title; the border names the pane.
+    let block = panel(t, panel_title(t, "Tool", focus), focus).padding(Padding::horizontal(1));
     let inner = block.inner(area);
     f.render_widget(block, area);
     let w = inner.width as usize;
@@ -1341,7 +1345,7 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     let kind = v.kind;
     let description = display(&v.description);
     let tone = view_tone(app, v);
-    let block = panel(t, panel_title(t, &title, focus), focus).padding(Padding::horizontal(1));
+    let block = panel(t, panel_title(t, "View", focus), focus).padding(Padding::horizontal(1));
     let inner = block.inner(area);
     f.render_widget(block, area);
     let w = inner.width as usize;
@@ -1773,23 +1777,36 @@ fn draw_footer(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
 
 // ----- overlays -----------------------------------------------------------------------
 
-/// One column of help: a key chip padded to a fixed width, then the wrapped label.
-fn help_column(t: &Theme, bindings: &[Binding], width: usize) -> Vec<Line<'static>> {
-    const KEYS_W: usize = 13;
+/// Cells of the key part of one help column: the widest chip plus a gap.
+fn help_key_w(bindings: &[Binding]) -> usize {
+    bindings
+        .iter()
+        .map(|b| cells(b.keys) + 2)
+        .max()
+        .unwrap_or(0)
+        + 2
+}
+
+fn help_col_w(bindings: &[Binding]) -> usize {
+    help_key_w(bindings) + bindings.iter().map(|b| cells(&b.label)).max().unwrap_or(0)
+}
+
+/// One column of help: each key chip is exactly ` key `; labels start in one column after
+/// the widest chip and wrap within `width`.
+fn help_column(t: &Theme, bindings: &[Binding], key_w: usize, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for b in bindings {
         let chip_w = cells(b.keys) + 2;
-        let label_w = width.saturating_sub(KEYS_W).max(8);
+        let label_w = width.saturating_sub(key_w).max(8);
         for (i, part) in wrap(&b.label, label_w).into_iter().enumerate() {
-            let head = if i == 0 {
+            let mut spans = if i == 0 {
                 vec![
                     key_chip(t, b.keys),
-                    Span::raw(" ".repeat(KEYS_W.saturating_sub(chip_w).max(1))),
+                    Span::raw(" ".repeat(key_w.saturating_sub(chip_w))),
                 ]
             } else {
-                vec![Span::raw(" ".repeat(KEYS_W.max(chip_w + 1)))]
+                vec![Span::raw(" ".repeat(key_w))]
             };
-            let mut spans = head;
             spans.push(Span::raw(part));
             lines.push(Line::from(spans));
         }
@@ -1797,8 +1814,35 @@ fn help_column(t: &Theme, bindings: &[Binding], width: usize) -> Vec<Line<'stati
     lines
 }
 
-/// The help overlay's lines, wrapped to `width` cells; two columns when wide.
-fn help_lines(app: &App, t: &Theme, width: usize) -> Vec<Line<'static>> {
+/// The help overlay's lines and their content width, at most `avail` cells; two columns
+/// when they fit.
+fn help_lines(app: &App, t: &Theme, avail: usize) -> (Vec<Line<'static>>, usize) {
+    const GAP: usize = 4;
+    /// Notes wrap to at least this width when the keys are narrower.
+    const NOTES_W: usize = 72;
+    let all = app.normal_bindings();
+    let (l, r) = all.split_at(all.len().div_ceil(2));
+    let two = help_col_w(l) + GAP + help_col_w(r);
+    let (body, keys_w) = if two <= avail && all.len() > 6 {
+        let (lw, rw) = (help_col_w(l), help_col_w(r));
+        let left = help_column(t, l, help_key_w(l), lw);
+        let right = help_column(t, r, help_key_w(r), rw);
+        let mut out = Vec::new();
+        for i in 0..left.len().max(right.len()) {
+            let mut spans: Vec<Span> = left.get(i).map(|x| x.spans.clone()).unwrap_or_default();
+            let used = line_cells(&spans);
+            spans.push(Span::raw(" ".repeat(lw.saturating_sub(used) + GAP)));
+            if let Some(x) = right.get(i) {
+                spans.extend(x.spans.clone());
+            }
+            out.push(Line::from(spans));
+        }
+        (out, two)
+    } else {
+        let w = help_col_w(&all).min(avail);
+        (help_column(t, &all, help_key_w(&all), w), w)
+    };
+    let width = keys_w.max(NOTES_W.min(avail));
     let mut lines = vec![
         Line::from(Span::styled(
             "Keys that work here",
@@ -1806,25 +1850,7 @@ fn help_lines(app: &App, t: &Theme, width: usize) -> Vec<Line<'static>> {
         )),
         Line::from(""),
     ];
-    // Help lists the keys of the normal mode for the current focus.
-    let all = app.normal_bindings();
-    if width >= 80 {
-        let col_w = (width - 3) / 2;
-        let (l, r) = all.split_at(all.len().div_ceil(2));
-        let left = help_column(t, l, col_w);
-        let right = help_column(t, r, col_w);
-        for i in 0..left.len().max(right.len()) {
-            let mut spans: Vec<Span> = left.get(i).map(|x| x.spans.clone()).unwrap_or_default();
-            let used = line_cells(&spans);
-            spans.push(Span::raw(" ".repeat(col_w.saturating_sub(used) + 3)));
-            if let Some(x) = right.get(i) {
-                spans.extend(x.spans.clone());
-            }
-            lines.push(Line::from(spans));
-        }
-    } else {
-        lines.extend(help_column(t, &all, width));
-    }
+    lines.extend(body);
     lines.push(Line::from(""));
     let notes = [
         if app.mouse {
@@ -1846,7 +1872,7 @@ fn help_lines(app: &App, t: &Theme, width: usize) -> Vec<Line<'static>> {
                 .map(|l| Line::from(Span::styled(l, t.dim()))),
         );
     }
-    lines
+    (lines, width)
 }
 
 fn overlay<'a>(t: &Theme, title: Line<'a>) -> Block<'a> {
@@ -1858,15 +1884,12 @@ fn overlay<'a>(t: &Theme, title: Line<'a>) -> Block<'a> {
 }
 
 fn draw_help(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
-    let w = area.width.saturating_sub(8).min(120);
-    let h = area.height.saturating_sub(4);
-    let rect = Rect {
-        x: area.x + (area.width - w) / 2,
-        y: area.y + 2,
-        width: w,
-        height: h,
-    };
-    let lines = help_lines(app, t, w.saturating_sub(4) as usize);
+    // Borders and one column of padding on each side take 4 cells.
+    let avail = (area.width as usize).saturating_sub(8);
+    let (lines, content_w) = help_lines(app, t, avail);
+    let w = (content_w + 4).min(area.width.saturating_sub(4) as usize) as u16;
+    let h = (lines.len() + 2).min(area.height.saturating_sub(2) as usize) as u16;
+    let rect = centered(area, w, h);
     let rows = h.saturating_sub(2) as usize;
     let max = lines.len().saturating_sub(rows);
     let top = match &mut app.modal {
@@ -1889,8 +1912,45 @@ fn draw_help(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         );
     }
     let shown: Vec<Line> = lines.into_iter().skip(top).take(rows).collect();
-    f.render_widget(Clear, rect);
+    clear_around(f, rect, area);
     f.render_widget(Paragraph::new(shown).block(block), rect);
+}
+
+/// Clears `rect` and a one-cell margin around it, so no cut text from the panes behind
+/// touches an overlay's border. A side with only a sliver left clears to the edge.
+fn clear_around(f: &mut Frame, rect: Rect, area: Rect) {
+    const SLIVER: u16 = 3;
+    let x = if rect.x - area.x <= SLIVER {
+        area.x
+    } else {
+        rect.x - 1
+    };
+    let y = if rect.y - area.y <= SLIVER {
+        area.y
+    } else {
+        rect.y - 1
+    };
+    let (area_r, area_b) = (area.x + area.width, area.y + area.height);
+    let (rect_r, rect_b) = (rect.x + rect.width, rect.y + rect.height);
+    let right = if area_r - rect_r <= SLIVER {
+        area_r
+    } else {
+        rect_r + 1
+    };
+    let bottom = if area_b - rect_b <= SLIVER {
+        area_b
+    } else {
+        rect_b + 1
+    };
+    f.render_widget(
+        Clear,
+        Rect {
+            x,
+            y,
+            width: right - x,
+            height: bottom - y,
+        },
+    );
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -2007,7 +2067,7 @@ fn draw_form(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         Intent::Restart => "Run again",
         _ => "Run",
     };
-    f.render_widget(Clear, rect);
+    clear_around(f, rect, area);
     f.render_widget(
         Paragraph::new(shown).block(overlay(
             t,
@@ -2031,7 +2091,7 @@ fn draw_output(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         .take(h)
         .map(|l| Line::from(slice_cells(&display(l), 0, w)))
         .collect();
-    f.render_widget(Clear, rect);
+    clear_around(f, rect, area);
     let title_style = if o.failed {
         t.fg(Tone::Rose).add_modifier(Modifier::BOLD)
     } else {
@@ -2074,7 +2134,7 @@ fn draw_row_actions(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         };
         lines.push(Line::from(Span::styled(text, st)));
     }
-    f.render_widget(Clear, rect);
+    clear_around(f, rect, area);
     f.render_widget(
         Paragraph::new(lines).block(overlay(t, panel_title(t, "Row action", true))),
         rect,
