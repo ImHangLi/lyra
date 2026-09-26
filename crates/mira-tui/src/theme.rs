@@ -4,8 +4,9 @@
 //! background (see [`Background`]). When the background is unknown, a middle set that
 //! passes as marks on both is used, and colored words fall back to the default foreground.
 //! Truecolor terminals get the exact tones, 256-color terminals a checked table entry,
-//! 16-color terminals a named color, and `NO_COLOR` gets none. Secondary text uses the DIM
-//! modifier. State is never shown by color alone: see [`Mark`].
+//! 16-color terminals a named color, and `NO_COLOR` gets none. The DIM modifier is for
+//! decoration only; secondary text uses the `Muted` tone. State is never shown by color
+//! alone: see [`Mark`].
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -142,18 +143,21 @@ pub enum Tone {
     Amber,
     /// Rose: failed, errors.
     Rose,
+    /// Gray for secondary text: hints, ages, labels.
+    Muted,
     /// Dark text on chip backgrounds.
     Ink,
 }
 
 impl Tone {
-    pub const ALL: [Tone; 7] = [
+    pub const ALL: [Tone; 8] = [
         Tone::Accent,
         Tone::AccentDeep,
         Tone::Sky,
         Tone::Leaf,
         Tone::Amber,
         Tone::Rose,
+        Tone::Muted,
         Tone::Ink,
     ];
 
@@ -161,10 +165,10 @@ impl Tone {
         self as usize
     }
 
-    /// The truecolor value on `bg`.
-    pub fn rgb(self, bg: Background) -> (u8, u8, u8) {
+    /// The truecolor value on `bg`. `None`: the default foreground.
+    pub fn rgb(self, bg: Background) -> Option<(u8, u8, u8)> {
         use Background::*;
-        match (self, bg) {
+        Some(match (self, bg) {
             (Tone::Ink, _) => (0x1C, 0x1C, 0x1C),
             (Tone::Accent, Light) => (0xBA, 0x3B, 0x0C),
             (Tone::AccentDeep, Light) => (0xA8, 0x4C, 0x28),
@@ -172,12 +176,14 @@ impl Tone {
             (Tone::Leaf, Light) => (0x3A, 0x73, 0x43),
             (Tone::Amber, Light) => (0x88, 0x60, 0x18),
             (Tone::Rose, Light) => (0xC2, 0x2E, 0x2A),
+            (Tone::Muted, Light) => (0x5F, 0x5F, 0x5F),
             (Tone::Accent, Dark) => (0xF2, 0x6B, 0x3A),
             (Tone::AccentDeep, Dark) => (0xD7, 0x7A, 0x56),
             (Tone::Sky, Dark) => (0x5C, 0x97, 0xCE),
             (Tone::Leaf, Dark) => (0x52, 0xA3, 0x5E),
             (Tone::Amber, Dark) => (0xD9, 0x9A, 0x2B),
             (Tone::Rose, Dark) => (0xE0, 0x71, 0x6D),
+            (Tone::Muted, Dark) => (0x9A, 0x9A, 0x9A),
             // Marks that pass 3:1 on light and dark backgrounds alike.
             (Tone::Accent, Unknown) => (0xEC, 0x4A, 0x10),
             (Tone::AccentDeep, Unknown) => (0xC8, 0x5A, 0x30),
@@ -185,44 +191,49 @@ impl Tone {
             (Tone::Leaf, Unknown) => (0x4A, 0x93, 0x55),
             (Tone::Amber, Unknown) => (0xAE, 0x7A, 0x1F),
             (Tone::Rose, Unknown) => (0xD9, 0x53, 0x4F),
-        }
+            (Tone::Muted, Unknown) => return None,
+        })
     }
 
     /// The xterm 256-color entry on `bg`: the nearest entry of the 6x6x6 cube or the gray
     /// ramp that keeps the contrast of the truecolor value (the tests check each one).
-    pub fn indexed(self, bg: Background) -> u8 {
+    pub fn indexed(self, bg: Background) -> Option<u8> {
         use Background::*;
-        match (self, bg) {
+        Some(match (self, bg) {
             (Tone::Ink, _) => 234,
             (Tone::Accent | Tone::AccentDeep, Light) => 94,
             (Tone::Sky, Light) => 25,
             (Tone::Leaf, Light) => 22,
             (Tone::Amber, Light) => 58,
             (Tone::Rose, Light) => 124,
+            (Tone::Muted, Light) => 59,
             (Tone::Accent, Dark) => 209,
             (Tone::AccentDeep, Dark) => 173,
             (Tone::Sky, Dark) => 68,
             (Tone::Leaf, Dark) => 71,
             (Tone::Amber, Dark) => 172,
             (Tone::Rose, Dark) => 167,
+            (Tone::Muted, Dark) => 247,
             (Tone::Accent | Tone::AccentDeep, Unknown) => 166,
             (Tone::Sky, Unknown) => 67,
             (Tone::Leaf, Unknown) => 65,
             (Tone::Amber, Unknown) => 130,
             (Tone::Rose, Unknown) => 131,
-        }
+            (Tone::Muted, Unknown) => return None,
+        })
     }
 
     /// The 16-color entry.
-    fn basic(self) -> Color {
-        match self {
+    fn basic(self) -> Option<Color> {
+        Some(match self {
             Tone::Accent | Tone::AccentDeep => Color::LightRed,
             Tone::Sky => Color::Blue,
             Tone::Leaf => Color::Green,
             Tone::Amber => Color::Yellow,
             Tone::Rose => Color::Red,
+            Tone::Muted => return None,
             Tone::Ink => Color::Black,
-        }
+        })
     }
 
     /// A chip background. Chips carry their own contrast (dark ink on a mid tone), so they
@@ -230,14 +241,14 @@ impl Tone {
     pub fn chip_rgb(self) -> (u8, u8, u8) {
         match self {
             Tone::Sky => (0x5B, 0x9B, 0xD5),
-            t => t.rgb(Background::Dark),
+            t => t.rgb(Background::Dark).unwrap_or((0x9A, 0x9A, 0x9A)),
         }
     }
 
     pub fn chip_indexed(self) -> u8 {
         match self {
             Tone::Sky => 68,
-            t => t.indexed(Background::Dark),
+            t => t.indexed(Background::Dark).unwrap_or(247),
         }
     }
 }
@@ -257,8 +268,8 @@ pub fn index_rgb(i: u8) -> (u8, u8, u8) {
 pub struct Theme {
     pub mode: ColorMode,
     pub bg: Background,
-    fg: [Option<Color>; 7],
-    chip_bg: [Option<Color>; 7],
+    fg: [Option<Color>; 8],
+    chip_bg: [Option<Color>; 8],
 }
 
 impl Theme {
@@ -266,17 +277,14 @@ impl Theme {
         let pick = |tone: Tone, chip: bool| -> Option<Color> {
             match mode {
                 ColorMode::None => None,
-                ColorMode::Basic => Some(tone.basic()),
+                ColorMode::Basic => tone.basic(),
                 ColorMode::Indexed if chip => Some(Color::Indexed(tone.chip_indexed())),
-                ColorMode::Indexed => Some(Color::Indexed(tone.indexed(bg))),
+                ColorMode::Indexed => tone.indexed(bg).map(Color::Indexed),
                 ColorMode::TrueColor if chip => {
                     let (r, g, b) = tone.chip_rgb();
                     Some(Color::Rgb(r, g, b))
                 }
-                ColorMode::TrueColor => {
-                    let (r, g, b) = tone.rgb(bg);
-                    Some(Color::Rgb(r, g, b))
-                }
+                ColorMode::TrueColor => tone.rgb(bg).map(|(r, g, b)| Color::Rgb(r, g, b)),
             }
         };
         Self {
@@ -306,10 +314,16 @@ impl Theme {
         }
     }
 
+    /// Secondary text: hints, ages, labels. The default foreground when no gray passes.
+    pub fn muted(&self) -> Style {
+        self.fg(Tone::Muted)
+    }
+
     pub fn bold(&self) -> Style {
         Style::default().add_modifier(Modifier::BOLD)
     }
 
+    /// Faint decoration: rules and unfocused borders. Never for text.
     pub fn dim(&self) -> Style {
         Style::default().add_modifier(Modifier::DIM)
     }
@@ -344,7 +358,7 @@ impl Theme {
 pub struct Mark {
     pub glyph: &'static str,
     pub word: &'static str,
-    /// `None` draws the mark dim.
+    /// `None` draws the mark muted.
     pub tone: Option<Tone>,
 }
 
@@ -355,12 +369,12 @@ impl Mark {
 
     /// The glyph's style.
     pub fn style(&self, t: &Theme) -> Style {
-        self.tone.map_or(t.dim(), |c| t.fg(c))
+        self.tone.map_or(t.muted(), |c| t.fg(c))
     }
 
     /// The word's style.
     pub fn word_style(&self, t: &Theme) -> Style {
-        self.tone.map_or(t.dim(), |c| t.word(c))
+        self.tone.map_or(t.muted(), |c| t.word(c))
     }
 }
 
@@ -381,13 +395,14 @@ mod tests {
     const LIGHT_BGS: [(u8, u8, u8); 2] = [(0xFF, 0xFF, 0xFF), (0xE6, 0xE6, 0xE6)];
     const TEXT: f64 = 4.5;
     const MARK: f64 = 3.0;
-    const COLORED: [Tone; 6] = [
+    const COLORED: [Tone; 7] = [
         Tone::Accent,
         Tone::AccentDeep,
         Tone::Sky,
         Tone::Leaf,
         Tone::Amber,
         Tone::Rose,
+        Tone::Muted,
     ];
 
     fn check(tone: Tone, rgb: (u8, u8, u8), bgs: &[(u8, u8, u8)], min: f64, what: &str) {
@@ -410,8 +425,9 @@ mod tests {
     fn every_tone_passes_as_text_on_its_background() {
         for tone in COLORED {
             for (bg, bgs) in [(Background::Light, LIGHT_BGS), (Background::Dark, DARK_BGS)] {
-                check(tone, tone.rgb(bg), &bgs, TEXT, "truecolor text");
-                let idx = index_rgb(tone.indexed(bg));
+                let rgb = tone.rgb(bg).unwrap_or_default();
+                check(tone, rgb, &bgs, TEXT, "truecolor text");
+                let idx = tone.indexed(bg).map(index_rgb).unwrap_or_default();
                 check(tone, idx, &bgs, TEXT, "256-color text");
             }
         }
@@ -421,21 +437,19 @@ mod tests {
     fn the_unknown_background_set_passes_as_marks_on_both() {
         let all = [LIGHT_BGS, DARK_BGS].concat();
         for tone in COLORED {
-            check(
-                tone,
-                tone.rgb(Background::Unknown),
-                &all,
-                MARK,
-                "truecolor mark",
-            );
-            let idx = index_rgb(tone.indexed(Background::Unknown));
-            check(tone, idx, &all, MARK, "256-color mark");
+            let Some(rgb) = tone.rgb(Background::Unknown) else {
+                assert_eq!(tone, Tone::Muted);
+                continue;
+            };
+            check(tone, rgb, &all, MARK, "truecolor mark");
+            let idx = tone.indexed(Background::Unknown).map(index_rgb);
+            check(tone, idx.unwrap_or_default(), &all, MARK, "256-color mark");
         }
     }
 
     #[test]
     fn chip_text_passes_on_every_chip() {
-        let ink = Tone::Ink.rgb(Background::Dark);
+        let ink = Tone::Ink.rgb(Background::Dark).unwrap_or_default();
         for tone in [Tone::Accent, Tone::Sky] {
             let r = contrast(tone.chip_rgb(), ink);
             assert!(r >= TEXT, "chip {tone:?}: {r:.2}");

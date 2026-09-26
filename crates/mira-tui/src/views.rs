@@ -612,8 +612,9 @@ impl ViewPane {
     }
 
     /// Lines for the body area (`width` cells). `focus` highlights the cursor with
-    /// `selected`; without the focus the cursor row is bold.
-    pub fn lines(&mut self, focus: bool, selected: Style) -> Vec<Line<'static>> {
+    /// `selected`; without the focus the cursor row is bold. Debug items and the cell
+    /// detail line use `muted`.
+    pub fn lines(&mut self, focus: bool, selected: Style, muted: Style) -> Vec<Line<'static>> {
         let sel = if focus {
             selected
         } else {
@@ -621,7 +622,7 @@ impl ViewPane {
         };
         let w = self.width.max(1);
         if let Some(ViewData::Table { columns, rows }) = self.data() {
-            return self.table_lines(columns, rows, w, sel, focus);
+            return self.table_lines(columns, rows, w, sel, focus, muted);
         }
         let mut out = Vec::new();
         for (i, part) in self.visible() {
@@ -636,7 +637,7 @@ impl ViewPane {
                 && let Some(x) = items.get(i)
             {
                 if matches!(x.level, LogLevel::Debug) {
-                    style = style.add_modifier(Modifier::DIM);
+                    style = muted;
                 }
                 if matches!(x.level, LogLevel::Error | LogLevel::Warn) {
                     style = style.add_modifier(Modifier::BOLD);
@@ -663,6 +664,7 @@ impl ViewPane {
         w: usize,
         sel: Style,
         focus: bool,
+        muted: Style,
     ) -> Vec<Line<'static>> {
         // First shown column: keep the selected column on screen.
         let avail = w.saturating_sub(2);
@@ -764,7 +766,7 @@ impl ViewPane {
         out.truncate(self.height.saturating_sub(1));
         out.push(Line::from(Span::styled(
             slice_cells(&self.cell_detail().unwrap_or_default(), 0, w),
-            Style::default().add_modifier(Modifier::DIM),
+            muted,
         )));
         out
     }
