@@ -1,0 +1,56 @@
+{
+  "api": 1,
+  "id": "demo",
+  "name": "Demo Scanner",
+  "description": "Find marker comments such as TODO in project files and show them as a table, a tree, and a summary.",
+  "tags": ["demo", "inspect"],
+  "entry": {"argv": ["python3", "main.py"]},
+  "actions": [
+    {
+      "id": "scan",
+      "title": "Scan for markers",
+      "description": "Search text files under the workspace for a marker and publish the matches.",
+      "mode": "task",
+      "run": {"kind": "plugin"},
+      "timeout": {"kind": "after", "ms": 30000},
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "marker": {"type": "string", "default": "TODO", "minLength": 1, "maxLength": 64},
+          "max_files": {"type": "integer", "default": 200, "minimum": 1, "maximum": 5000}
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {"files": {"type": "integer"}, "matches": {"type": "integer"}},
+        "required": ["files", "matches"],
+        "additionalProperties": false
+      },
+      "effects": ["read-files"]
+    },
+    {
+      "id": "show",
+      "title": "Show match",
+      "description": "Show the lines around one match.",
+      "mode": "task",
+      "run": {"kind": "plugin"},
+      "timeout": {"kind": "after", "ms": 10000},
+      "input_schema": {
+        "type": "object",
+        "properties": {"path": {"type": "string", "minLength": 1}, "line": {"type": "integer", "minimum": 1}},
+        "required": ["path", "line"],
+        "additionalProperties": false
+      },
+      "effects": ["read-files"]
+    }
+  ],
+  "views": [
+    {"id": "table", "title": "Matches", "kind": "table", "row_actions": [{"action": "show", "bindings": {"path": "path", "line": "line"}}]},
+    {"id": "summary", "title": "Summary", "kind": "text"},
+    {"id": "tree", "title": "By directory", "kind": "tree"},
+    {"id": "context", "title": "Match context", "kind": "text"},
+    {"id": "raw", "title": "Raw result", "kind": "json"},
+    {"id": "events", "title": "Scan events", "kind": "log"}
+  ]
+}

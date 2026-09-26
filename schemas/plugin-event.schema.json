@@ -1,0 +1,494 @@
+{
+  "$defs": {
+    "Api1": {
+      "const": 1
+    },
+    "ArtifactOwnership": {
+      "enum": [
+        "managed",
+        "external"
+      ],
+      "type": "string"
+    },
+    "Column": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/ColumnType"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ColumnType": {
+      "enum": [
+        "text",
+        "number",
+        "boolean",
+        "timestamp"
+      ],
+      "type": "string"
+    },
+    "ErrorCode": {
+      "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+      "type": "string"
+    },
+    "ErrorInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "details": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "message": {
+          "type": "string"
+        },
+        "next_action": {
+          "$ref": "#/$defs/NextAction"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "type": "object"
+    },
+    "HealthState": {
+      "enum": [
+        "unknown",
+        "healthy",
+        "warn",
+        "error"
+      ],
+      "type": "string"
+    },
+    "LogItem": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "level": {
+          "$ref": "#/$defs/LogLevel",
+          "default": "info"
+        },
+        "producer_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "LogLevel": {
+      "enum": [
+        "debug",
+        "info",
+        "warn",
+        "error"
+      ],
+      "type": "string"
+    },
+    "NextAction": {
+      "additionalProperties": false,
+      "description": "A suggested follow-up command. Never executed automatically.",
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "argv",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "Row": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "values": {
+          "additionalProperties": true,
+          "description": "Column ID → value; `null` means no value. Every column must be present.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "values"
+      ],
+      "type": "object"
+    },
+    "TextFormat": {
+      "enum": [
+        "plain",
+        "markdown"
+      ],
+      "type": "string"
+    },
+    "Timestamp": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+      "type": "string"
+    },
+    "TreeNode": {
+      "additionalProperties": false,
+      "properties": {
+        "children": {
+          "items": {
+            "$ref": "#/$defs/TreeNode"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "ViewData": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "$ref": "#/$defs/TextFormat",
+              "default": "plain"
+            },
+            "kind": {
+              "const": "text",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "columns": {
+              "items": {
+                "$ref": "#/$defs/Column"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "table",
+              "type": "string"
+            },
+            "rows": {
+              "items": {
+                "$ref": "#/$defs/Row"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "columns",
+            "rows"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/LogItem"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "log",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "tree",
+              "type": "string"
+            },
+            "nodes": {
+              "items": {
+                "$ref": "#/$defs/TreeNode"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "nodes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "json",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ViewId": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}$",
+      "type": "string"
+    },
+    "ViewOp": {
+      "enum": [
+        "replace",
+        "append"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One plugin output frame as written on stdout.",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/Api1"
+        },
+        "fields": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        },
+        "level": {
+          "$ref": "#/$defs/LogLevel"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "log",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "api",
+        "level",
+        "text"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/Api1"
+        },
+        "current": {
+          "format": "double",
+          "type": "number"
+        },
+        "message": {
+          "type": "string"
+        },
+        "total": {
+          "format": "double",
+          "type": "number"
+        },
+        "type": {
+          "const": "progress",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "api",
+        "message"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/Api1"
+        },
+        "message": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/HealthState"
+        },
+        "type": {
+          "const": "status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "api",
+        "state",
+        "message"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/Api1"
+        },
+        "data": {
+          "$ref": "#/$defs/ViewData"
+        },
+        "op": {
+          "$ref": "#/$defs/ViewOp"
+        },
+        "type": {
+          "const": "view",
+          "type": "string"
+        },
+        "view_id": {
+          "$ref": "#/$defs/ViewId"
+        }
+      },
+      "required": [
+        "type",
+        "api",
+        "view_id",
+        "op",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/Api1"
+        },
+        "label": {
+          "type": "string"
+        },
+        "mime": {
+          "type": "string"
+        },
+        "ownership": {
+          "$ref": "#/$defs/ArtifactOwnership"
+        },
+        "path": {
+          "type": "string"
+        },
+        "type": {
+          "const": "artifact",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "api",
+        "path",
+        "mime",
+        "label",
+        "ownership"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/Api1"
+        },
+        "data": {
+          "description": "Required; may be `null`."
+        },
+        "error": {
+          "$ref": "#/$defs/ErrorInfo"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "type": {
+          "const": "result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "api",
+        "ok",
+        "summary",
+        "data"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "PluginFrame"
+}

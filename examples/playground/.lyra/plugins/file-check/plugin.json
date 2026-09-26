@@ -1,0 +1,30 @@
+{
+  "api": 1,
+  "id": "file-check",
+  "name": "File Check",
+  "description": "Check whether explicitly selected project files exist and report their sizes.",
+  "tags": ["files", "inspect"],
+  "entry": {"argv": ["python3", "main.py"]},
+  "actions": [{
+    "id": "inspect",
+    "title": "Check files",
+    "description": "Inspect named files relative to this workspace without reading their contents.",
+    "mode": "task",
+    "run": {"kind": "plugin"},
+    "timeout": {"kind": "after", "ms": 10000},
+    "input_schema": {
+      "type": "object",
+      "properties": {"paths": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "string", "minLength": 1, "maxLength": 4096}}},
+      "required": ["paths"],
+      "additionalProperties": false
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {"checked": {"type": "integer", "minimum": 0}, "present": {"type": "integer", "minimum": 0}},
+      "required": ["checked", "present"],
+      "additionalProperties": false
+    },
+    "effects": ["read-files"]
+  }],
+  "views": [{"id": "files", "title": "Files", "kind": "table", "persistence": "last"}]
+}

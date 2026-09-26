@@ -1,0 +1,1 @@
+{"api": 1, "id": "bad", "name": "Bad", "description": "Negative fixture.", "entry": {"argv": ["python3", "main.py"]}, "actions": [{"id": "a", "title": "A", "description": "A", "mode": "task", "terminal": "pty", "run": {"kind": "plugin"}}]}

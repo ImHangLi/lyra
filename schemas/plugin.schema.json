@@ -1,0 +1,411 @@
+{
+  "$defs": {
+    "ActionId": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}$",
+      "type": "string"
+    },
+    "ActionMode": {
+      "enum": [
+        "task",
+        "process"
+      ],
+      "type": "string"
+    },
+    "ActionWire": {
+      "additionalProperties": false,
+      "properties": {
+        "cleanup": {
+          "$ref": "#/$defs/CommandRunnerWire"
+        },
+        "cwd": {
+          "default": ".",
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "effects": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "env_files": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "input_schema": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "meta": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        },
+        "mode": {
+          "$ref": "#/$defs/ActionMode"
+        },
+        "output_schema": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "run": {
+          "$ref": "#/$defs/RunnerWire"
+        },
+        "schedule": {
+          "$ref": "#/$defs/ScheduleWire"
+        },
+        "stop_grace_ms": {
+          "default": 5000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stop_signal": {
+          "$ref": "#/$defs/StopSignal",
+          "default": "term"
+        },
+        "terminal": {
+          "$ref": "#/$defs/TerminalMode",
+          "default": "pipe"
+        },
+        "timeout": {
+          "$ref": "#/$defs/TimeoutWire"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "description",
+        "mode",
+        "run"
+      ],
+      "type": "object"
+    },
+    "Api1": {
+      "const": 1
+    },
+    "CommandRunnerWire": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "argv": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "argv"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EntryWire": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "type": "object"
+    },
+    "Persistence": {
+      "enum": [
+        "last",
+        "session"
+      ],
+      "type": "string"
+    },
+    "PluginId": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}$",
+      "type": "string"
+    },
+    "RowActionWire": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "bindings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Top-level input parameter name → column ID. No expressions or interpolation.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "RunnerWire": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "argv": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "argv"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "plugin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ScheduleWire": {
+      "additionalProperties": false,
+      "properties": {
+        "every_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "params": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        },
+        "run_on_start": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "every_ms"
+      ],
+      "type": "object"
+    },
+    "StopSignal": {
+      "enum": [
+        "term",
+        "interrupt"
+      ],
+      "type": "string"
+    },
+    "TerminalMode": {
+      "enum": [
+        "pipe",
+        "pty"
+      ],
+      "type": "string"
+    },
+    "TimeoutWire": {
+      "description": "`{\"kind\":\"none\"}` or `{\"kind\":\"after\",\"ms\":N}`. Also used for session TTLs.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "after",
+              "type": "string"
+            },
+            "ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "ms"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ViewDefinitionWire": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "default": "",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/ViewId"
+        },
+        "kind": {
+          "$ref": "#/$defs/ViewKind"
+        },
+        "meta": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        },
+        "persistence": {
+          "$ref": "#/$defs/Persistence",
+          "default": "last"
+        },
+        "row_actions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RowActionWire"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ViewId": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}$",
+      "type": "string"
+    },
+    "ViewKind": {
+      "enum": [
+        "text",
+        "table",
+        "log",
+        "tree",
+        "json"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "actions": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ActionWire"
+      },
+      "type": "array"
+    },
+    "api": {
+      "$ref": "#/$defs/Api1"
+    },
+    "config": {
+      "additionalProperties": true,
+      "default": {},
+      "type": "object"
+    },
+    "config_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "description": {
+      "type": "string"
+    },
+    "docs": {
+      "type": "string"
+    },
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "entry": {
+      "$ref": "#/$defs/EntryWire"
+    },
+    "id": {
+      "$ref": "#/$defs/PluginId"
+    },
+    "meta": {
+      "additionalProperties": true,
+      "default": {},
+      "type": "object"
+    },
+    "name": {
+      "type": "string"
+    },
+    "tags": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "views": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ViewDefinitionWire"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "api",
+    "id",
+    "name",
+    "description"
+  ],
+  "title": "PluginWire",
+  "type": "object"
+}

@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/ImHangLi/lyra"
+rust-version = "1.90"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+# ErrorInfo is the deliberate public error value; boxing it everywhere hurts call sites.
+result_large_err = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

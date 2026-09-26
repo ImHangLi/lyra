@@ -1,0 +1,3832 @@
+{
+  "$defs": {
+    "AbsolutePath": {
+      "pattern": "^/",
+      "type": "string"
+    },
+    "Ack": {
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "type": "object"
+    },
+    "ActionDescription": {
+      "additionalProperties": false,
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "effects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "env_files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "env_names": {
+          "description": "Names only; values are never described.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "has_schedule": {
+          "type": "boolean"
+        },
+        "input_schema": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/ActionMode"
+        },
+        "output_schema": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "runner": {
+          "type": "string"
+        },
+        "terminal": {
+          "$ref": "#/$defs/TerminalMode"
+        },
+        "timeout": {
+          "$ref": "#/$defs/TimeoutWire"
+        },
+        "write_only_fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "mode",
+        "runner",
+        "terminal",
+        "timeout",
+        "cwd",
+        "env_names",
+        "env_files",
+        "effects",
+        "has_schedule",
+        "write_only_fields"
+      ],
+      "type": "object"
+    },
+    "ActionExecParams": {
+      "additionalProperties": false,
+      "description": "Ad-hoc command through the same command/task path; never a catalog entry.",
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "client_env": {
+          "$ref": "#/$defs/ClientEnv"
+        },
+        "foreground": {
+          "default": false,
+          "type": "boolean"
+        },
+        "label": {
+          "type": "string"
+        },
+        "request_key": {
+          "$ref": "#/$defs/RequestKey"
+        }
+      },
+      "required": [
+        "label",
+        "argv",
+        "client_env"
+      ],
+      "type": "object"
+    },
+    "ActionId": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}$",
+      "type": "string"
+    },
+    "ActionInvokeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "action_ref": {
+          "$ref": "#/$defs/ActionRef"
+        },
+        "client_env": {
+          "$ref": "#/$defs/ClientEnv"
+        },
+        "foreground": {
+          "default": false,
+          "description": "Lets a waiting CLI run a task without an existing session (§5.2).",
+          "type": "boolean"
+        },
+        "input": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "request_key": {
+          "$ref": "#/$defs/RequestKey"
+        },
+        "restart": {
+          "default": false,
+          "description": "`restart` semantics: stop the current instance first.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action_ref",
+        "input",
+        "client_env"
+      ],
+      "type": "object"
+    },
+    "ActionMode": {
+      "enum": [
+        "task",
+        "process"
+      ],
+      "type": "string"
+    },
+    "ActionRef": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}\\.[a-z][a-z0-9-]{0,47}$",
+      "type": "string"
+    },
+    "Api1": {
+      "const": 1
+    },
+    "ArtifactInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "mime": {
+          "type": "string"
+        },
+        "ownership": {
+          "$ref": "#/$defs/ArtifactOwnership"
+        },
+        "path": {
+          "$ref": "#/$defs/AbsolutePath"
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ArtifactState"
+        }
+      },
+      "required": [
+        "id",
+        "run_id",
+        "path",
+        "mime",
+        "label",
+        "ownership",
+        "state"
+      ],
+      "type": "object"
+    },
+    "ArtifactListData": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactInfo"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "artifacts"
+      ],
+      "type": "object"
+    },
+    "ArtifactListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "type": "object"
+    },
+    "ArtifactOwnership": {
+      "enum": [
+        "managed",
+        "external"
+      ],
+      "type": "string"
+    },
+    "ArtifactReadParams": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "max_bytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "artifact_id"
+      ],
+      "type": "object"
+    },
+    "ArtifactState": {
+      "enum": [
+        "present",
+        "not_found",
+        "changed",
+        "deleted"
+      ],
+      "type": "string"
+    },
+    "CatalogItem": {
+      "additionalProperties": false,
+      "properties": {
+        "definition_hash": {
+          "$ref": "#/$defs/Digest"
+        },
+        "description": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "item": {
+          "$ref": "#/$defs/CatalogItemKind"
+        },
+        "ref": {
+          "$ref": "#/$defs/ItemRef"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "title",
+        "description",
+        "tags",
+        "enabled",
+        "definition_hash",
+        "item"
+      ],
+      "type": "object"
+    },
+    "CatalogItemKind": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "action",
+              "type": "string"
+            },
+            "mode": {
+              "$ref": "#/$defs/ActionMode"
+            }
+          },
+          "required": [
+            "kind",
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "view",
+              "type": "string"
+            },
+            "view_kind": {
+              "$ref": "#/$defs/ViewKind"
+            }
+          },
+          "required": [
+            "kind",
+            "view_kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CatalogList": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/CatalogItem"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "CatalogListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "if_revision": {
+          "$ref": "#/$defs/CatalogRevision"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_bytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "CatalogRevision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ChunkData": {
+      "additionalProperties": false,
+      "description": "A bounded UTF-8 chunk of an artifact or payload (§11.1).",
+      "properties": {
+        "done": {
+          "type": "boolean"
+        },
+        "next_offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pointer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "text": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "offset",
+        "text",
+        "done",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "CleanupState": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "not_needed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "pending",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "started_at": {
+              "$ref": "#/$defs/Timestamp"
+            },
+            "state": {
+              "const": "running",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "started_at"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ended_at": {
+              "$ref": "#/$defs/Timestamp"
+            },
+            "state": {
+              "const": "succeeded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "ended_at"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ended_at": {
+              "$ref": "#/$defs/Timestamp"
+            },
+            "error": {
+              "$ref": "#/$defs/ErrorInfo"
+            },
+            "state": {
+              "const": "failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "ended_at",
+            "error"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "state": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ClearKind": {
+      "enum": [
+        "state"
+      ],
+      "type": "string"
+    },
+    "ClientEnv": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Client environment for execution. Values may be secrets: `Debug` never prints them.",
+      "type": "object"
+    },
+    "ClientId": {
+      "pattern": "^c_[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "ClientKind": {
+      "enum": [
+        "tui",
+        "cli",
+        "hook"
+      ],
+      "type": "string"
+    },
+    "Column": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/ColumnType"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ColumnType": {
+      "enum": [
+        "text",
+        "number",
+        "boolean",
+        "timestamp"
+      ],
+      "type": "string"
+    },
+    "ConfigApplied": {
+      "additionalProperties": false,
+      "properties": {
+        "catalog_revision": {
+          "$ref": "#/$defs/CatalogRevision"
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "plugins": {
+          "items": {
+            "$ref": "#/$defs/PluginId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "catalog_revision",
+        "changed",
+        "plugins"
+      ],
+      "type": "object"
+    },
+    "ConfigApplyParams": {
+      "additionalProperties": false,
+      "properties": {
+        "draft_dir": {
+          "$ref": "#/$defs/AbsolutePath"
+        },
+        "expected_catalog_revision": {
+          "$ref": "#/$defs/CatalogRevision"
+        },
+        "request_key": {
+          "$ref": "#/$defs/RequestKey"
+        }
+      },
+      "required": [
+        "draft_dir",
+        "expected_catalog_revision"
+      ],
+      "type": "object"
+    },
+    "ConnectionKind": {
+      "enum": [
+        "control",
+        "stream"
+      ],
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "Durability": {
+      "enum": [
+        "committed",
+        "buffered",
+        "session_only",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "Empty": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "EndReason": {
+      "enum": [
+        "unsubscribed",
+        "source_ended",
+        "reset_required",
+        "session_ended"
+      ],
+      "type": "string"
+    },
+    "ErrorCode": {
+      "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+      "type": "string"
+    },
+    "ErrorInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "details": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "message": {
+          "type": "string"
+        },
+        "next_action": {
+          "$ref": "#/$defs/NextAction"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "type": "object"
+    },
+    "EventSeq": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ExitInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Freshness": {
+      "enum": [
+        "current",
+        "historical",
+        "stale"
+      ],
+      "type": "string"
+    },
+    "GcEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/GcKind"
+        },
+        "records": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "records",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "GcKind": {
+      "enum": [
+        "cache",
+        "logs",
+        "history",
+        "artifacts",
+        "all"
+      ],
+      "type": "string"
+    },
+    "GcReport": {
+      "additionalProperties": false,
+      "properties": {
+        "applied": {
+          "type": "boolean"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/GcEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "applied",
+        "entries"
+      ],
+      "type": "object"
+    },
+    "GitContext": {
+      "additionalProperties": false,
+      "description": "Git context recorded at start. It is context, not proof of the working tree's contents.",
+      "properties": {
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "head": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "HealthState": {
+      "enum": [
+        "unknown",
+        "healthy",
+        "warn",
+        "error"
+      ],
+      "type": "string"
+    },
+    "HelloParams": {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/Api1"
+        },
+        "client_kind": {
+          "$ref": "#/$defs/ClientKind"
+        },
+        "connection_kind": {
+          "$ref": "#/$defs/ConnectionKind"
+        },
+        "protocol_hash": {
+          "$ref": "#/$defs/Digest"
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/WorkspaceId"
+        },
+        "workspace_root": {
+          "$ref": "#/$defs/AbsolutePath"
+        }
+      },
+      "required": [
+        "api",
+        "protocol_hash",
+        "workspace_id",
+        "workspace_root",
+        "client_kind",
+        "connection_kind"
+      ],
+      "type": "object"
+    },
+    "HelloReply": {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/Api1"
+        },
+        "catalog_revision": {
+          "$ref": "#/$defs/CatalogRevision"
+        },
+        "client_id": {
+          "$ref": "#/$defs/ClientId"
+        },
+        "host_epoch": {
+          "$ref": "#/$defs/HostEpoch"
+        },
+        "protocol_hash": {
+          "$ref": "#/$defs/Digest"
+        },
+        "state_revision": {
+          "$ref": "#/$defs/StateRevision"
+        },
+        "workspace": {
+          "$ref": "#/$defs/WorkspaceRef"
+        }
+      },
+      "required": [
+        "api",
+        "protocol_hash",
+        "host_epoch",
+        "client_id",
+        "workspace",
+        "catalog_revision",
+        "state_revision"
+      ],
+      "type": "object"
+    },
+    "HostEpoch": {
+      "pattern": "^h_[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "InvokeAccepted": {
+      "additionalProperties": false,
+      "properties": {
+        "reused": {
+          "description": "True when an existing process instance or request-key run was returned.",
+          "type": "boolean"
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        },
+        "state": {
+          "$ref": "#/$defs/Lifecycle"
+        }
+      },
+      "required": [
+        "run_id",
+        "state",
+        "reused"
+      ],
+      "type": "object"
+    },
+    "ItemDescribeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "include_schema": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ref": {
+          "$ref": "#/$defs/ItemRef"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "type": "object"
+    },
+    "ItemDescription": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionDescription"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invoke_hint": {
+          "description": "Example CLI invocation for agents.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "item": {
+          "$ref": "#/$defs/CatalogItem"
+        },
+        "plugin": {
+          "$ref": "#/$defs/PluginSummary"
+        },
+        "view": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ViewDescription"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "item",
+        "plugin",
+        "invoke_hint"
+      ],
+      "type": "object"
+    },
+    "ItemRef": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}\\.[a-z][a-z0-9-]{0,47}$",
+      "type": "string"
+    },
+    "JsonRpc2": {
+      "const": "2.0"
+    },
+    "Lifecycle": {
+      "description": "`starting → running → stopping → finished`; a failed start may go straight to finished.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "starting",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "running",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/StopReason"
+            },
+            "state": {
+              "const": "stopping",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "$ref": "#/$defs/Outcome"
+            },
+            "state": {
+              "const": "finished",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "outcome"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LogItem": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "level": {
+          "$ref": "#/$defs/LogLevel",
+          "default": "info"
+        },
+        "producer_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "LogLevel": {
+      "enum": [
+        "debug",
+        "info",
+        "warn",
+        "error"
+      ],
+      "type": "string"
+    },
+    "LogLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "dropped_records": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "first_seq": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogSeq"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_seq": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogSeq"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "truncated_records": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "dropped_records",
+        "truncated_records"
+      ],
+      "type": "object"
+    },
+    "LogPage": {
+      "additionalProperties": false,
+      "properties": {
+        "first_available_seq": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogSeq"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/LogRecord"
+          },
+          "type": "array"
+        },
+        "last_available_seq": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogSeq"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "run_id",
+        "items"
+      ],
+      "type": "object"
+    },
+    "LogReadParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_bytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "target": {
+          "$ref": "#/$defs/RunTarget"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "LogRecord": {
+      "additionalProperties": false,
+      "description": "One canonical log record; persisted as one JSONL line per record.",
+      "properties": {
+        "continued": {
+          "type": "boolean"
+        },
+        "fields": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "level": {
+          "$ref": "#/$defs/LogLevel"
+        },
+        "log_seq": {
+          "$ref": "#/$defs/LogSeq"
+        },
+        "recorded_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "stream": {
+          "$ref": "#/$defs/LogStream"
+        },
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "log_seq",
+        "recorded_at",
+        "stream",
+        "level",
+        "text",
+        "continued",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "LogSeq": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "LogStream": {
+      "enum": [
+        "stdout",
+        "stderr",
+        "plugin",
+        "host",
+        "pty"
+      ],
+      "type": "string"
+    },
+    "NextAction": {
+      "additionalProperties": false,
+      "description": "A suggested follow-up command. Never executed automatically.",
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "argv",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "OpenMode": {
+      "enum": [
+        "background"
+      ],
+      "type": "string"
+    },
+    "Outcome": {
+      "enum": [
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed_out",
+        "interrupted"
+      ],
+      "type": "string"
+    },
+    "PathClass": {
+      "enum": [
+        "workspace_config",
+        "plugins",
+        "local_config",
+        "discovery",
+        "drafts",
+        "state_db",
+        "fingerprint_key",
+        "plugin_state",
+        "artifacts",
+        "logs",
+        "host_log",
+        "cache",
+        "runtime"
+      ],
+      "type": "string"
+    },
+    "PathEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_reads": {
+          "type": "boolean"
+        },
+        "auto_delete": {
+          "type": "boolean"
+        },
+        "class": {
+          "$ref": "#/$defs/PathClass"
+        },
+        "path": {
+          "$ref": "#/$defs/AbsolutePath"
+        },
+        "purpose": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "class",
+        "path",
+        "purpose",
+        "auto_delete",
+        "agent_reads"
+      ],
+      "type": "object"
+    },
+    "PathsData": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/PathEntry"
+          },
+          "type": "array"
+        },
+        "workspace": {
+          "$ref": "#/$defs/WorkspaceRef"
+        }
+      },
+      "required": [
+        "workspace",
+        "entries"
+      ],
+      "type": "object"
+    },
+    "PayloadAvailability": {
+      "enum": [
+        "session",
+        "retained"
+      ],
+      "type": "string"
+    },
+    "PayloadMime": {
+      "enum": [
+        "application/json"
+      ],
+      "type": "string"
+    },
+    "PayloadReadParams": {
+      "additionalProperties": false,
+      "properties": {
+        "max_bytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token"
+      ],
+      "type": "object"
+    },
+    "PayloadRef": {
+      "additionalProperties": false,
+      "description": "Reference to a bounded result or view serialization held by the host (§11.1).",
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/PayloadAvailability"
+        },
+        "mime": {
+          "$ref": "#/$defs/PayloadMime"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "mime",
+        "size_bytes",
+        "sha256",
+        "availability"
+      ],
+      "type": "object"
+    },
+    "Persistence": {
+      "enum": [
+        "last",
+        "session"
+      ],
+      "type": "string"
+    },
+    "PluginId": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}$",
+      "type": "string"
+    },
+    "PluginSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "docs": {
+          "description": "Plugin-relative docs path, read only on demand.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/PluginId"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "PublicReply": {
+      "additionalProperties": false,
+      "description": "Wire form. `ok=true` ⇔ `error=null`; `ok=false` ⇒ `data=null`. Built only through\n[`PublicReply::success`]/[`PublicReply::failure`] or checked deserialization.",
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/Api1"
+        },
+        "catalog_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CatalogRevision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": true,
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_epoch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostEpoch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "meta": {
+          "$ref": "#/$defs/ReplyMeta"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "state_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StateRevision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspaceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "api",
+        "ok",
+        "meta"
+      ],
+      "type": "object"
+    },
+    "PublishResult": {
+      "additionalProperties": false,
+      "properties": {
+        "durability": {
+          "$ref": "#/$defs/Durability"
+        },
+        "reused": {
+          "type": "boolean"
+        },
+        "view_ref": {
+          "$ref": "#/$defs/ViewRef"
+        },
+        "view_revision": {
+          "$ref": "#/$defs/ViewRevision"
+        }
+      },
+      "required": [
+        "view_ref",
+        "view_revision",
+        "durability",
+        "reused"
+      ],
+      "type": "object"
+    },
+    "ReferenceData": {
+      "additionalProperties": false,
+      "description": "A large value returned by reference (§11.1).",
+      "properties": {
+        "representation": {
+          "$ref": "#/$defs/ReferenceTag"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "representation",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "ReferenceTag": {
+      "enum": [
+        "reference"
+      ],
+      "type": "string"
+    },
+    "ReplyMeta": {
+      "additionalProperties": false,
+      "properties": {
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "not_modified": {
+          "type": "boolean"
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PayloadRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "truncated",
+        "not_modified"
+      ],
+      "type": "object"
+    },
+    "ReportedHealth": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/HealthState"
+        },
+        "updated_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
+    },
+    "RequestKey": {
+      "pattern": "^[^\\u0000]{1,128}$",
+      "type": "string"
+    },
+    "Row": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "values": {
+          "additionalProperties": true,
+          "description": "Column ID → value; `null` means no value. Every column must be present.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "values"
+      ],
+      "type": "object"
+    },
+    "RpcError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "data": {
+          "$ref": "#/$defs/ErrorInfo"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "RpcNotification": {
+      "additionalProperties": false,
+      "description": "A host notification (no id). Only `stream.event` is defined.",
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpc2"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/StreamFrame"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    "RpcRequest": {
+      "additionalProperties": false,
+      "description": "A request. `id` is a non-empty string and `params` an object (no batches, no positional params).",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpc2"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "type": "object"
+    },
+    "RpcResponse": {
+      "anyOf": [
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "jsonrpc": {
+              "$ref": "#/$defs/JsonRpc2"
+            },
+            "result": true
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/RpcError"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "jsonrpc": {
+              "$ref": "#/$defs/JsonRpc2"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "error"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A response carries exactly one of `result` or `error`."
+    },
+    "RunGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "type": "object"
+    },
+    "RunId": {
+      "pattern": "^r_[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "RunList": {
+      "additionalProperties": false,
+      "properties": {
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/RunRecord"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "runs"
+      ],
+      "type": "object"
+    },
+    "RunListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "action_ref": {
+          "$ref": "#/$defs/ActionRef"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        }
+      },
+      "type": "object"
+    },
+    "RunRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "action_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`null` for ad-hoc `exec` runs, which are never catalog entries."
+        },
+        "catalog_revision": {
+          "$ref": "#/$defs/CatalogRevision"
+        },
+        "cleanup": {
+          "$ref": "#/$defs/CleanupState"
+        },
+        "definition_hash": {
+          "$ref": "#/$defs/Digest"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExitInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "git": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "description": "Action title or the `exec --label`.",
+          "type": "string"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/Lifecycle"
+        },
+        "log": {
+          "$ref": "#/$defs/LogLocation"
+        },
+        "note": {
+          "description": "Set when the reported state could not be confirmed (e.g. after a host crash).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reported_health": {
+          "$ref": "#/$defs/ReportedHealth"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/RunSource"
+        },
+        "started_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/WorkspaceId"
+        }
+      },
+      "required": [
+        "run_id",
+        "workspace_id",
+        "label",
+        "definition_hash",
+        "catalog_revision",
+        "source",
+        "started_at",
+        "lifecycle",
+        "reported_health",
+        "cleanup",
+        "log"
+      ],
+      "type": "object"
+    },
+    "RunResult": {
+      "additionalProperties": false,
+      "description": "Plugin-reported result, kept separate from the OS outcome.",
+      "properties": {
+        "data": {
+          "description": "Inline when small; otherwise `null` with `payload` set."
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PayloadRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "summary",
+        "data"
+      ],
+      "type": "object"
+    },
+    "RunSource": {
+      "enum": [
+        "tui",
+        "cli",
+        "schedule",
+        "hook"
+      ],
+      "type": "string"
+    },
+    "RunStopParams": {
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/RunTarget"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "RunSummary": {
+      "additionalProperties": false,
+      "description": "The run summary carried in status and state events (§11.6).",
+      "properties": {
+        "action_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "definition_hash": {
+          "$ref": "#/$defs/Digest"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/Lifecycle"
+        },
+        "reported_health": {
+          "$ref": "#/$defs/ReportedHealth"
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        },
+        "started_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "run_id",
+        "lifecycle",
+        "reported_health",
+        "definition_hash",
+        "started_at"
+      ],
+      "type": "object"
+    },
+    "RunTarget": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "run",
+              "type": "string"
+            },
+            "run_id": {
+              "$ref": "#/$defs/RunId"
+            }
+          },
+          "required": [
+            "kind",
+            "run_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "action_ref": {
+              "$ref": "#/$defs/ActionRef"
+            },
+            "kind": {
+              "const": "action",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "action_ref"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ScheduleData": {
+      "additionalProperties": false,
+      "properties": {
+        "action_ref": {
+          "$ref": "#/$defs/ActionRef"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "every_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "missed_ticks": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "next_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "action_ref",
+        "enabled",
+        "every_ms",
+        "missed_ticks"
+      ],
+      "type": "object"
+    },
+    "ScheduleSetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "action_ref": {
+          "$ref": "#/$defs/ActionRef"
+        },
+        "client_env": {
+          "$ref": "#/$defs/ClientEnv"
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action_ref",
+        "enabled",
+        "client_env"
+      ],
+      "type": "object"
+    },
+    "ScreenRevision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "SessionAttachParams": {
+      "additionalProperties": false,
+      "properties": {
+        "autostart": {
+          "type": "boolean"
+        },
+        "client_env": {
+          "$ref": "#/$defs/ClientEnv"
+        }
+      },
+      "required": [
+        "client_env",
+        "autostart"
+      ],
+      "type": "object"
+    },
+    "SessionData": {
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SessionId": {
+      "pattern": "^s_[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "SessionInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "controller_count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "mode": {
+          "$ref": "#/$defs/SessionMode"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        }
+      },
+      "required": [
+        "id",
+        "mode",
+        "controller_count",
+        "state"
+      ],
+      "type": "object"
+    },
+    "SessionKeepParams": {
+      "additionalProperties": false,
+      "properties": {
+        "ttl": {
+          "$ref": "#/$defs/TimeoutWire"
+        }
+      },
+      "required": [
+        "ttl"
+      ],
+      "type": "object"
+    },
+    "SessionMode": {
+      "enum": [
+        "foreground",
+        "background"
+      ],
+      "type": "string"
+    },
+    "SessionOpenParams": {
+      "additionalProperties": false,
+      "properties": {
+        "client_env": {
+          "$ref": "#/$defs/ClientEnv"
+        },
+        "mode": {
+          "$ref": "#/$defs/OpenMode"
+        },
+        "ttl": {
+          "$ref": "#/$defs/TimeoutWire"
+        }
+      },
+      "required": [
+        "mode",
+        "client_env",
+        "ttl"
+      ],
+      "type": "object"
+    },
+    "SessionState": {
+      "enum": [
+        "active",
+        "stopping"
+      ],
+      "type": "string"
+    },
+    "SourceKind": {
+      "enum": [
+        "plugin",
+        "cli",
+        "hook"
+      ],
+      "type": "string"
+    },
+    "StateRevision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "StatusData": {
+      "additionalProperties": false,
+      "properties": {
+        "config_warnings": {
+          "description": "On-disk configuration problems (invalid-on-disk, incomplete apply). Spec gap filler:\n§10.4 assigns disk configuration warnings to `status`.",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        },
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/RunSummary"
+          },
+          "type": "array"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "storage_warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "runs",
+        "storage_warnings",
+        "config_warnings"
+      ],
+      "type": "object"
+    },
+    "StopAccepted": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        },
+        "state": {
+          "$ref": "#/$defs/Lifecycle"
+        }
+      },
+      "required": [
+        "run_id",
+        "state"
+      ],
+      "type": "object"
+    },
+    "StopReason": {
+      "enum": [
+        "user",
+        "session_closed",
+        "timeout",
+        "ttl_expired",
+        "protocol_error",
+        "output_limit",
+        "internal_error"
+      ],
+      "type": "string"
+    },
+    "StorageClearParams": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ClearKind"
+        },
+        "plugin": {
+          "$ref": "#/$defs/PluginId"
+        }
+      },
+      "required": [
+        "plugin",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "StorageGcParams": {
+      "additionalProperties": false,
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/GcKind"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "StorageStatusData": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sqlite_version": {
+          "type": "string"
+        },
+        "usage": {
+          "items": {
+            "$ref": "#/$defs/StorageUsage"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "sqlite_version",
+        "usage",
+        "warnings"
+      ],
+      "type": "object"
+    },
+    "StorageStatusParams": {
+      "additionalProperties": false,
+      "properties": {
+        "all": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "StorageUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "class": {
+          "$ref": "#/$defs/PathClass"
+        },
+        "records": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "class",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "StreamFrame": {
+      "description": "Host-generated outer fields plus one event. Plugins can never set these fields.",
+      "oneOf": [
+        {
+          "properties": {
+            "data": {
+              "properties": {
+                "catalog_revision": {
+                  "$ref": "#/$defs/CatalogRevision"
+                },
+                "state_revision": {
+                  "$ref": "#/$defs/StateRevision"
+                },
+                "subscription_id": {
+                  "$ref": "#/$defs/SubscriptionId"
+                }
+              },
+              "required": [
+                "subscription_id",
+                "catalog_revision",
+                "state_revision"
+              ],
+              "type": "object"
+            },
+            "type": {
+              "const": "ready",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/StatusData"
+            },
+            "type": {
+              "const": "snapshot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "properties": {
+                "runs": {
+                  "items": {
+                    "$ref": "#/$defs/RunSummary"
+                  },
+                  "type": "array"
+                },
+                "session": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionInfo"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "state_revision": {
+                  "$ref": "#/$defs/StateRevision"
+                },
+                "storage_warnings": {
+                  "items": {
+                    "$ref": "#/$defs/Warning"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "state_revision",
+                "runs",
+                "storage_warnings"
+              ],
+              "type": "object"
+            },
+            "type": {
+              "const": "state",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "properties": {
+                "records": {
+                  "items": {
+                    "$ref": "#/$defs/LogRecord"
+                  },
+                  "type": "array"
+                },
+                "run_id": {
+                  "$ref": "#/$defs/RunId"
+                }
+              },
+              "required": [
+                "run_id",
+                "records"
+              ],
+              "type": "object"
+            },
+            "type": {
+              "const": "log",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "properties": {
+                "view_ref": {
+                  "$ref": "#/$defs/ViewRef"
+                },
+                "view_revision": {
+                  "$ref": "#/$defs/ViewRevision"
+                }
+              },
+              "required": [
+                "view_ref",
+                "view_revision"
+              ],
+              "type": "object"
+            },
+            "type": {
+              "const": "view",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "properties": {
+                "run_id": {
+                  "$ref": "#/$defs/RunId"
+                },
+                "screen_revision": {
+                  "$ref": "#/$defs/ScreenRevision"
+                }
+              },
+              "required": [
+                "run_id",
+                "screen_revision"
+              ],
+              "type": "object"
+            },
+            "type": {
+              "const": "terminal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "properties": {
+                "current": {
+                  "format": "double",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "run_id": {
+                  "$ref": "#/$defs/RunId"
+                },
+                "total": {
+                  "format": "double",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "run_id",
+                "message"
+              ],
+              "type": "object"
+            },
+            "type": {
+              "const": "progress",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "properties": {
+                "dropped_records": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "resume_cursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": {
+              "const": "gap",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "properties": {
+                "reason": {
+                  "$ref": "#/$defs/EndReason"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": {
+              "const": "end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/Api1"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "event_seq": {
+          "$ref": "#/$defs/EventSeq"
+        },
+        "host_epoch": {
+          "$ref": "#/$defs/HostEpoch"
+        },
+        "recorded_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "source": {
+          "$ref": "#/$defs/StreamSource"
+        }
+      },
+      "required": [
+        "api",
+        "host_epoch",
+        "event_seq",
+        "recorded_at",
+        "cursor",
+        "source"
+      ],
+      "type": "object"
+    },
+    "StreamKind": {
+      "enum": [
+        "state",
+        "log",
+        "view",
+        "terminal",
+        "progress"
+      ],
+      "type": "string"
+    },
+    "StreamSource": {
+      "additionalProperties": false,
+      "properties": {
+        "item_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/WorkspaceId"
+        }
+      },
+      "required": [
+        "workspace_id"
+      ],
+      "type": "object"
+    },
+    "StreamSubscribeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "kinds": {
+          "items": {
+            "$ref": "#/$defs/StreamKind"
+          },
+          "type": "array"
+        },
+        "refs": {
+          "default": [],
+          "description": "Run IDs or item refs that bound log/view/terminal/progress events.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kinds"
+      ],
+      "type": "object"
+    },
+    "StreamUnsubscribeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "subscription_id": {
+          "$ref": "#/$defs/SubscriptionId"
+        }
+      },
+      "required": [
+        "subscription_id"
+      ],
+      "type": "object"
+    },
+    "Subscribed": {
+      "additionalProperties": false,
+      "properties": {
+        "subscription_id": {
+          "$ref": "#/$defs/SubscriptionId"
+        }
+      },
+      "required": [
+        "subscription_id"
+      ],
+      "type": "object"
+    },
+    "SubscriptionId": {
+      "pattern": "^u_[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "TerminalCursor": {
+      "additionalProperties": false,
+      "properties": {
+        "col": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "row": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "visible": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "row",
+        "col",
+        "visible"
+      ],
+      "type": "object"
+    },
+    "TerminalInput": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Literal text; no Enter is appended.",
+          "properties": {
+            "kind": {
+              "const": "text",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A named key such as `enter`, `esc`, `ctrl-c`, `up`.",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "key",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Bracketed paste when the child enabled it.",
+          "properties": {
+            "kind": {
+              "const": "paste",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TerminalInputParams": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_screen_revision": {
+          "$ref": "#/$defs/ScreenRevision"
+        },
+        "input": {
+          "$ref": "#/$defs/TerminalInput"
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "run_id",
+        "input"
+      ],
+      "type": "object"
+    },
+    "TerminalMode": {
+      "enum": [
+        "pipe",
+        "pty"
+      ],
+      "type": "string"
+    },
+    "TerminalResizeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "run_id",
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "TerminalRunParams": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "type": "object"
+    },
+    "TerminalSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "alternate_screen": {
+          "type": "boolean"
+        },
+        "cols": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cursor": {
+          "$ref": "#/$defs/TerminalCursor"
+        },
+        "exited": {
+          "type": "boolean"
+        },
+        "input_owner": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClientId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lines": {
+          "description": "Visible screen rows as plain text; styles are not included in this form.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        },
+        "screen_revision": {
+          "$ref": "#/$defs/ScreenRevision"
+        }
+      },
+      "required": [
+        "run_id",
+        "screen_revision",
+        "cols",
+        "rows",
+        "lines",
+        "cursor",
+        "alternate_screen",
+        "exited"
+      ],
+      "type": "object"
+    },
+    "TextFormat": {
+      "enum": [
+        "plain",
+        "markdown"
+      ],
+      "type": "string"
+    },
+    "TimeoutWire": {
+      "description": "`{\"kind\":\"none\"}` or `{\"kind\":\"after\",\"ms\":N}`. Also used for session TTLs.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "after",
+              "type": "string"
+            },
+            "ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "ms"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Timestamp": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+      "type": "string"
+    },
+    "TreeNode": {
+      "additionalProperties": false,
+      "properties": {
+        "children": {
+          "items": {
+            "$ref": "#/$defs/TreeNode"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "ViewActionParams": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "client_env": {
+          "$ref": "#/$defs/ClientEnv"
+        },
+        "expected_view_revision": {
+          "$ref": "#/$defs/ViewRevision"
+        },
+        "row": {
+          "type": "string"
+        },
+        "view_ref": {
+          "$ref": "#/$defs/ViewRef"
+        }
+      },
+      "required": [
+        "view_ref",
+        "action",
+        "row",
+        "expected_view_revision",
+        "client_env"
+      ],
+      "type": "object"
+    },
+    "ViewBody": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ViewData"
+        },
+        {
+          "$ref": "#/$defs/ReferenceData"
+        }
+      ],
+      "description": "Inline view data (possibly one page of it) or a reference to the full value."
+    },
+    "ViewData": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "$ref": "#/$defs/TextFormat",
+              "default": "plain"
+            },
+            "kind": {
+              "const": "text",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "columns": {
+              "items": {
+                "$ref": "#/$defs/Column"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "table",
+              "type": "string"
+            },
+            "rows": {
+              "items": {
+                "$ref": "#/$defs/Row"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "columns",
+            "rows"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/LogItem"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "log",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "tree",
+              "type": "string"
+            },
+            "nodes": {
+              "items": {
+                "$ref": "#/$defs/TreeNode"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "nodes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "json",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ViewDescription": {
+      "additionalProperties": false,
+      "properties": {
+        "persistence": {
+          "$ref": "#/$defs/Persistence"
+        },
+        "row_actions": {
+          "items": {
+            "$ref": "#/$defs/ActionId"
+          },
+          "type": "array"
+        },
+        "view_kind": {
+          "$ref": "#/$defs/ViewKind"
+        }
+      },
+      "required": [
+        "view_kind",
+        "persistence",
+        "row_actions"
+      ],
+      "type": "object"
+    },
+    "ViewKind": {
+      "enum": [
+        "text",
+        "table",
+        "log",
+        "tree",
+        "json"
+      ],
+      "type": "string"
+    },
+    "ViewPublishParams": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_view_revision": {
+          "$ref": "#/$defs/ViewRevision"
+        },
+        "frame": {
+          "additionalProperties": true,
+          "description": "One LPP `view` frame; its `view_id` must equal `view_ref`'s local ID.",
+          "type": "object"
+        },
+        "request_key": {
+          "$ref": "#/$defs/RequestKey"
+        },
+        "source_kind": {
+          "$ref": "#/$defs/SourceKind"
+        },
+        "view_ref": {
+          "$ref": "#/$defs/ViewRef"
+        }
+      },
+      "required": [
+        "view_ref",
+        "frame",
+        "source_kind"
+      ],
+      "type": "object"
+    },
+    "ViewReadParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_bytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "view_ref": {
+          "$ref": "#/$defs/ViewRef"
+        }
+      },
+      "required": [
+        "view_ref"
+      ],
+      "type": "object"
+    },
+    "ViewRef": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}\\.[a-z][a-z0-9-]{0,47}$",
+      "type": "string"
+    },
+    "ViewRevision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ViewSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ViewBody"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`null` only when no data exists; see `freshness_reason` for why."
+        },
+        "definition_hash": {
+          "$ref": "#/$defs/Digest"
+        },
+        "durability": {
+          "$ref": "#/$defs/Durability"
+        },
+        "freshness": {
+          "$ref": "#/$defs/Freshness"
+        },
+        "freshness_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ViewKind"
+        },
+        "recorded_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_run_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "view_ref": {
+          "$ref": "#/$defs/ViewRef"
+        },
+        "view_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ViewRevision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`null` when the view never received data (or its data was cleaned up)."
+        }
+      },
+      "required": [
+        "view_ref",
+        "kind",
+        "definition_hash",
+        "freshness",
+        "durability"
+      ],
+      "type": "object"
+    },
+    "Warning": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string"
+        },
+        "subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "WorkspaceId": {
+      "pattern": "^w_[0-9a-f]{24}$",
+      "type": "string"
+    },
+    "WorkspaceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/WorkspaceId"
+        },
+        "root": {
+          "$ref": "#/$defs/AbsolutePath"
+        }
+      },
+      "required": [
+        "id",
+        "root"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "JSON-RPC 2.0 single-object profile, LF framed. Non-hello results are PublicReply objects whose data matches the method result.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/RpcRequest"
+    },
+    {
+      "$ref": "#/$defs/RpcResponse"
+    },
+    {
+      "$ref": "#/$defs/RpcNotification"
+    }
+  ],
+  "title": "LIPC/1",
+  "x-lyra-methods": {
+    "action.exec": {
+      "params": {
+        "$ref": "#/$defs/ActionExecParams"
+      },
+      "result": {
+        "$ref": "#/$defs/InvokeAccepted"
+      }
+    },
+    "action.invoke": {
+      "params": {
+        "$ref": "#/$defs/ActionInvokeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/InvokeAccepted"
+      }
+    },
+    "artifact.list": {
+      "params": {
+        "$ref": "#/$defs/ArtifactListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ArtifactListData"
+      }
+    },
+    "artifact.read": {
+      "params": {
+        "$ref": "#/$defs/ArtifactReadParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ChunkData"
+      }
+    },
+    "catalog.list": {
+      "params": {
+        "$ref": "#/$defs/CatalogListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CatalogList"
+      }
+    },
+    "config.apply": {
+      "params": {
+        "$ref": "#/$defs/ConfigApplyParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ConfigApplied"
+      }
+    },
+    "config.reload": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/ConfigApplied"
+      }
+    },
+    "hello": {
+      "params": {
+        "$ref": "#/$defs/HelloParams"
+      },
+      "result": {
+        "$ref": "#/$defs/HelloReply"
+      }
+    },
+    "item.describe": {
+      "params": {
+        "$ref": "#/$defs/ItemDescribeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ItemDescription"
+      }
+    },
+    "log.read": {
+      "params": {
+        "$ref": "#/$defs/LogReadParams"
+      },
+      "result": {
+        "$ref": "#/$defs/LogPage"
+      }
+    },
+    "paths.get": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/PathsData"
+      }
+    },
+    "payload.read": {
+      "params": {
+        "$ref": "#/$defs/PayloadReadParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ChunkData"
+      }
+    },
+    "run.get": {
+      "params": {
+        "$ref": "#/$defs/RunGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RunRecord"
+      }
+    },
+    "run.list": {
+      "params": {
+        "$ref": "#/$defs/RunListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RunList"
+      }
+    },
+    "run.stop": {
+      "params": {
+        "$ref": "#/$defs/RunStopParams"
+      },
+      "result": {
+        "$ref": "#/$defs/StopAccepted"
+      }
+    },
+    "schedule.set": {
+      "params": {
+        "$ref": "#/$defs/ScheduleSetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ScheduleData"
+      }
+    },
+    "session.attach": {
+      "params": {
+        "$ref": "#/$defs/SessionAttachParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionData"
+      }
+    },
+    "session.detach": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionData"
+      }
+    },
+    "session.keep": {
+      "params": {
+        "$ref": "#/$defs/SessionKeepParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionData"
+      }
+    },
+    "session.open": {
+      "params": {
+        "$ref": "#/$defs/SessionOpenParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionData"
+      }
+    },
+    "session.stop": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionData"
+      }
+    },
+    "storage.clear": {
+      "params": {
+        "$ref": "#/$defs/StorageClearParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Ack"
+      }
+    },
+    "storage.gc": {
+      "params": {
+        "$ref": "#/$defs/StorageGcParams"
+      },
+      "result": {
+        "$ref": "#/$defs/GcReport"
+      }
+    },
+    "storage.status": {
+      "params": {
+        "$ref": "#/$defs/StorageStatusParams"
+      },
+      "result": {
+        "$ref": "#/$defs/StorageStatusData"
+      }
+    },
+    "stream.subscribe": {
+      "params": {
+        "$ref": "#/$defs/StreamSubscribeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Subscribed"
+      }
+    },
+    "stream.unsubscribe": {
+      "params": {
+        "$ref": "#/$defs/StreamUnsubscribeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Ack"
+      }
+    },
+    "terminal.acquire": {
+      "params": {
+        "$ref": "#/$defs/TerminalRunParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Ack"
+      }
+    },
+    "terminal.input": {
+      "params": {
+        "$ref": "#/$defs/TerminalInputParams"
+      },
+      "result": {
+        "$ref": "#/$defs/TerminalSnapshot"
+      }
+    },
+    "terminal.release": {
+      "params": {
+        "$ref": "#/$defs/TerminalRunParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Ack"
+      }
+    },
+    "terminal.resize": {
+      "params": {
+        "$ref": "#/$defs/TerminalResizeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Ack"
+      }
+    },
+    "terminal.snapshot": {
+      "params": {
+        "$ref": "#/$defs/TerminalRunParams"
+      },
+      "result": {
+        "$ref": "#/$defs/TerminalSnapshot"
+      }
+    },
+    "view.action": {
+      "params": {
+        "$ref": "#/$defs/ViewActionParams"
+      },
+      "result": {
+        "$ref": "#/$defs/InvokeAccepted"
+      }
+    },
+    "view.publish": {
+      "params": {
+        "$ref": "#/$defs/ViewPublishParams"
+      },
+      "result": {
+        "$ref": "#/$defs/PublishResult"
+      }
+    },
+    "view.read": {
+      "params": {
+        "$ref": "#/$defs/ViewReadParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ViewSnapshot"
+      }
+    },
+    "workspace.status": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/StatusData"
+      }
+    }
+  },
+  "x-lyra-public-reply": {
+    "$ref": "#/$defs/PublicReply"
+  }
+}

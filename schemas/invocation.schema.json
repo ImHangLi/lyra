@@ -1,0 +1,94 @@
+{
+  "$defs": {
+    "AbsolutePath": {
+      "pattern": "^/",
+      "type": "string"
+    },
+    "ActionId": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}$",
+      "type": "string"
+    },
+    "Api1": {
+      "const": 1
+    },
+    "InvocationContext": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_dir": {
+          "$ref": "#/$defs/AbsolutePath"
+        },
+        "cache_dir": {
+          "$ref": "#/$defs/AbsolutePath"
+        },
+        "cwd": {
+          "$ref": "#/$defs/AbsolutePath"
+        },
+        "plugin_dir": {
+          "$ref": "#/$defs/AbsolutePath"
+        },
+        "state_dir": {
+          "$ref": "#/$defs/AbsolutePath"
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/WorkspaceId"
+        },
+        "workspace_root": {
+          "$ref": "#/$defs/AbsolutePath"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "workspace_root",
+        "cwd",
+        "plugin_dir",
+        "state_dir",
+        "cache_dir",
+        "artifact_dir"
+      ],
+      "type": "object"
+    },
+    "RunId": {
+      "pattern": "^r_[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "WorkspaceId": {
+      "pattern": "^w_[0-9a-f]{24}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The single line written to a plugin's stdin before EOF. All fields are required.",
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/ActionId"
+    },
+    "api": {
+      "$ref": "#/$defs/Api1"
+    },
+    "config": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "context": {
+      "$ref": "#/$defs/InvocationContext"
+    },
+    "input": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "run_id": {
+      "$ref": "#/$defs/RunId"
+    }
+  },
+  "required": [
+    "api",
+    "run_id",
+    "action",
+    "input",
+    "config",
+    "context"
+  ],
+  "title": "Invocation",
+  "type": "object"
+}

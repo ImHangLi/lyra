@@ -1,0 +1,1 @@
+{"api": 1, "id": "bad", "name": "Bad", "description": "Negative fixture.", "actions": [{"id": "x", "title": "A", "description": "A", "mode": "task", "run": {"kind": "command", "argv": ["true"]}}], "views": [{"id": "x", "title": "V", "kind": "text"}]}
