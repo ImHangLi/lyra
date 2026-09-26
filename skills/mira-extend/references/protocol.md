@@ -33,6 +33,10 @@ A task must end with exactly one `result`. A success result followed by a non-ze
 
 An invalid update is rejected whole and the previous data stays (marked stale). Timestamps are UTC like `2026-09-26T01:34:00.000Z`. Numbers must be finite; large integers go in strings.
 
+## Following another run's logs
+
+`"$MIRA_BIN" --project "$MIRA_WORKSPACE_ROOT" logs REF --follow --json [--grep TEXT]` prints one JSON object per line: first `{"type":"ready",...}`, then `{"type":"log","data":{"run_id":"r_…","records":[{"log_seq","recorded_at","stream","level","text",...}]}}` for new records, and it exits after `{"type":"end",...}` or when the run ends. A line with `"ok": false` is an error reply instead (for example, the action never ran). `examples/plugins/.mira/plugins/errors` uses this.
+
 ## Minimal Python pattern
 
 ```python
