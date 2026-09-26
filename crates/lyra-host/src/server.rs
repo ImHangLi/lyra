@@ -145,6 +145,11 @@ pub async fn serve(paths: WorkspacePaths) -> u8 {
     ));
     let actor_task = tokio::spawn(actor.run());
 
+    // Installing handlers (instead of inheriting SIG_IGN from the spawning shell) makes every
+    // child start with default SIGINT/SIGQUIT dispositions, so `stop_signal: interrupt` works.
+    // The host has its own process group, so terminal Ctrl-C never reaches it.
+    let _int = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
+    let _quit = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::quit()).ok();
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
     let mut hup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).ok();
     let mut actor_task = actor_task;
