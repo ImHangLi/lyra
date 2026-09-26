@@ -917,6 +917,8 @@ impl App {
         self.selected_entry().and_then(|e| self.entry_key(e))
     }
 
+    /// Lists the entries that match the filter, best match first (see [`rank`]); without a
+    /// filter, every entry in plugin order. `keep` stays selected if it still matches.
     fn refilter(&mut self, keep: Option<ItemRef>) {
         let words: Vec<String> = self
             .filter
@@ -924,41 +926,33 @@ impl App {
             .split_whitespace()
             .map(str::to_owned)
             .collect();
-        let hit = |hay: String| {
-            let hay = hay.to_lowercase();
-            words.iter().all(|w| hay.contains(w.as_str()))
-        };
-        let mut out = Vec::new();
+        let mut out: Vec<((u8, std::cmp::Reverse<usize>), Entry)> = Vec::new();
         for p in &self.plugin_order {
             for (n, i) in self.items.iter().enumerate() {
-                if i.action_ref.plugin.as_str() == p
-                    && hit(format!(
-                        "{} {} {} {}",
-                        i.action_ref,
-                        i.title,
-                        i.description,
-                        i.tags.join(" ")
-                    ))
-                {
-                    out.push(Entry::Action(n));
+                if i.action_ref.plugin.as_str() != p {
+                    continue;
+                }
+                let r = i.action_ref.to_string();
+                let id = i.action_ref.action.to_string();
+                if let Some(k) = rank(&words, &r, &id, &i.title, &i.tags, &[], &i.description) {
+                    out.push((k, Entry::Action(n)));
                 }
             }
             for (n, v) in self.views.iter().enumerate() {
-                if v.view_ref.plugin.as_str() == p
-                    && hit(format!(
-                        "{} {} {} {} {}",
-                        v.view_ref,
-                        v.title,
-                        v.description,
-                        v.tags.join(" "),
-                        crate::views::kind_word(v.kind)
-                    ))
-                {
-                    out.push(Entry::View(n));
+                if v.view_ref.plugin.as_str() != p {
+                    continue;
+                }
+                let r = v.view_ref.to_string();
+                let id = v.view_ref.view.to_string();
+                let kind = [crate::views::kind_word(v.kind).to_owned()];
+                if let Some(k) = rank(&words, &r, &id, &v.title, &v.tags, &kind, &v.description) {
+                    out.push((k, Entry::View(n)));
                 }
             }
         }
-        self.visible = out;
+        // A stable sort keeps the list order among equal matches.
+        out.sort_by_key(|(k, _)| *k);
+        self.visible = out.into_iter().map(|(_, e)| e).collect();
         self.selected = keep
             .and_then(|k| {
                 self.visible
@@ -1636,9 +1630,9 @@ impl App {
                         }
                         let text = text.clone();
                         if !logs {
+                            // The best match is selected as the filter changes.
                             self.filter = text;
-                            let keep = self.selected_key();
-                            self.refilter(keep);
+                            self.refilter(None);
                             self.on_select();
                         }
                     }
@@ -1853,16 +1847,22 @@ impl App {
     }
 
     fn apply_search(&mut self) {
-        if let Modal::Search { logs, text, .. } = std::mem::replace(&mut self.modal, Modal::None)
-            && logs
-        {
-            if text.is_empty() {
-                self.log_query = None;
-                return;
-            }
-            self.log_query = Some(text.clone());
-            self.find(&text, true);
+        let Modal::Search { logs, text, .. } = std::mem::replace(&mut self.modal, Modal::None)
+        else {
+            return;
+        };
+        if !logs {
+            // Enter puts the cursor on the best match.
+            self.selected = 0;
+            self.on_select();
+            return;
         }
+        if text.is_empty() {
+            self.log_query = None;
+            return;
+        }
+        self.log_query = Some(text.clone());
+        self.find(&text, true);
     }
 
     fn find(&mut self, q: &str, older: bool) {
@@ -2195,6 +2195,55 @@ impl App {
     }
 }
 
+/// How well one catalog entry matches the filter words, like `lyra` catalog search:
+/// `None` when no word matches; otherwise the best tier over all words (0 exact ref or ID,
+/// 1 exact title, 2 ref/ID/title prefix, 3 ref/ID/title substring, 4 tag, 5 description),
+/// then more matched words first. `extra_tags` match like tags (a view's kind word).
+fn rank(
+    words: &[String],
+    item_ref: &str,
+    id: &str,
+    title: &str,
+    tags: &[String],
+    extra_tags: &[String],
+    description: &str,
+) -> Option<(u8, std::cmp::Reverse<usize>)> {
+    if words.is_empty() {
+        return Some((0, std::cmp::Reverse(0)));
+    }
+    let (item_ref, id, title) = (
+        item_ref.to_lowercase(),
+        id.to_lowercase(),
+        title.to_lowercase(),
+    );
+    let description = description.to_lowercase();
+    let names = [&item_ref, &id, &title];
+    let tier = |w: &str| -> Option<u8> {
+        if item_ref == w || id == w {
+            Some(0)
+        } else if title == w {
+            Some(1)
+        } else if names.iter().any(|n| n.starts_with(w)) {
+            Some(2)
+        } else if names.iter().any(|n| n.contains(w)) {
+            Some(3)
+        } else if tags
+            .iter()
+            .chain(extra_tags)
+            .any(|t| t.to_lowercase().contains(w))
+        {
+            Some(4)
+        } else if description.contains(w) {
+            Some(5)
+        } else {
+            None
+        }
+    };
+    let tiers: Vec<u8> = words.iter().filter_map(|w| tier(w)).collect();
+    let best = tiers.iter().min()?;
+    Some((*best, std::cmp::Reverse(tiers.len())))
+}
+
 fn start_word(item: &Item) -> &'static str {
     match item.mode {
         ActionMode::Process => "start",
@@ -2249,6 +2298,74 @@ mod tests {
             kind,
         });
         a.refilter(None);
+    }
+
+    fn add_action(a: &mut App, r: &str, title: &str, tags: &[&str], description: &str) {
+        let action_ref: ActionRef = r.parse().unwrap();
+        let plugin = action_ref.plugin.to_string();
+        if !a.plugin_order.contains(&plugin) {
+            a.plugin_order.push(plugin);
+        }
+        a.items.push(Item {
+            action_ref,
+            title: title.into(),
+            description: description.into(),
+            tags: tags.iter().map(|t| (*t).to_owned()).collect(),
+            mode: ActionMode::Task,
+            enabled: true,
+            definition_hash: Digest::of_bytes(r.as_bytes()),
+        });
+        a.refilter(None);
+    }
+
+    fn search(a: &mut App, text: &str) -> Vec<String> {
+        key(a, KeyCode::Char('/'));
+        for c in text.chars() {
+            key(a, KeyCode::Char(c));
+        }
+        key(a, KeyCode::Enter);
+        a.visible
+            .iter()
+            .filter_map(|&e| a.entry_key(e).map(|k| k.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn filter_ranks_the_best_match_first() {
+        let mut a = app();
+        add_action(
+            &mut a,
+            "dev.typecheck",
+            "Typecheck",
+            &[],
+            "Run the type checker.",
+        );
+        add_action(&mut a, "dev.check", "Check", &[], "Run every check.");
+        add_action(&mut a, "dev.lint", "Lint", &[], "Lint the code.");
+        add_action(
+            &mut a,
+            "style.fix",
+            "Fix style",
+            &["lint"],
+            "Formats files.",
+        );
+        add_action(&mut a, "dev.test", "Test", &[], "Run the tests.");
+        assert_eq!(search(&mut a, "lint"), ["dev.lint", "style.fix"]);
+        assert_eq!(a.selected_ref().unwrap().to_string(), "dev.lint");
+        assert_eq!(search(&mut a, "check"), ["dev.check", "dev.typecheck"]);
+        assert_eq!(a.selected_ref().unwrap().to_string(), "dev.check");
+        // Any word matches; more matched words rank higher within a tier.
+        assert_eq!(
+            search(&mut a, "test tests"),
+            ["dev.test"],
+            "one entry matches both words"
+        );
+        assert_eq!(search(&mut a, "type every"), ["dev.typecheck", "dev.check"]);
+        // Ties keep the list order.
+        assert_eq!(
+            search(&mut a, "run"),
+            ["dev.typecheck", "dev.check", "dev.test"]
+        );
     }
 
     #[test]
