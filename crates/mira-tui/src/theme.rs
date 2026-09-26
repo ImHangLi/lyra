@@ -1,10 +1,11 @@
 //! The TUI palette and state glyphs. Colors come from the product illustrations (terracotta
-//! roofs, sky, leaves, warm stone). The tones depend on the terminal background (see
-//! [`Background`]). When the background is unknown, a middle set that passes as marks on
-//! light and dark alike is used, and colored words fall back to the default foreground.
-//! Truecolor terminals get the exact tones, other terminals the nearest 256-color or
-//! 16-color entry, and `NO_COLOR` gets none. Secondary text uses the DIM modifier. State
-//! is never shown by color alone: see [`Mark`].
+//! roofs, sky, leaves, warm stone). No single tone reads well as text on both light and
+//! dark terminals, so each tone has a light and a dark variant, chosen from the terminal
+//! background (see [`Background`]). When the background is unknown, a middle set that
+//! passes as marks on both is used, and colored words fall back to the default foreground.
+//! Truecolor terminals get the exact tones, 256-color terminals a checked table entry,
+//! 16-color terminals a named color, and `NO_COLOR` gets none. Secondary text uses the DIM
+//! modifier. State is never shown by color alone: see [`Mark`].
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -92,10 +93,10 @@ pub fn parse_osc11(buf: &[u8]) -> Option<(u8, u8, u8)> {
         .or_else(|| body.strip_prefix("rgba:"))?;
     let mut parts = spec.split('/').map(|p| {
         let n = p.len();
+        let v = u32::from_str_radix(p, 16).ok()?;
         if !(1..=4).contains(&n) {
             return None;
         }
-        let v = u32::from_str_radix(p, 16).ok()?;
         let max = (1u32 << (4 * n)) - 1;
         u8::try_from((v * 255 + max / 2) / max).ok()
     });
@@ -120,6 +121,12 @@ fn contrast_l(a: f64, b: f64) -> f64 {
     (hi + 0.05) / (lo + 0.05)
 }
 
+/// WCAG 2.2 contrast ratio of two colors, from 1 to 21.
+#[cfg(test)]
+pub fn contrast(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
+    contrast_l(luminance(a), luminance(b))
+}
+
 /// A named tone of the palette.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tone {
@@ -135,27 +142,78 @@ pub enum Tone {
     Amber,
     /// Rose: failed, errors.
     Rose,
-    /// Dark text on accent backgrounds.
+    /// Dark text on chip backgrounds.
     Ink,
 }
 
 impl Tone {
-    fn rgb(self, bg: Background) -> (u8, u8, u8) {
+    pub const ALL: [Tone; 7] = [
+        Tone::Accent,
+        Tone::AccentDeep,
+        Tone::Sky,
+        Tone::Leaf,
+        Tone::Amber,
+        Tone::Rose,
+        Tone::Ink,
+    ];
+
+    fn index(self) -> usize {
+        self as usize
+    }
+
+    /// The truecolor value on `bg`.
+    pub fn rgb(self, bg: Background) -> (u8, u8, u8) {
+        use Background::*;
         match (self, bg) {
-            // Marks that pass 3:1 on light and dark backgrounds alike.
-            (Tone::Accent, Background::Unknown) => (0xEC, 0x4A, 0x10),
-            (Tone::Leaf, Background::Unknown) => (0x4A, 0x93, 0x55),
-            (Tone::Amber, Background::Unknown) => (0xAE, 0x7A, 0x1F),
-            (Tone::Accent, _) => (0xF2, 0x6B, 0x3A),
-            (Tone::AccentDeep, _) => (0xC8, 0x5A, 0x30),
-            (Tone::Sky, _) => (0x3B, 0x82, 0xC4),
-            (Tone::Leaf, _) => (0x4F, 0x9D, 0x5B),
-            (Tone::Amber, _) => (0xD9, 0x9A, 0x2B),
-            (Tone::Rose, _) => (0xD9, 0x53, 0x4F),
             (Tone::Ink, _) => (0x1C, 0x1C, 0x1C),
+            (Tone::Accent, Light) => (0xBA, 0x3B, 0x0C),
+            (Tone::AccentDeep, Light) => (0xA8, 0x4C, 0x28),
+            (Tone::Sky, Light) => (0x30, 0x6A, 0xA0),
+            (Tone::Leaf, Light) => (0x3A, 0x73, 0x43),
+            (Tone::Amber, Light) => (0x88, 0x60, 0x18),
+            (Tone::Rose, Light) => (0xC2, 0x2E, 0x2A),
+            (Tone::Accent, Dark) => (0xF2, 0x6B, 0x3A),
+            (Tone::AccentDeep, Dark) => (0xD7, 0x7A, 0x56),
+            (Tone::Sky, Dark) => (0x5C, 0x97, 0xCE),
+            (Tone::Leaf, Dark) => (0x52, 0xA3, 0x5E),
+            (Tone::Amber, Dark) => (0xD9, 0x9A, 0x2B),
+            (Tone::Rose, Dark) => (0xE0, 0x71, 0x6D),
+            // Marks that pass 3:1 on light and dark backgrounds alike.
+            (Tone::Accent, Unknown) => (0xEC, 0x4A, 0x10),
+            (Tone::AccentDeep, Unknown) => (0xC8, 0x5A, 0x30),
+            (Tone::Sky, Unknown) => (0x3B, 0x82, 0xC4),
+            (Tone::Leaf, Unknown) => (0x4A, 0x93, 0x55),
+            (Tone::Amber, Unknown) => (0xAE, 0x7A, 0x1F),
+            (Tone::Rose, Unknown) => (0xD9, 0x53, 0x4F),
         }
     }
 
+    /// The xterm 256-color entry on `bg`: the nearest entry of the 6x6x6 cube or the gray
+    /// ramp that keeps the contrast of the truecolor value (the tests check each one).
+    pub fn indexed(self, bg: Background) -> u8 {
+        use Background::*;
+        match (self, bg) {
+            (Tone::Ink, _) => 234,
+            (Tone::Accent | Tone::AccentDeep, Light) => 94,
+            (Tone::Sky, Light) => 25,
+            (Tone::Leaf, Light) => 22,
+            (Tone::Amber, Light) => 58,
+            (Tone::Rose, Light) => 124,
+            (Tone::Accent, Dark) => 209,
+            (Tone::AccentDeep, Dark) => 173,
+            (Tone::Sky, Dark) => 68,
+            (Tone::Leaf, Dark) => 71,
+            (Tone::Amber, Dark) => 172,
+            (Tone::Rose, Dark) => 167,
+            (Tone::Accent | Tone::AccentDeep, Unknown) => 166,
+            (Tone::Sky, Unknown) => 67,
+            (Tone::Leaf, Unknown) => 65,
+            (Tone::Amber, Unknown) => 130,
+            (Tone::Rose, Unknown) => 131,
+        }
+    }
+
+    /// The 16-color entry.
     fn basic(self) -> Color {
         match self {
             Tone::Accent | Tone::AccentDeep => Color::LightRed,
@@ -166,53 +224,74 @@ impl Tone {
             Tone::Ink => Color::Black,
         }
     }
+
+    /// A chip background. Chips carry their own contrast (dark ink on a mid tone), so they
+    /// are the same on every background.
+    pub fn chip_rgb(self) -> (u8, u8, u8) {
+        match self {
+            Tone::Sky => (0x5B, 0x9B, 0xD5),
+            t => t.rgb(Background::Dark),
+        }
+    }
+
+    pub fn chip_indexed(self) -> u8 {
+        match self {
+            Tone::Sky => 68,
+            t => t.indexed(Background::Dark),
+        }
+    }
 }
 
-/// The nearest xterm 256-color index (the 6x6x6 cube or the gray ramp) to an RGB color.
-pub fn nearest_256(r: u8, g: u8, b: u8) -> u8 {
+/// The RGB value of an xterm 256-color index from 16 up.
+#[cfg(test)]
+pub fn index_rgb(i: u8) -> (u8, u8, u8) {
     const STEPS: [u8; 6] = [0, 95, 135, 175, 215, 255];
-    let dist = |a: (u8, u8, u8)| {
-        let d = |x: u8, y: u8| (i32::from(x) - i32::from(y)).pow(2);
-        d(a.0, r) + d(a.1, g) + d(a.2, b)
-    };
-    let step = |v: u8| {
-        (0..6)
-            .min_by_key(|&i| (i32::from(STEPS[i]) - i32::from(v)).abs())
-            .unwrap_or(0)
-    };
-    let (ri, gi, bi) = (step(r), step(g), step(b));
-    let cube = (STEPS[ri], STEPS[gi], STEPS[bi]);
-    let cube_index = 16 + 36 * ri as u8 + 6 * gi as u8 + bi as u8;
-    let avg = (u16::from(r) + u16::from(g) + u16::from(b)) / 3;
-    let gray_i = (avg.saturating_sub(3) / 10).min(23) as u8;
-    let gray_v = 8 + 10 * gray_i;
-    if dist((gray_v, gray_v, gray_v)) < dist(cube) {
-        232 + gray_i
-    } else {
-        cube_index
+    if i >= 232 {
+        let v = 8 + 10 * (i - 232);
+        return (v, v, v);
     }
+    let i = usize::from(i.saturating_sub(16));
+    (STEPS[i / 36], STEPS[(i / 6) % 6], STEPS[i % 6])
 }
 
 pub struct Theme {
     pub mode: ColorMode,
     pub bg: Background,
+    fg: [Option<Color>; 7],
+    chip_bg: [Option<Color>; 7],
 }
 
 impl Theme {
     pub fn new(mode: ColorMode, bg: Background) -> Self {
-        Self { mode, bg }
-    }
-
-    pub fn color(&self, tone: Tone) -> Option<Color> {
-        let (r, g, b) = tone.rgb(self.bg);
-        match self.mode {
-            ColorMode::None => None,
-            ColorMode::Basic => Some(tone.basic()),
-            ColorMode::Indexed => Some(Color::Indexed(nearest_256(r, g, b))),
-            ColorMode::TrueColor => Some(Color::Rgb(r, g, b)),
+        let pick = |tone: Tone, chip: bool| -> Option<Color> {
+            match mode {
+                ColorMode::None => None,
+                ColorMode::Basic => Some(tone.basic()),
+                ColorMode::Indexed if chip => Some(Color::Indexed(tone.chip_indexed())),
+                ColorMode::Indexed => Some(Color::Indexed(tone.indexed(bg))),
+                ColorMode::TrueColor if chip => {
+                    let (r, g, b) = tone.chip_rgb();
+                    Some(Color::Rgb(r, g, b))
+                }
+                ColorMode::TrueColor => {
+                    let (r, g, b) = tone.rgb(bg);
+                    Some(Color::Rgb(r, g, b))
+                }
+            }
+        };
+        Self {
+            mode,
+            bg,
+            fg: Tone::ALL.map(|t| pick(t, false)),
+            chip_bg: Tone::ALL.map(|t| pick(t, true)),
         }
     }
 
+    pub fn color(&self, tone: Tone) -> Option<Color> {
+        self.fg[tone.index()]
+    }
+
+    /// A mark, a border, or a cursor in `tone`.
     pub fn fg(&self, tone: Tone) -> Style {
         self.color(tone)
             .map_or(Style::default(), |c| Style::default().fg(c))
@@ -237,7 +316,7 @@ impl Theme {
 
     /// A filled chip: `tone` background with dark text. Without color: reversed.
     pub fn chip(&self, tone: Tone) -> Style {
-        match (self.color(tone), self.color(Tone::Ink)) {
+        match (self.chip_bg[tone.index()], self.color(Tone::Ink)) {
             (Some(bg), Some(ink)) => Style::default().bg(bg).fg(ink).add_modifier(Modifier::BOLD),
             _ => Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
         }
@@ -296,15 +375,82 @@ pub const STOPPED: Mark = Mark::new("■", "stopped", None);
 
 #[cfg(test)]
 mod tests {
-    use super::nearest_256;
+    use super::{Background, Tone, contrast, index_rgb};
+
+    const DARK_BGS: [(u8, u8, u8); 2] = [(0x1E, 0x1E, 0x1E), (0, 0, 0)];
+    const LIGHT_BGS: [(u8, u8, u8); 2] = [(0xFF, 0xFF, 0xFF), (0xE6, 0xE6, 0xE6)];
+    const TEXT: f64 = 4.5;
+    const MARK: f64 = 3.0;
+    const COLORED: [Tone; 6] = [
+        Tone::Accent,
+        Tone::AccentDeep,
+        Tone::Sky,
+        Tone::Leaf,
+        Tone::Amber,
+        Tone::Rose,
+    ];
+
+    fn check(tone: Tone, rgb: (u8, u8, u8), bgs: &[(u8, u8, u8)], min: f64, what: &str) {
+        for bg in bgs {
+            let r = contrast(rgb, *bg);
+            assert!(
+                r >= min,
+                "{what} {tone:?} {rgb:02X?} on {bg:02X?}: {r:.2} < {min}"
+            );
+        }
+    }
 
     #[test]
-    fn nearest_256_picks_the_cube_or_the_gray_ramp() {
-        assert_eq!(nearest_256(255, 0, 0), 196);
-        assert_eq!(nearest_256(0, 0, 0), 16);
-        // Terracotta maps to an orange cube entry, not a gray.
-        assert_eq!(nearest_256(0xF2, 0x6B, 0x3A), 203);
-        // Near-black ink maps to the gray ramp.
-        assert_eq!(nearest_256(0x1C, 0x1C, 0x1C), 234);
+    fn the_contrast_formula_matches_wcag() {
+        assert!((contrast((0, 0, 0), (0xFF, 0xFF, 0xFF)) - 21.0).abs() < 1e-9);
+        assert!((contrast((0x77, 0x77, 0x77), (0xFF, 0xFF, 0xFF)) - 4.48).abs() < 0.01);
+    }
+
+    #[test]
+    fn every_tone_passes_as_text_on_its_background() {
+        for tone in COLORED {
+            for (bg, bgs) in [(Background::Light, LIGHT_BGS), (Background::Dark, DARK_BGS)] {
+                check(tone, tone.rgb(bg), &bgs, TEXT, "truecolor text");
+                let idx = index_rgb(tone.indexed(bg));
+                check(tone, idx, &bgs, TEXT, "256-color text");
+            }
+        }
+    }
+
+    #[test]
+    fn the_unknown_background_set_passes_as_marks_on_both() {
+        let all = [LIGHT_BGS, DARK_BGS].concat();
+        for tone in COLORED {
+            check(
+                tone,
+                tone.rgb(Background::Unknown),
+                &all,
+                MARK,
+                "truecolor mark",
+            );
+            let idx = index_rgb(tone.indexed(Background::Unknown));
+            check(tone, idx, &all, MARK, "256-color mark");
+        }
+    }
+
+    #[test]
+    fn chip_text_passes_on_every_chip() {
+        let ink = Tone::Ink.rgb(Background::Dark);
+        for tone in [Tone::Accent, Tone::Sky] {
+            let r = contrast(tone.chip_rgb(), ink);
+            assert!(r >= TEXT, "chip {tone:?}: {r:.2}");
+            let r = contrast(index_rgb(tone.chip_indexed()), index_rgb(234));
+            assert!(r >= TEXT, "256-color chip {tone:?}: {r:.2}");
+        }
+        let sky = contrast(Tone::Sky.chip_rgb(), ink);
+        assert!((sky - 5.76).abs() < 0.01, "{sky:.2}");
+    }
+
+    #[test]
+    fn index_rgb_reads_the_cube_and_the_gray_ramp() {
+        assert_eq!(index_rgb(16), (0, 0, 0));
+        assert_eq!(index_rgb(196), (0xFF, 0, 0));
+        assert_eq!(index_rgb(234), (0x1C, 0x1C, 0x1C));
+        assert_eq!(index_rgb(209), (0xFF, 0x87, 0x5F));
     }
 }
