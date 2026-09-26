@@ -57,6 +57,12 @@ pub fn left_word(secs: i64) -> String {
     }
 }
 
+/// A future local time like the CLI writes it: `16:07 (in 1h59m)`.
+fn until_word(app: &App, ts: Timestamp) -> String {
+    let left = (ts.unix_ms() - Timestamp::now().unix_ms()) / 1000;
+    format!("{} (in {})", app.clock(ts, false), left_word(left))
+}
+
 fn secs_since(ts: Timestamp) -> i64 {
     (Timestamp::now().unix_ms() - ts.unix_ms()) / 1000
 }
@@ -484,11 +490,9 @@ fn session_spans(app: &App, t: &Theme) -> Vec<Span<'static>> {
             Span::styled(" stopping", t.fg(Tone::Amber)),
         ],
         Some(s) => {
-            let left = s
-                .expires_at
-                .map(|e| left_word((e.unix_ms() - Timestamp::now().unix_ms()) / 1000));
-            match (s.mode, left) {
-                (SessionMode::Foreground, left) => {
+            let until = s.expires_at.map(|e| app.clock(e, false));
+            match (s.mode, until) {
+                (SessionMode::Foreground, until) => {
                     let n = s.controller_count;
                     let mut v = vec![
                         Span::styled("●", t.fg(Tone::Leaf)),
@@ -497,15 +501,18 @@ fn session_spans(app: &App, t: &Theme) -> Vec<Span<'static>> {
                             t.bold(),
                         ),
                     ];
-                    // A background lease also holds the session after the last window.
-                    if let Some(l) = left {
-                        v.push(Span::styled(format!(" · kept {l}"), t.fg(Tone::Amber)));
+                    // Kept in the background: runs outlive the last window until then.
+                    if let Some(u) = until {
+                        v.push(Span::styled(
+                            format!(" · kept until {u}"),
+                            t.fg(Tone::Amber),
+                        ));
                     }
                     v
                 }
-                (SessionMode::Background, left) => {
-                    let text = match left {
-                        Some(l) => format!(" background · {l} left"),
+                (SessionMode::Background, until) => {
+                    let text = match until {
+                        Some(u) => format!(" background · until {u}"),
                         None => " background".to_owned(),
                     };
                     vec![
@@ -932,7 +939,7 @@ fn status_spans(app: &App, t: &Theme, item: &Item) -> Vec<Span<'static>> {
         details.push(format!(
             "started {} ({})",
             ago(r.started_at),
-            app.clock(r.started_at, true)
+            app.clock(r.started_at, false)
         ));
         details.push(short_id(&r.run_id.to_string()));
         let health = enum_word(r.reported_health.state);
@@ -1007,7 +1014,7 @@ fn extras_text(app: &App, a: &mira_protocol::ids::ActionRef) -> String {
         };
         let next = sc
             .next_at
-            .map_or(String::new(), |n| format!(", next {}", app.clock(n, true)));
+            .map_or(String::new(), |n| format!(", next {}", until_word(app, n)));
         let missed = if sc.missed_ticks > 0 {
             format!(", {} skipped tick(s)", sc.missed_ticks)
         } else {
@@ -1078,7 +1085,7 @@ fn draw_logs(
     let old = app.viewing.get(a).map(|rec| {
         let when = rec
             .ended_at
-            .map_or(String::new(), |e| format!(" at {}", app.clock(e, true)));
+            .map_or(String::new(), |e| format!(" at {}", app.clock(e, false)));
         (
             rec.run_id.clone(),
             format!(
@@ -1432,9 +1439,9 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
             .map(|d| {
                 let d = d.to_offset(offset);
-                format!("{:02}:{:02}:{:02}", d.hour(), d.minute(), d.second())
+                format!("{:02}:{:02}", d.hour(), d.minute())
             })
-            .unwrap_or_else(|_| "--:--:--".into())
+            .unwrap_or_else(|_| "--:--".into())
     };
     let sel = t.selected();
     let Some(p) = app.view_panes.get_mut(&r) else {
@@ -1485,7 +1492,7 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                 });
                 let why = match (&m.freshness, &m.freshness_reason) {
                     (Freshness::Current, _) | (_, None) => String::new(),
-                    (_, Some(reason)) => format!(": {reason}"),
+                    (_, Some(reason)) => format!(" · {reason}"),
                 };
                 let glyph = match m.freshness {
                     Freshness::Current => "●",
@@ -1493,13 +1500,17 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                     Freshness::Historical => "○",
                 };
                 let st = tone.map_or(t.dim(), |c| t.fg(c));
+                // The revision comes right after the state, so a narrow pane cuts the
+                // details first.
                 vec![
                     Span::styled(
-                        format!("{glyph} {}{why}", freshness_word(m.freshness)),
+                        format!("{glyph} {}", freshness_word(m.freshness)),
                         st.add_modifier(Modifier::BOLD),
                     ),
+                    Span::styled(" · ", t.dim()),
+                    Span::styled(format!("rev {rev}"), t.bold()),
                     Span::styled(
-                        format!(" · rev {rev}{at}{src} · {}", durability_word(m.durability)),
+                        format!("{why} · {}{at}{src}", durability_word(m.durability)),
                         t.dim(),
                     ),
                 ]
@@ -1514,19 +1525,7 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         )));
     }
     card.push(Line::from(fit_spans(status, w)));
-    let mut bar = vec![format!(
-        "{} {}",
-        p.len(),
-        match p.kind {
-            ViewKind::Table => "rows",
-            ViewKind::Log => "items",
-            ViewKind::Tree => "shown nodes",
-            _ => "lines",
-        }
-    )];
-    if p.len() > 0 {
-        bar.push(format!("at {}", p.cursor + 1));
-    }
+    let mut bar = vec![position_word(p.kind, p.cursor, p.len())];
     if let (Some(s), Some(cur)) = (p.sel_rev, p.revision())
         && s != cur
     {
@@ -1618,6 +1617,21 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     f.render_widget(Paragraph::new(lines), body);
 }
 
+/// Where the cursor is in a view: `row 1 of 4`; `no rows` when empty.
+fn position_word(kind: ViewKind, cursor: usize, len: usize) -> String {
+    let (one, many) = match kind {
+        ViewKind::Table => ("row", "rows"),
+        ViewKind::Log => ("item", "items"),
+        ViewKind::Tree => ("node", "nodes"),
+        _ => ("line", "lines"),
+    };
+    if len == 0 {
+        format!("no {many}")
+    } else {
+        format!("{one} {} of {len}", cursor.min(len - 1) + 1)
+    }
+}
+
 fn capitalized(s: &str) -> String {
     let mut c = s.chars();
     c.next()
@@ -1693,12 +1707,8 @@ fn draw_rail(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
                 Style::default(),
             ));
             let exp = match s.expires_at {
-                Some(e) => format!(
-                    "{} · {} left",
-                    app.clock(e, false),
-                    left_word((e.unix_ms() - Timestamp::now().unix_ms()) / 1000)
-                ),
-                None if s.background_lease => "no expiry".into(),
+                Some(e) => until_word(app, e),
+                None if s.background_lease => "at `mira down`".into(),
                 None => "last window closes".into(),
             };
             lines.push(row("ends", exp, Style::default()));
@@ -2228,6 +2238,14 @@ mod tests {
     use mira_protocol::error::{ErrorCode, ErrorInfo};
     use mira_protocol::run::CleanupState;
     use mira_protocol::time::Timestamp;
+
+    #[test]
+    fn view_positions_count_from_one() {
+        use mira_protocol::manifest::ViewKind;
+        assert_eq!(super::position_word(ViewKind::Table, 0, 4), "row 1 of 4");
+        assert_eq!(super::position_word(ViewKind::Log, 9, 4), "item 4 of 4");
+        assert_eq!(super::position_word(ViewKind::Table, 0, 0), "no rows");
+    }
 
     #[test]
     fn a_failed_cleanup_reads_as_a_short_phrase() {
