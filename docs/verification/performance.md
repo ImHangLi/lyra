@@ -6,9 +6,9 @@ Reproduce:
 
 ```sh
 cargo build --release --locked
-python3 scripts/perf/measure.py --lyra target/release/lyra --samples 50 --flood-seconds 60 --flood-rounds 3
-python3 -m venv /tmp/lyra-venv && /tmp/lyra-venv/bin/pip install pyte
-/tmp/lyra-venv/bin/python scripts/perf/tui.py --lyra target/release/lyra --starts 50 --keys 1000
+python3 scripts/perf/measure.py --mira target/release/mira --samples 50 --flood-seconds 60 --flood-rounds 3
+python3 -m venv /tmp/mira-venv && /tmp/mira-venv/bin/pip install pyte
+/tmp/mira-venv/bin/python scripts/perf/tui.py --mira target/release/mira --starts 50 --keys 1000
 ```
 
 ## Results (milliseconds)
@@ -19,13 +19,13 @@ python3 -m venv /tmp/lyra-venv && /tmp/lyra-venv/bin/pip install pyte
 | Cold TUI to operable first frame (new host) | 320 | 50 | 51.0 | 54.2 | 59.2 | 63.8 | met |
 | Navigation key → screen change, idle | 24 | 1000 | 2.5 | 3.0 | 3.2 | 8.8 | met |
 | Navigation during a log flood | 40 | 1000 | 2.0 | 2.8 | 3.3 | 10.5 | met |
-| Warm `lyra status` (CLI start + IPC + serialization) | 80 | 50 | 13.1 | 14.9 | 15.3 | 15.5 | met |
-| Warm `lyra catalog` | 80 | 50 | 10.5 | 11.3 | 11.3 | 11.3 | met |
-| Warm `lyra catalog --if-revision` | 80 | 50 | 9.9 | 10.7 | 10.8 | 10.8 | met |
+| Warm `mira status` (CLI start + IPC + serialization) | 80 | 50 | 13.1 | 14.9 | 15.3 | 15.5 | met |
+| Warm `mira catalog` | 80 | 50 | 10.5 | 11.3 | 11.3 | 11.3 | met |
+| Warm `mira catalog --if-revision` | 80 | 50 | 9.9 | 10.7 | 10.8 | 10.8 | met |
 | Warm-cache bounded discovery (`setup --json`) | 400 | 20 | 6.3 | 7.1 | 13.9 | 15.7 | met (small test workspace; see limits) |
-| Cold `lyra status` (starts a host) | not a target | 20 | 45.2 | 49.6 | 67.7 | 72.3 | reported |
+| Cold `mira status` (starts a host) | not a target | 20 | 45.2 | 49.6 | 67.7 | 72.3 | reported |
 
-**Log flood**: 3 rounds of 60 s at about 5,000 lines/s, 200 bytes per line (`dev.flood`). Each round is one `lyra status` every 200 ms while the flood runs.
+**Log flood**: 3 rounds of 60 s at about 5,000 lines/s, 200 bytes per line (`dev.flood`). Each round is one `mira status` every 200 ms while the flood runs.
 
 | Round | `status` n | p50 | p95 | p99 | max | Lines logged | Dropped | `stop --wait` |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -52,5 +52,5 @@ python3 -m venv /tmp/lyra-venv && /tmp/lyra-venv/bin/pip install pyte
 - **Hardware:** only this M5 Pro was measured. There are no M2 or x86_64 numbers.
 - **Discovery size:** it was measured on the test workspace (small). A 5000-entry/8 MiB tree was measured once in #24 at 37 ms on a debug build; it has no release percentiles. Cold-disk discovery was not measured.
 - **Cold CLI:** the cold `status` numbers include starting a new host process. An earlier run at `c654e14` had a p99 near 400 ms; this run had 62 ms. No target covers this.
-- **Load:** under the same load, a back-to-back run of 60 warm `lyra status` calls measured p50 9.4 ms and p95 10.4 ms for the previous build, and p50 10.1 ms and p95 12.0 ms for v0.2.0.
-- **Output with no newlines:** a separate check streamed 200 MiB with no newline through `lyra exec`. Host RSS peaked at 44 MiB (v0.1.0: 1,641 MiB), and it finished in 5 s (v0.1.0: 75 s). See #43.
+- **Load:** under the same load, a back-to-back run of 60 warm `mira status` calls measured p50 9.4 ms and p95 10.4 ms for the previous build, and p50 10.1 ms and p95 12.0 ms for v0.2.0.
+- **Output with no newlines:** a separate check streamed 200 MiB with no newline through `mira exec`. Host RSS peaked at 44 MiB (v0.1.0: 1,641 MiB), and it finished in 5 s (v0.1.0: 75 s). See #43.

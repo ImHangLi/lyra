@@ -2,7 +2,7 @@
 """TUI latency in a real PTY (§19): first operable frame (cold and warm host) and key→screen
 change, idle and during a log flood. Needs `pyte` (pip install pyte). Prints JSON.
 
-Usage: scripts/perf/tui.py --lyra target/release/lyra [--starts 20] [--keys 300]
+Usage: scripts/perf/tui.py --mira target/release/mira [--starts 20] [--keys 300]
 Runs in a scratch copy of tests/fixtures/workspace under /tmp and stops everything it starts.
 Latency is measured from writing a key to the PTY until the parsed screen changes, so it
 includes PTY and parser overhead on top of the TUI's own time.
@@ -27,7 +27,7 @@ def summary(xs):
 
 
 class Tui:
-    def __init__(self, lyra, cwd, env, cols=120, rows=40):
+    def __init__(self, mira, cwd, env, cols=120, rows=40):
         self.screen = pyte.Screen(cols, rows)
         self.stream = pyte.ByteStream(self.screen)
         self.t0 = time.perf_counter()
@@ -36,7 +36,7 @@ class Tui:
             # Never return into the parent's code from the child.
             try:
                 os.chdir(cwd)
-                os.execve(lyra, [lyra], env)
+                os.execve(mira, [mira], env)
             except BaseException as e:  # noqa: BLE001
                 os.write(2, f"exec failed: {e!r}\n".encode())
             finally:
@@ -101,16 +101,16 @@ class Tui:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--lyra", required=True)
+    ap.add_argument("--mira", required=True)
     ap.add_argument("--starts", type=int, default=20)
     ap.add_argument("--keys", type=int, default=300)
     a = ap.parse_args()
-    lyra = os.path.abspath(a.lyra)
-    scratch = tempfile.mkdtemp(prefix="lyra-tp-", dir="/tmp")
-    env = dict(os.environ, LYRA_DATA_HOME=f"{scratch}/data", LYRA_RUNTIME_DIR=f"{scratch}/run", TERM="xterm-256color")
+    mira = os.path.abspath(a.mira)
+    scratch = tempfile.mkdtemp(prefix="mira-tp-", dir="/tmp")
+    env = dict(os.environ, MIRA_DATA_HOME=f"{scratch}/data", MIRA_RUNTIME_DIR=f"{scratch}/run", TERM="xterm-256color")
     root = f"{scratch}/pg"
     shutil.copytree(os.path.join(os.path.dirname(__file__), "../../tests/fixtures/workspace"), root)
-    cli = lambda *args: subprocess.run([lyra, *args, "--json"], cwd=root, env=env, capture_output=True)
+    cli = lambda *args: subprocess.run([mira, *args, "--json"], cwd=root, env=env, capture_output=True)
     def stop_host():
         # Stop the host by the PID in its owner record; pattern kills could hit this script.
         for f in __import__("glob").glob(f"{scratch}/run/*.owner"):
@@ -119,19 +119,19 @@ def main():
             except (OSError, ValueError, KeyError):
                 pass
         time.sleep(0.4)
-    out = {"binary": lyra, "terminal": "PTY + pyte, 120x40"}
+    out = {"binary": mira, "terminal": "PTY + pyte, 120x40"}
     try:
         cold, warm = [], []
         for _ in range(a.starts):
             stop_host()
-            t = Tui(lyra, root, env)
+            t = Tui(mira, root, env)
             v = t.wait_for("DEV")
             if v:
                 cold.append(v)
             t.close()
         cli("up", "--background", "--ttl", "10m")
         for _ in range(a.starts):
-            t = Tui(lyra, root, env)
+            t = Tui(mira, root, env)
             v = t.wait_for("DEV")
             if v:
                 warm.append(v)
@@ -139,7 +139,7 @@ def main():
         print(f"starts done: cold={len(cold)} warm={len(warm)}", file=sys.stderr)
         out["first_frame_cold_host"] = summary(cold)
         out["first_frame_warm_host"] = summary(warm)
-        t = Tui(lyra, root, env)
+        t = Tui(mira, root, env)
         t.wait_for("DEV")
         # Idle resources of Core + TUI: 10 s of samples with no plugin running.
         time.sleep(1)

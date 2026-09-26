@@ -10,7 +10,7 @@ def main(win):
         win.erase()
         h, w = win.getmaxyx()
         win.border()
-        win.addstr(1, 2, "Lyra full-screen test"[: w - 4], curses.A_BOLD)
+        win.addstr(1, 2, "Mira full-screen test"[: w - 4], curses.A_BOLD)
         win.addstr(3, 2, f"size {w}x{h}, keys pressed: {keys}"[: w - 4])
         win.addstr(5, 2, "press q to quit"[: w - 4], curses.A_REVERSE)
         win.refresh()

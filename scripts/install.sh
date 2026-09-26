@@ -1,20 +1,20 @@
 #!/bin/sh
-# Lyra installer for macOS: user directory only, no sudo, no Node.
-#   curl -fsSL https://raw.githubusercontent.com/ImHangLi/lyra/main/scripts/install.sh | sh
+# Mira installer for macOS: user directory only, no sudo, no Node.
+#   curl -fsSL https://raw.githubusercontent.com/ImHangLi/mira/main/scripts/install.sh | sh
 # Environment:
-#   LYRA_VERSION       release version to install (default: latest release)
-#   LYRA_INSTALL_DIR   where to put the binary (default: ~/.lyra/bin)
-#   LYRA_INSTALL_FROM  local directory with release archives (offline/testing)
-#   LYRA_NO_MODIFY_PATH  set to leave shell profiles unchanged (the PATH line is printed instead)
-# The installer verifies the SHA-256 checksum, refuses to replace a `lyra` it did not install,
+#   MIRA_VERSION       release version to install (default: latest release)
+#   MIRA_INSTALL_DIR   where to put the binary (default: ~/.mira/bin)
+#   MIRA_INSTALL_FROM  local directory with release archives (offline/testing)
+#   MIRA_NO_MODIFY_PATH  set to leave shell profiles unchanged (the PATH line is printed instead)
+# The installer verifies the SHA-256 checksum, refuses to replace a `mira` it did not install,
 # and never removes macOS quarantine attributes or bypasses Gatekeeper.
 set -eu
 
-repo="ImHangLi/lyra"
-dir="${LYRA_INSTALL_DIR:-$HOME/.lyra/bin}"
-marker="$dir/.lyra-installed"
+repo="ImHangLi/mira"
+dir="${MIRA_INSTALL_DIR:-$HOME/.mira/bin}"
+marker="$dir/.mira-installed"
 
-fail() { echo "lyra install: $*" >&2; exit 1; }
+fail() { echo "mira install: $*" >&2; exit 1; }
 
 [ "$(uname -s)" = "Darwin" ] || fail "only macOS is supported"
 case "$(uname -m)" in
@@ -23,54 +23,54 @@ case "$(uname -m)" in
   *) fail "unsupported architecture $(uname -m)" ;;
 esac
 
-version="${LYRA_VERSION:-}"
+version="${MIRA_VERSION:-}"
 version="${version#v}"
-if [ -z "$version" ] && [ -z "${LYRA_INSTALL_FROM:-}" ]; then
+if [ -z "$version" ] && [ -z "${MIRA_INSTALL_FROM:-}" ]; then
   version="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
-  [ -n "$version" ] || fail "cannot find the latest release; set LYRA_VERSION"
+  [ -n "$version" ] || fail "cannot find the latest release; set MIRA_VERSION"
 fi
 if [ -z "$version" ]; then
-  archive="$(ls "$LYRA_INSTALL_FROM"/lyra-*-"$target".tar.gz 2>/dev/null | tail -1)"
-  [ -n "$archive" ] || fail "no archive for $target in $LYRA_INSTALL_FROM"
+  archive="$(ls "$MIRA_INSTALL_FROM"/mira-*-"$target".tar.gz 2>/dev/null | tail -1)"
+  [ -n "$archive" ] || fail "no archive for $target in $MIRA_INSTALL_FROM"
   name="$(basename "$archive" .tar.gz)"
 else
-  name="lyra-$version-$target"
+  name="mira-$version-$target"
 fi
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-if [ -n "${LYRA_INSTALL_FROM:-}" ]; then
-  cp "$LYRA_INSTALL_FROM/$name.tar.gz" "$LYRA_INSTALL_FROM/$name.tar.gz.sha256" "$tmp/" || fail "archive not found"
+if [ -n "${MIRA_INSTALL_FROM:-}" ]; then
+  cp "$MIRA_INSTALL_FROM/$name.tar.gz" "$MIRA_INSTALL_FROM/$name.tar.gz.sha256" "$tmp/" || fail "archive not found"
 else
   base="https://github.com/$repo/releases/download/v$version"
-  curl -fsSL "$base/$name.tar.gz" -o "$tmp/$name.tar.gz" || fail "download failed: lyra $version has no $target build (see https://github.com/$repo/releases)"
+  curl -fsSL "$base/$name.tar.gz" -o "$tmp/$name.tar.gz" || fail "download failed: mira $version has no $target build (see https://github.com/$repo/releases)"
   curl -fsSL "$base/$name.tar.gz.sha256" -o "$tmp/$name.tar.gz.sha256" || fail "checksum download failed"
 fi
 (cd "$tmp" && shasum -a 256 -c "$name.tar.gz.sha256" >/dev/null) || fail "checksum mismatch; nothing was installed"
 tar -C "$tmp" -xzf "$tmp/$name.tar.gz"
 
-if [ -e "$dir/lyra" ] && [ ! -f "$marker" ]; then
-  fail "$dir/lyra exists and was not installed by this script; remove it or set LYRA_INSTALL_DIR"
+if [ -e "$dir/mira" ] && [ ! -f "$marker" ]; then
+  fail "$dir/mira exists and was not installed by this script; remove it or set MIRA_INSTALL_DIR"
 fi
 mkdir -p "$dir"
-cp "$tmp/$name/lyra" "$dir/lyra.new"
-chmod 0755 "$dir/lyra.new"
-mv "$dir/lyra.new" "$dir/lyra"
+cp "$tmp/$name/mira" "$dir/mira.new"
+chmod 0755 "$dir/mira.new"
+mv "$dir/mira.new" "$dir/mira"
 echo "$name" > "$marker"
 
-other="$(command -v lyra 2>/dev/null || true)"
-echo "Installed $("$dir/lyra" --version) to $dir/lyra"
-if [ -n "$other" ] && [ "$other" != "$dir/lyra" ]; then
-  echo "Note: another lyra is first on PATH: $other"
+other="$(command -v mira 2>/dev/null || true)"
+echo "Installed $("$dir/mira" --version) to $dir/mira"
+if [ -n "$other" ] && [ "$other" != "$dir/mira" ]; then
+  echo "Note: another mira is first on PATH: $other"
 fi
-# Put the install directory on PATH for new shells, once, unless LYRA_NO_MODIFY_PATH is set.
+# Put the install directory on PATH for new shells, once, unless MIRA_NO_MODIFY_PATH is set.
 case ":$PATH:" in
   *":$dir:"*) ;;
   *)
     case "$(basename "${SHELL:-}")" in
       zsh) rc="${ZDOTDIR:-$HOME}/.zshrc"; line="export PATH=\"$dir:\$PATH\"" ;;
       bash) rc="$HOME/.bash_profile"; line="export PATH=\"$dir:\$PATH\"" ;;
-      fish) rc="$HOME/.config/fish/conf.d/lyra.fish"; line="fish_add_path \"$dir\"" ;;
+      fish) rc="$HOME/.config/fish/conf.d/mira.fish"; line="fish_add_path \"$dir\"" ;;
       *) rc="" ;;
     esac
     # The path is written into a shell profile, so it must not contain characters a shell
@@ -80,17 +80,17 @@ case ":$PATH:" in
 "*) unsafe=1 ;;
       *) unsafe="" ;;
     esac
-    if [ -n "${LYRA_NO_MODIFY_PATH:-}" ] || [ -z "$rc" ] || [ -n "$unsafe" ]; then
+    if [ -n "${MIRA_NO_MODIFY_PATH:-}" ] || [ -z "$rc" ] || [ -n "$unsafe" ]; then
       echo "Add it to PATH:  export PATH=\"$dir:\$PATH\""
     else
       if ! grep -qsF "$line" "$rc"; then
         mkdir -p "$(dirname "$rc")"
-        printf '\n# Added by the Lyra installer\n%s\n' "$line" >> "$rc"
+        printf '\n# Added by the Mira installer\n%s\n' "$line" >> "$rc"
         echo "Added $dir to PATH in $rc."
       fi
       echo "Open a new terminal, or run now:  export PATH=\"$dir:\$PATH\""
     fi
     ;;
 esac
-echo "Next: in your project, run 'lyra setup'. It prepares your coding agent and prints the one command to run."
-echo "Uninstall: rm \"$dir/lyra\" \"$marker\", and remove the Lyra line from your shell profile (project .lyra files and workspace data are kept)."
+echo "Next: in your project, run 'mira setup'. It prepares your coding agent and prints the one command to run."
+echo "Uninstall: rm \"$dir/mira\" \"$marker\", and remove the Mira line from your shell profile (project .mira files and workspace data are kept)."

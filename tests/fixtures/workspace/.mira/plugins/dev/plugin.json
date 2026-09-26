@@ -1,0 +1,304 @@
+{
+  "api": 1,
+  "id": "dev",
+  "name": "Development",
+  "description": "Test workspace commands: passing and failing checks, a long-running server, interactive terminal programs, and a counter.",
+  "tags": [
+    "dev"
+  ],
+  "actions": [
+    {
+      "id": "check",
+      "title": "Check",
+      "description": "Run a quick check that succeeds.",
+      "mode": "task",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/check.py"
+        ]
+      }
+    },
+    {
+      "id": "fail",
+      "title": "Failing check",
+      "description": "Run a check that exits with status 3.",
+      "mode": "task",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/check.py",
+          "--fail"
+        ]
+      }
+    },
+    {
+      "id": "web",
+      "title": "Web server",
+      "description": "Start a long-running development server that logs a heartbeat.",
+      "mode": "process",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/web.py"
+        ]
+      },
+      "stop_grace_ms": 2000
+    },
+    {
+      "id": "prompt",
+      "title": "Interactive prompt",
+      "description": "Ask for a name in a real terminal.",
+      "mode": "task",
+      "terminal": "pty",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/prompt.py"
+        ]
+      },
+      "timeout": {
+        "kind": "after",
+        "ms": 600000
+      }
+    },
+    {
+      "id": "count",
+      "title": "Count",
+      "description": "Increment a counter file in the plugin state directory; shows request-key deduplication.",
+      "mode": "task",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/count.py"
+        ]
+      },
+      "effects": [
+        "writes-state"
+      ]
+    },
+    {
+      "id": "flood",
+      "title": "Log flood",
+      "description": "Print many log lines quickly to exercise bounded logs.",
+      "mode": "process",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/flood.py"
+        ]
+      }
+    },
+    {
+      "id": "greeter",
+      "title": "Greeter",
+      "description": "A long-running process whose greeting comes from its input.",
+      "mode": "process",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/greeter.py"
+        ]
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "greeting": {
+            "type": "string",
+            "default": "hello",
+            "maxLength": 64
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "stubborn",
+      "title": "Stubborn process",
+      "description": "Ignores SIGTERM so the stop sequence must escalate to SIGKILL.",
+      "mode": "process",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/stubborn.py"
+        ]
+      },
+      "stop_grace_ms": 1000
+    },
+    {
+      "id": "cleanup-fails",
+      "title": "Cleanup fails",
+      "description": "Succeeds, but its cleanup command exits with status 4.",
+      "mode": "task",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/check.py"
+        ]
+      },
+      "cleanup": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "-c",
+          "import os,sys; print('cleanup reason', os.environ['MIRA_STOP_REASON']); sys.exit(4)"
+        ]
+      }
+    },
+    {
+      "id": "env-check",
+      "title": "Environment check",
+      "description": "Prints which environment layers reached the child, without printing secret values.",
+      "mode": "task",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/envcheck.py"
+        ]
+      },
+      "env_files": [
+        "scripts/workspace.env"
+      ],
+      "env": {
+        "LAYER": "action",
+        "API_TOKEN": "fixture-secret-token"
+      }
+    },
+    {
+      "id": "heartbeat",
+      "title": "Heartbeat",
+      "description": "Every 2 seconds, count TODO markers in README.md and record the result; no model or network.",
+      "mode": "task",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/heartbeat.py"
+        ]
+      },
+      "schedule": {
+        "every_ms": 2000
+      },
+      "effects": [
+        "read-files",
+        "writes-state"
+      ]
+    },
+    {
+      "id": "prompt-interrupt",
+      "title": "Interactive prompt (Ctrl-C stop)",
+      "description": "The same prompt; stopping it sends Ctrl-C through the terminal first.",
+      "mode": "task",
+      "terminal": "pty",
+      "stop_signal": "interrupt",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/prompt.py"
+        ]
+      },
+      "timeout": {
+        "kind": "after",
+        "ms": 600000
+      }
+    },
+    {
+      "id": "fullscreen",
+      "title": "Full-screen program",
+      "description": "A small curses program on the alternate screen; press q to quit.",
+      "mode": "task",
+      "terminal": "pty",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/fullscreen.py"
+        ]
+      },
+      "timeout": {
+        "kind": "after",
+        "ms": 600000
+      }
+    },
+    {
+      "id": "editor",
+      "title": "Editor",
+      "description": "Open a scratch file in vi without user configuration; type :q! and Enter to quit.",
+      "mode": "task",
+      "terminal": "pty",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "vi",
+          "-u",
+          "NONE",
+          "-n",
+          "scripts/scratch.txt"
+        ]
+      },
+      "timeout": {
+        "kind": "after",
+        "ms": 600000
+      }
+    },
+    {
+      "id": "hostile",
+      "title": "Hostile terminal output",
+      "description": "Print clipboard, title, and window sequences split across writes, then plain text.",
+      "mode": "task",
+      "terminal": "pty",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/hostile.py"
+        ]
+      }
+    },
+    {
+      "id": "paste",
+      "title": "Bracketed paste probe",
+      "description": "Enable bracketed paste, then report exactly what one paste delivered.",
+      "mode": "task",
+      "terminal": "pty",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/paste.py"
+        ]
+      },
+      "timeout": {
+        "kind": "after",
+        "ms": 120000
+      }
+    },
+    {
+      "id": "stubborn-pty",
+      "title": "Stubborn terminal program",
+      "description": "Ignores Ctrl-C and SIGTERM in a terminal, so the stop sequence must escalate to SIGKILL.",
+      "mode": "process",
+      "terminal": "pty",
+      "stop_signal": "interrupt",
+      "run": {
+        "kind": "command",
+        "argv": [
+          "python3",
+          "scripts/stubborn.py"
+        ]
+      },
+      "stop_grace_ms": 1000
+    }
+  ]
+}

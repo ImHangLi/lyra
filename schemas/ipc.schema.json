@@ -3698,7 +3698,7 @@
         },
         "frame": {
           "additionalProperties": true,
-          "description": "One LPP `view` frame; its `view_id` must equal `view_ref`'s local ID.",
+          "description": "One MPP `view` frame; its `view_id` must equal `view_ref`'s local ID.",
           "type": "object"
         },
         "request_key": {
@@ -3894,8 +3894,8 @@
       "$ref": "#/$defs/RpcNotification"
     }
   ],
-  "title": "LIPC/1",
-  "x-lyra-methods": {
+  "title": "MIPC/1",
+  "x-mira-methods": {
     "action.exec": {
       "params": {
         "$ref": "#/$defs/ActionExecParams"
@@ -4177,7 +4177,7 @@
       }
     }
   },
-  "x-lyra-public-reply": {
+  "x-mira-public-reply": {
     "$ref": "#/$defs/PublicReply"
   }
 }

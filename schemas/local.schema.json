@@ -101,7 +101,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Personal overrides in `.lyra/local.json`; never committed.",
+  "description": "Personal overrides in `.mira/local.json`; never committed.",
   "properties": {
     "api": {
       "$ref": "#/$defs/Api1"
