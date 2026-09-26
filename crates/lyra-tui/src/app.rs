@@ -10,7 +10,7 @@ use lyra_protocol::error::ErrorInfo;
 use lyra_protocol::ids::{ActionId, ActionRef, Digest, ItemRef, RunId, SessionId, ViewRef};
 use lyra_protocol::ipc::*;
 use lyra_protocol::manifest::{ActionMode, JsonObject, ViewKind};
-use lyra_protocol::run::{ExitInfo, Lifecycle, RunRecord, RunSummary};
+use lyra_protocol::run::{ExitInfo, Lifecycle, RunRecord, RunResult, RunSummary};
 use lyra_protocol::time::Timestamp;
 use serde_json::{Map, Value};
 use tokio::sync::mpsc::UnboundedSender;
@@ -65,6 +65,34 @@ pub enum Inputs {
     /// The input schema; a form collects the values.
     Form(JsonObject),
     Unknown(String),
+}
+
+/// The tabs of the main pane for an action. `History` shows while the history list is open.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tab {
+    Logs,
+    History,
+    Output,
+}
+
+impl Tab {
+    pub const ALL: [Tab; 3] = [Tab::Logs, Tab::History, Tab::Output];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tab::Logs => "Logs",
+            Tab::History => "History",
+            Tab::Output => "Output",
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Tab::Logs => 0,
+            Tab::History => 1,
+            Tab::Output => 2,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -152,6 +180,11 @@ pub enum Cmd {
     CopyAll,
     /// Open the run history of the selected action.
     History,
+    /// Switch the main pane tab (`[` and `]`).
+    NextTab,
+    PrevTab,
+    /// Go to one tab by number (`1`, `2`, `3`).
+    GoTab(u8),
 }
 
 pub struct Binding {
@@ -181,7 +214,10 @@ pub struct LastRun {
     pub run_id: RunId,
     pub lifecycle: Lifecycle,
     pub exit: Option<ExitInfo>,
+    pub started_at: Option<Timestamp>,
     pub ended_at: Option<Timestamp>,
+    /// The structured result of the run, once its final record is read.
+    pub result: Option<RunResult>,
 }
 
 pub struct Notice {
@@ -216,6 +252,8 @@ pub struct Io {
 
 pub struct App {
     pub root: String,
+    /// `name` from `.lyra/workspace.json`, for the header.
+    pub workspace_name: Option<String>,
     /// The workspace's git branch (or short commit); `None` outside a git repository.
     pub branch: Option<String>,
     branch_at: Instant,
@@ -265,6 +303,16 @@ pub struct App {
     pub keeping: bool,
     pub quit: Option<Quit>,
     pub narrow: bool,
+    /// The terminal is wide enough for the right rail; drawing sets it.
+    pub wide: bool,
+    /// The main pane tab for actions (`Logs` or `Output`; `History` is the open list).
+    pub tab: Tab,
+    /// First shown line of the Output tab.
+    pub output_top: usize,
+    /// The newest runs per action, for the right rail and a quick history tab.
+    pub recent: HashMap<ActionRef, Vec<RunRecord>>,
+    /// The run state each `recent` entry was requested for; a change reads it again.
+    recent_key: HashMap<ActionRef, (Option<RunId>, u8, bool)>,
     /// The PTY attach view (§13).
     pub term: Terminals,
     io: Io,
@@ -274,6 +322,7 @@ impl App {
     pub fn new(root: String, offset: time::UtcOffset, io: Io) -> Self {
         let branch = crate::git::head_label(std::path::Path::new(&root));
         Self {
+            workspace_name: workspace_name(&root),
             branch,
             branch_at: Instant::now(),
             view_poll_at: Instant::now(),
@@ -317,6 +366,11 @@ impl App {
             keeping: false,
             quit: None,
             narrow: false,
+            wide: false,
+            tab: Tab::Logs,
+            output_top: 0,
+            recent: HashMap::new(),
+            recent_key: HashMap::new(),
             term: Terminals::new(io.paths.clone()),
             io,
         }
@@ -359,6 +413,8 @@ impl App {
             }
         }
         self.plugin_order = order;
+        // The workspace file may have changed with the catalog.
+        self.workspace_name = workspace_name(&self.root);
         // Views that no longer exist lose their panel; the others read again.
         let known: Vec<ViewRef> = self.views.iter().map(|v| v.view_ref.clone()).collect();
         self.view_panes.retain(|r, _| known.contains(r));
@@ -411,7 +467,9 @@ impl App {
                     run_id: r.run_id.clone(),
                     lifecycle: r.lifecycle,
                     exit: None,
+                    started_at: Some(r.started_at),
                     ended_at: None,
+                    result: None,
                 },
             );
             let _ = self.io.read.send(Read::RunGet(r.run_id.clone()));
@@ -618,6 +676,9 @@ impl App {
             }
             Event::Recent(Err(_)) => {}
             Event::History(a, res) => {
+                if let Ok(list) = &res {
+                    self.recent.insert(a.clone(), list.runs.clone());
+                }
                 if let Modal::History {
                     action_ref,
                     runs,
@@ -796,7 +857,9 @@ impl App {
                 run_id: rec.run_id,
                 lifecycle: rec.lifecycle,
                 exit: rec.exit,
+                started_at: Some(rec.started_at),
                 ended_at: rec.ended_at,
+                result: rec.result,
             },
         );
     }
@@ -1018,6 +1081,7 @@ impl App {
     }
 
     fn on_select(&mut self) {
+        self.output_top = 0;
         let sel = self.selected_ref();
         if self
             .notice
@@ -1090,6 +1154,48 @@ impl App {
     pub fn selected_pane_mut(&mut self) -> Option<&mut LogPane> {
         let a = self.selected_ref()?;
         self.panes.get_mut(&a)
+    }
+
+    /// The tab the main pane shows: `History` while the history list of the selected action
+    /// is open, else the chosen tab.
+    pub fn shown_tab(&self) -> Tab {
+        match &self.modal {
+            Modal::History { action_ref, .. }
+                if Some(action_ref) == self.selected_ref().as_ref() =>
+            {
+                Tab::History
+            }
+            _ => self.tab,
+        }
+    }
+
+    /// Reads the selected action's newest runs for the right rail when its run state changed
+    /// since the last read. Cheap to call on every frame.
+    pub fn want_recent(&mut self) {
+        let Some(a) = self.selected_ref() else {
+            return;
+        };
+        let key = match (self.active.get(&a), self.last.get(&a)) {
+            (Some(r), _) => (Some(r.run_id.clone()), stage(r.lifecycle), false),
+            (None, Some(l)) => (Some(l.run_id.clone()), 2, l.ended_at.is_some()),
+            (None, None) => (None, 0, false),
+        };
+        if key.0.is_none() || self.recent_key.get(&a) == Some(&key) {
+            return;
+        }
+        self.recent_key.insert(a.clone(), key);
+        let _ = self.io.read.send(Read::History(a));
+    }
+
+    /// Moves to `tab`; `History` opens the history list of the selected action.
+    fn go_tab(&mut self, tab: Tab) {
+        if matches!(self.modal, Modal::History { .. }) {
+            self.modal = Modal::None;
+        }
+        match tab {
+            Tab::History => self.exec(Cmd::History),
+            t => self.tab = t,
+        }
     }
 
     // ----- item actions -------------------------------------------------------------
@@ -1292,6 +1398,7 @@ impl App {
                     v.push(bind("j/k", "choose", Cmd::Down));
                     v.push(bind("Enter", "open logs", Cmd::Open));
                 }
+                v.push(bind("[ ]", "tab", Cmd::NextTab));
                 v.push(bind("Esc", "close", Cmd::Escape));
                 return v;
             }
@@ -1313,7 +1420,11 @@ impl App {
             return self.view_bindings();
         }
         let mut v = Vec::new();
-        let pane = self.selected_pane().filter(|p| !p.records.is_empty());
+        // The log keys act on the Logs tab only.
+        let output = self.tab == Tab::Output;
+        let pane = self
+            .selected_pane()
+            .filter(|p| !p.records.is_empty() && !output);
         match self.focus {
             Focus::List => {
                 if self.visible.len() > 1 {
@@ -1324,6 +1435,9 @@ impl App {
                 }
             }
             Focus::Logs => {
+                if output {
+                    v.push(bind("j/k", "scroll", Cmd::Down));
+                }
                 if pane.is_some() {
                     v.push(bind("j/k", "scroll", Cmd::Down));
                     v.push(hidden("PgUp/PgDn", "page", Cmd::PageUp));
@@ -1394,6 +1508,12 @@ impl App {
             }
         }
         if self.selected_item().is_some() {
+            v.push(hidden("[ ]", "previous or next tab", Cmd::NextTab));
+            v.push(hidden(
+                "1 2 3",
+                "Logs, History, or Output tab",
+                Cmd::GoTab(0),
+            ));
             let to = if self.focus == Focus::List {
                 "logs"
             } else {
@@ -1570,6 +1690,7 @@ impl App {
         }
         self.sync_pane(&a);
         self.focus = Focus::Logs;
+        self.tab = Tab::Logs;
     }
 
     /// The selected item's active PTY run, if it can be attached.
@@ -1814,6 +1935,12 @@ impl App {
                     KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('H') => {
                         self.modal = Modal::None
                     }
+                    KeyCode::Char('[') | KeyCode::Char('1') => self.go_tab(Tab::Logs),
+                    KeyCode::Char(']') | KeyCode::Char('3') => self.go_tab(Tab::Output),
+                    KeyCode::Tab | KeyCode::BackTab => {
+                        self.modal = Modal::None;
+                        self.exec(Cmd::Focus);
+                    }
                     KeyCode::Char('c') if ctrl => self.modal = Modal::None,
                     KeyCode::Char('j') | KeyCode::Down => {
                         *index = (*index + 1).min(n.saturating_sub(1))
@@ -1889,6 +2016,9 @@ impl App {
             (KeyCode::Char('m'), _) => Cmd::Mouse,
             (KeyCode::Char('Y'), _) => Cmd::CopyAll,
             (KeyCode::Char('H'), _) => Cmd::History,
+            (KeyCode::Char(']'), _) => Cmd::NextTab,
+            (KeyCode::Char('['), _) => Cmd::PrevTab,
+            (KeyCode::Char(c @ '1'..='3'), _) => Cmd::GoTab(c as u8 - b'1'),
             _ => return,
         };
         let navigation = matches!(
@@ -1906,6 +2036,8 @@ impl App {
                 || (cmd == Cmd::PageDown && b.cmd == Cmd::PageUp)
                 || (cmd == Cmd::Left && b.cmd == Cmd::Right)
                 || (cmd == Cmd::PrevMatch && b.cmd == Cmd::NextMatch)
+                || (cmd == Cmd::PrevTab && b.cmd == Cmd::NextTab)
+                || matches!((cmd, b.cmd), (Cmd::GoTab(_), Cmd::GoTab(_)))
         });
         if bound {
             self.exec(cmd);
@@ -1987,13 +2119,30 @@ impl App {
                 }
             }
             Cmd::CopyAll => {}
+            Cmd::NextTab | Cmd::PrevTab | Cmd::GoTab(_) => {
+                let at = self.shown_tab().index();
+                let to = match cmd {
+                    Cmd::NextTab => (at + 1) % 3,
+                    Cmd::PrevTab => (at + 2) % 3,
+                    Cmd::GoTab(n) => usize::from(n).min(2),
+                    _ => at,
+                };
+                self.go_tab(Tab::ALL[to]);
+            }
             Cmd::History => {
                 if let Some(a) = self.selected_ref() {
+                    // Cached runs show at once; the host's answer replaces them.
+                    let runs = self.recent.get(&a).cloned();
+                    let shown = self.panes.get(&a).and_then(|p| p.run_id.clone());
+                    let index = runs
+                        .as_ref()
+                        .and_then(|r| r.iter().position(|x| Some(&x.run_id) == shown.as_ref()))
+                        .unwrap_or(0);
                     self.modal = Modal::History {
                         action_ref: a.clone(),
-                        runs: None,
+                        runs,
                         error: None,
-                        index: 0,
+                        index,
                     };
                     let _ = self.io.read.send(Read::History(a));
                 }
@@ -2242,6 +2391,17 @@ impl App {
                 };
                 self.on_select();
             }
+            Focus::Logs if self.tab == Tab::Output => {
+                self.output_top = match cmd {
+                    Cmd::Up => self.output_top.saturating_sub(1),
+                    Cmd::Down => self.output_top + 1,
+                    Cmd::PageUp => self.output_top.saturating_sub(10),
+                    Cmd::PageDown => self.output_top + 10,
+                    Cmd::Top => 0,
+                    // Drawing clamps this to the last page.
+                    _ => usize::MAX / 2,
+                };
+            }
             Focus::Logs => {
                 let Some(p) = self.selected_pane_mut() else {
                     return;
@@ -2330,6 +2490,20 @@ fn stage(l: Lifecycle) -> u8 {
         Lifecycle::Stopping { .. } => 1,
         Lifecycle::Finished { .. } => 2,
     }
+}
+
+/// The non-empty `name` of the workspace file, if it has one.
+fn workspace_name(root: &str) -> Option<String> {
+    let path = std::path::Path::new(root)
+        .join(".lyra")
+        .join("workspace.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    v.get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned)
 }
 
 fn start_word(item: &Item) -> &'static str {
@@ -2541,7 +2715,9 @@ mod tests {
                     outcome: lyra_protocol::run::Outcome::Succeeded,
                 },
                 exit: None,
+                started_at: None,
                 ended_at: None,
+                result: None,
             },
         );
         key(&mut a, KeyCode::Char('r'));

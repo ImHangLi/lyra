@@ -410,8 +410,8 @@ impl ViewPane {
 
     fn body_height(&self) -> usize {
         match self.kind {
-            // Header row and the full-value line of the selected cell.
-            ViewKind::Table => self.height.saturating_sub(2).max(1),
+            // Header row, its rule, and the full-value line of the selected cell.
+            ViewKind::Table => self.height.saturating_sub(3).max(1),
             _ => self.height.max(1),
         }
     }
@@ -608,10 +608,11 @@ impl ViewPane {
         out
     }
 
-    /// Lines for the body area (`width` cells). `focus` highlights the cursor.
-    pub fn lines(&mut self, focus: bool) -> Vec<Line<'static>> {
+    /// Lines for the body area (`width` cells). `focus` highlights the cursor with
+    /// `selected`; without the focus the cursor row is bold.
+    pub fn lines(&mut self, focus: bool, selected: Style) -> Vec<Line<'static>> {
         let sel = if focus {
-            Style::default().add_modifier(Modifier::REVERSED)
+            selected
         } else {
             Style::default().add_modifier(Modifier::BOLD)
         };
@@ -638,8 +639,14 @@ impl ViewPane {
                     style = style.add_modifier(Modifier::BOLD);
                 }
             }
+            let mut shown = shown;
             if i == self.cursor {
                 style = style.patch(sel);
+                if focus {
+                    // The focused cursor row fills the width.
+                    let pad = w.saturating_sub(cells(&shown));
+                    shown.push_str(&" ".repeat(pad));
+                }
             }
             out.push(Line::from(Span::styled(shown, style)));
         }
@@ -666,60 +673,85 @@ impl ViewPane {
             }
             first += 1;
         }
-        let shown: Vec<usize> = {
-            let mut v = Vec::new();
-            let mut used = 0;
-            for c in first..columns.len() {
-                let cw = self.widths.get(c).copied().unwrap_or(3) + 1;
-                if used + cw > avail && !v.is_empty() {
-                    break;
+        // Shown columns; a column that does not fit whole still shows cut when at least
+        // `MIN_CUT` cells are left, and the table's last column takes the room left.
+        const MIN_CUT: usize = 8;
+        let mut widths = self.widths.clone();
+        let mut shown: Vec<usize> = Vec::new();
+        let mut used = 0;
+        for c in first..columns.len() {
+            let cw = widths.get(c).copied().unwrap_or(3) + 1;
+            if used + cw > avail && !shown.is_empty() {
+                let left = avail.saturating_sub(used + 1);
+                if left >= MIN_CUT
+                    && let Some(x) = widths.get_mut(c)
+                {
+                    *x = left;
+                    shown.push(c);
                 }
-                used += cw;
-                v.push(c);
+                break;
             }
-            v
-        };
+            used += cw;
+            shown.push(c);
+        }
+        if let Some(&last) = shown.last()
+            && last + 1 == columns.len()
+        {
+            let before: usize = shown[..shown.len() - 1]
+                .iter()
+                .map(|&c| widths.get(c).copied().unwrap_or(3) + 1)
+                .sum();
+            if let Some(x) = widths.get_mut(last) {
+                *x = (*x).max(avail.saturating_sub(before + 1));
+            }
+        }
         let fit = |s: &str, cw: usize| -> String {
             let d = display(s);
             if cells(&d) > cw {
-                format!("{}~", slice_cells(&d, 0, cw.saturating_sub(1)))
+                format!("{}…", slice_cells(&d, 0, cw.saturating_sub(1)))
             } else {
                 let pad = cw - cells(&d);
                 format!("{d}{}", " ".repeat(pad))
             }
         };
         let mut out = Vec::new();
-        let mut head = vec![Span::raw(if first > 0 { "< " } else { "  " })];
+        let mut head = vec![Span::raw(if first > 0 { "‹ " } else { "  " })];
         for &c in &shown {
-            let cw = self.widths.get(c).copied().unwrap_or(3);
-            let st = if c == self.col {
-                Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-            } else {
-                Style::default().add_modifier(Modifier::BOLD)
-            };
+            let cw = widths.get(c).copied().unwrap_or(3);
+            // Every header cell looks the same; the selected cell is marked in its row.
+            let st = Style::default().add_modifier(Modifier::BOLD);
             head.push(Span::styled(fit(&columns[c].label, cw), st));
             head.push(Span::raw(" "));
         }
         if shown.last().is_some_and(|&l| l + 1 < columns.len()) {
-            head.push(Span::raw(">"));
+            head.push(Span::raw("›"));
         }
         out.push(Line::from(head));
+        out.push(Line::from(Span::styled(
+            "─".repeat(w),
+            Style::default().add_modifier(Modifier::DIM),
+        )));
         for (i, _) in self.visible() {
             let Some(r) = rows.get(i) else { break };
-            let mut spans = vec![Span::raw(if i == self.cursor { "> " } else { "  " })];
+            let cur = i == self.cursor;
+            // The focused cursor row is filled; its selected cell is also underlined.
+            let row_st = if cur { sel } else { Style::default() };
+            let mut spans = vec![Span::styled(if cur { "▸ " } else { "  " }, row_st)];
+            let mut used = 2;
             for &c in &shown {
-                let cw = self.widths.get(c).copied().unwrap_or(3);
+                let cw = widths.get(c).copied().unwrap_or(3);
                 let v = r.values.get(&columns[c].id).map(cell).unwrap_or_default();
-                let mut st = Style::default();
-                if i == self.cursor {
-                    st = st.patch(if c == self.col && focus {
-                        sel
-                    } else {
-                        Style::default().add_modifier(Modifier::BOLD)
-                    });
-                }
+                let st = if cur && c == self.col && focus {
+                    row_st.add_modifier(Modifier::UNDERLINED)
+                } else {
+                    row_st
+                };
                 spans.push(Span::styled(fit(&v, cw), st));
-                spans.push(Span::raw(" "));
+                spans.push(Span::styled(" ", row_st));
+                used += cw + 1;
+            }
+            if cur && focus {
+                spans.push(Span::styled(" ".repeat(w.saturating_sub(used)), row_st));
             }
             out.push(Line::from(spans));
         }
