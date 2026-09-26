@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Playground server stand-in: logs a heartbeat every second until stopped."""
+"""Fixture server stand-in: logs a heartbeat every second until stopped."""
 import signal, sys, time
 
 def stop(signum, _frame):

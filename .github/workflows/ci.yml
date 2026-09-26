@@ -31,14 +31,14 @@ jobs:
         run: cargo test --workspace --locked
       - name: Contract (schemas and fixtures)
         run: scripts/check-contract.sh
-      - name: Smoke (validate the playground and run a task)
+      - name: Smoke (validate the test workspace and run a task)
         env:
           LYRA_DATA_HOME: ${{ runner.temp }}/lyra-data
           LYRA_RUNTIME_DIR: /tmp/lyra-ci
         run: |
-          target/debug/lyra validate examples/playground/.lyra --json
-          cd examples/playground
-          ../../target/debug/lyra run dev.check --json
-          ../../target/debug/lyra run demo.scan --json
-          ../../target/debug/lyra view demo.table --json > /dev/null
-          ../../target/debug/lyra down --wait --json
+          target/debug/lyra validate tests/fixtures/workspace/.lyra --json
+          cd tests/fixtures/workspace
+          ../../../target/debug/lyra run dev.check --json
+          ../../../target/debug/lyra run markers.scan --json
+          ../../../target/debug/lyra view markers.table --json > /dev/null
+          ../../../target/debug/lyra down --wait --json

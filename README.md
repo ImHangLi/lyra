@@ -9,7 +9,7 @@ See it, keep it, reuse it. You and your coding agent run, watch, and extend the 
 - **Bounded, honest history.** Results keep their source run, time, and definition, and say when they are historical or stale.
 - **No AI inside.** The Core runs no models and sends no telemetry. Your existing agent does setup and extension through the bundled skills.
 
-macOS on Apple Silicon (arm64). Status: MVP, [latest release](https://github.com/ImHangLi/lyra/releases/latest). What was verified, and what was not, is in [docs/verification/mvp.md](docs/verification/mvp.md); the demo path is in [docs/demo.md](docs/demo.md).
+macOS on Apple Silicon (arm64). Status: MVP, [latest release](https://github.com/ImHangLi/lyra/releases/latest). What was verified, and what was not, is in [docs/verification/mvp.md](docs/verification/mvp.md).
 
 ## Install
 
@@ -31,14 +31,26 @@ If your agent cannot load skills dynamically, have it read `.agents/skills/lyra/
 
 Open `lyra` in the project. Move with `j`/`k`, run or start with `Enter`/`s`, read logs with `Tab`, and press `?` for every key. Closing the last window stops the work it owns; press `b` first to keep it running in the background (default 2 hours, or until `lyra down`).
 
-## Try it
+## Quick start
 
 ```sh
-cd examples/playground
-lyra                      # TUI: start dev.web, run dev.check, open demo views
-lyra run demo.scan        # structured plugin: table, tree, and summary views
-lyra view demo.table      # the same table the TUI shows
+cd your-project
+lyra skills install --agent claude   # or codex / generic
+# ask your agent: "Set up Lyra for this repository."
+lyra                                 # open the workbench
 ```
+
+After setup, the agent and you use the same tools:
+
+```sh
+lyra catalog                 # what this project can run
+lyra run dev.backend-test    # run a task and wait for its result
+lyra start dev.backend       # start a service (needs an open `lyra` or `lyra up --background`)
+lyra logs dev.backend --follow  # the same logs the workbench shows
+lyra stop dev.backend
+```
+
+Tool names come from your plugins; these are from the FastAPI example. [examples/](examples/) has real plugin sets that agents wrote for the [FastAPI full-stack template](examples/fastapi-full-stack-template) and [Outline](examples/outline).
 
 ## Layout
 
@@ -51,6 +63,7 @@ lyra view demo.table      # the same table the TUI shows
 | `crates/lyra-discovery` | Static project facts for setup (never executes the project) |
 | `crates/lyra-cli` | The `lyra` binary |
 | `skills/` | Bundled agent skills (`lyra`, `lyra-extend`) |
-| `examples/playground` | A small workspace with command, PTY, and structured plugins |
+| `examples/` | Real plugin sets written by agents during setup |
+| `tests/fixtures/workspace` | Test workspace for CI, the contract check, and performance scripts |
 | `schemas/` | Generated JSON Schemas; `scripts/check-contract.sh` checks drift |
 

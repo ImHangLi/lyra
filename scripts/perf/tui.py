@@ -3,7 +3,7 @@
 change, idle and during a log flood. Needs `pyte` (pip install pyte). Prints JSON.
 
 Usage: scripts/perf/tui.py --lyra target/release/lyra [--starts 20] [--keys 300]
-Runs in a scratch copy of examples/playground under /tmp and stops everything it starts.
+Runs in a scratch copy of tests/fixtures/workspace under /tmp and stops everything it starts.
 Latency is measured from writing a key to the PTY until the parsed screen changes, so it
 includes PTY and parser overhead on top of the TUI's own time.
 """
@@ -109,7 +109,7 @@ def main():
     scratch = tempfile.mkdtemp(prefix="lyra-tp-", dir="/tmp")
     env = dict(os.environ, LYRA_DATA_HOME=f"{scratch}/data", LYRA_RUNTIME_DIR=f"{scratch}/run", TERM="xterm-256color")
     root = f"{scratch}/pg"
-    shutil.copytree(os.path.join(os.path.dirname(__file__), "../../examples/playground"), root)
+    shutil.copytree(os.path.join(os.path.dirname(__file__), "../../tests/fixtures/workspace"), root)
     cli = lambda *args: subprocess.run([lyra, *args, "--json"], cwd=root, env=env, capture_output=True)
     def stop_host():
         # Stop the host by the PID in its owner record; pattern kills could hit this script.

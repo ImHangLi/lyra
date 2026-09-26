@@ -2,7 +2,7 @@
 """Reproducible latency measurements for the lyra binary (§19). Prints JSON with p50/p95/p99/max.
 
 Usage: scripts/perf/measure.py --lyra target/release/lyra [--samples 50] [--flood-seconds 60]
-Runs in a scratch copy of examples/playground with LYRA_DATA_HOME/LYRA_RUNTIME_DIR under /tmp,
+Runs in a scratch copy of tests/fixtures/workspace with LYRA_DATA_HOME/LYRA_RUNTIME_DIR under /tmp,
 so it never touches ~/Library. It stops everything it starts.
 """
 import argparse, json, os, platform, shutil, statistics, subprocess, sys, tempfile, time
@@ -30,7 +30,7 @@ def main():
     scratch = tempfile.mkdtemp(prefix="lyra-perf-", dir="/tmp")
     env = dict(os.environ, LYRA_DATA_HOME=f"{scratch}/data", LYRA_RUNTIME_DIR=f"{scratch}/run")
     root = f"{scratch}/pg"
-    shutil.copytree(os.path.join(os.path.dirname(__file__), "../../examples/playground"), root)
+    shutil.copytree(os.path.join(os.path.dirname(__file__), "../../tests/fixtures/workspace"), root)
 
     def run(*args, check=True):
         t = time.perf_counter()

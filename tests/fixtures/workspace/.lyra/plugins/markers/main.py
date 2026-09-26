@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LPP/1 demo plugin using only the Python standard library."""
+"""LPP/1 marker scanner plugin using only the Python standard library."""
 from __future__ import annotations
 
 import json
@@ -79,8 +79,8 @@ def main() -> int:
             return show(root, payload["path"], int(payload["line"]))
         raise ValueError(f"unsupported action {request['action']!r}")
     except (KeyError, TypeError, ValueError, OSError) as exc:
-        emit({"type": "result", "ok": False, "summary": "Demo action failed.", "data": None,
-              "error": {"code": "DEMO_FAILED", "message": str(exc), "retryable": False}})
+        emit({"type": "result", "ok": False, "summary": "The scan failed.", "data": None,
+              "error": {"code": "SCAN_FAILED", "message": str(exc), "retryable": False}})
         return 1
 
 
