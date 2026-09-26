@@ -78,6 +78,8 @@ pub enum Read {
     DescribeView(ViewRef),
     /// Full status, for schedules (state events do not carry them).
     Status,
+    /// The last non-empty screen line of an active PTY run, for its empty Logs tab.
+    Screen(RunId),
 }
 
 pub struct ViewLoad {
@@ -122,6 +124,9 @@ pub enum Event {
     ViewActed(ViewRef, ActionId, Result<InvokeAccepted, ErrorInfo>),
     ScheduleSet(ActionRef, Result<ScheduleData, ErrorInfo>),
     Status(Result<Box<StatusData>, ErrorInfo>),
+    /// The last non-empty screen line of a PTY run (`None` when the screen is blank or
+    /// cannot be read).
+    Screen(RunId, Option<String>),
     CommandDone(crate::cmdbar::Output),
 }
 
@@ -308,6 +313,16 @@ fn chunk(a: Answer<LogPage>) -> LogChunk {
     }
 }
 
+/// The last screen row with visible text, without trailing blanks.
+pub fn last_screen_line(lines: &[String]) -> Option<String> {
+    lines
+        .iter()
+        .rev()
+        .map(|l| l.trim_end())
+        .find(|l| !l.trim().is_empty())
+        .map(str::to_owned)
+}
+
 /// Serves observer reads until the connection closes.
 pub async fn read_worker(
     mut client: Client,
@@ -439,6 +454,23 @@ pub async fn read_worker(
                     note(f);
                 }
                 let _ = tx.send(Event::ViewDescribed(view_ref, res.map_err(|f| f.info())));
+            }
+            Read::Screen(run_id) => {
+                let params = TerminalSnapshotParams {
+                    run_id: run_id.clone(),
+                    row_start: None,
+                    row_count: None,
+                    include_style: false,
+                    max_bytes: Some(TAIL_BYTES),
+                };
+                let res =
+                    call::<_, TerminalSnapshot>(&mut client, Method::TerminalSnapshotM, &params)
+                        .await;
+                if let Err(f) = &res {
+                    note(f);
+                }
+                let line = res.ok().and_then(|a| last_screen_line(&a.data.lines));
+                let _ = tx.send(Event::Screen(run_id, line));
             }
             Read::Status => {
                 let res = call::<_, StatusData>(&mut client, Method::WorkspaceStatus, &Empty {})
@@ -647,5 +679,18 @@ pub async fn stream_worker(paths: WorkspacePaths, first: Option<Client>, tx: Tx)
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::last_screen_line;
+
+    #[test]
+    fn the_last_screen_line_skips_blank_rows() {
+        let rows = ["Name? ", "", "   "].map(str::to_owned);
+        assert_eq!(last_screen_line(&rows).as_deref(), Some("Name?"));
+        assert_eq!(last_screen_line(&["  ".to_owned()]), None);
+        assert_eq!(last_screen_line(&[]), None);
     }
 }
