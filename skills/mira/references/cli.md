@@ -1,6 +1,6 @@
 # CLI reference
 
-All commands accept `--project PATH`, `--json`, `--text`. `REF` is `plugin.item`; `RUN` is a run ID (`r_…`).
+All commands accept `--project PATH`, `--json`, `--text`. `REF` is `plugin.item`; `RUN` is a run ID (`r_…`) or a unique prefix of one, such as `r_fb60aacf`; `logs`, `stop`, `terminal`, and `input` also take an action ref.
 
 | Command | Notes |
 |---|---|
