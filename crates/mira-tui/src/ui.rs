@@ -1479,13 +1479,27 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                     Freshness::Historical => "○",
                 };
                 let st = tone.map_or(t.dim(), |c| t.fg(c));
+                // Past data names where it came from instead of the word "historical".
+                // The head says it all; the host's reason would only repeat it.
+                let (word, why, at, src) = match (m.freshness, &m.source_run_id, m.recorded_at) {
+                    (Freshness::Historical, Some(run), _) => (
+                        format!("from run {} (ended)", short_id(&run.to_string())),
+                        String::new(),
+                        at,
+                        String::new(),
+                    ),
+                    (Freshness::Historical, None, Some(a)) if m.source_kind.is_some() => (
+                        format!("published {}", ago(a)),
+                        String::new(),
+                        format!(" · {}", clock(a)),
+                        String::new(),
+                    ),
+                    _ => (freshness_word(m.freshness).to_owned(), why, at, src),
+                };
                 // The revision comes right after the state, so a narrow pane cuts the
                 // details first.
                 vec![
-                    Span::styled(
-                        format!("{glyph} {}", freshness_word(m.freshness)),
-                        st.add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled(format!("{glyph} {word}"), st.add_modifier(Modifier::BOLD)),
                     Span::styled(" · ", t.dim()),
                     Span::styled(format!("rev {rev}"), t.bold()),
                     Span::styled(
