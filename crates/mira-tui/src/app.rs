@@ -32,6 +32,8 @@ const BRANCH_SECS: u64 = 3;
 /// Open views whose metadata can still change (a save in progress, or a producing run
 /// that ended) are read again at most this often.
 const VIEW_POLL_MS: u128 = 1000;
+/// The screen of a silent PTY run is read again at most this often.
+const SCREEN_POLL_MS: u128 = 1000;
 
 pub struct Item {
     pub action_ref: ActionRef,
@@ -317,6 +319,9 @@ pub struct App {
     recent_key: HashMap<ActionRef, (Option<RunId>, u8, bool)>,
     /// The PTY attach view (§13).
     pub term: Terminals,
+    /// The last non-empty screen line of active PTY runs whose log is still empty.
+    pub screens: HashMap<RunId, String>,
+    screen_at: Option<Instant>,
     io: Io,
 }
 
@@ -374,6 +379,8 @@ impl App {
             recent: HashMap::new(),
             recent_key: HashMap::new(),
             term: Terminals::new(io.paths.clone()),
+            screens: HashMap::new(),
+            screen_at: None,
             io,
         }
     }
@@ -774,6 +781,14 @@ impl App {
                 self.config_warnings = st.config_warnings;
             }
             Event::Status(Err(_)) => {}
+            Event::Screen(run_id, line) => match line {
+                Some(l) => {
+                    self.screens.insert(run_id, l);
+                }
+                None => {
+                    self.screens.remove(&run_id);
+                }
+            },
             Event::CommandDone(out) => {
                 if matches!(self.modal, Modal::Command { .. } | Modal::None) {
                     self.modal = Modal::Output(Box::new(out));
@@ -902,6 +917,7 @@ impl App {
     pub fn tick(&mut self) {
         self.refresh_branch(false);
         self.poll_views();
+        self.poll_screen();
         if self.notice.as_ref().is_some_and(|n| {
             n.at.elapsed().as_secs() >= if n.error { NOTICE_SECS } else { INFO_SECS }
         }) {
@@ -926,6 +942,37 @@ impl App {
         for v in due {
             self.load_view(&v);
         }
+    }
+
+    /// The selected item's active PTY run while its log has no lines: the run a
+    /// "waiting for input" hint is about.
+    pub fn silent_pty_run(&self) -> Option<&RunId> {
+        let a = self.selected_item()?.action_ref.clone();
+        let run = self.active.get(&a)?;
+        let p = self.panes.get(&a)?;
+        (self.term.is_pty(&a)
+            && run.lifecycle.is_active()
+            && p.records.is_empty()
+            && !self.viewing.contains_key(&a)
+            && p.run_id.as_ref().is_none_or(|r| r == &run.run_id))
+        .then_some(&run.run_id)
+    }
+
+    /// Reads the screen of the selected silent PTY run at most once a second.
+    fn poll_screen(&mut self) {
+        let Some(run_id) = self.silent_pty_run().cloned() else {
+            return;
+        };
+        if self
+            .screen_at
+            .is_some_and(|t| t.elapsed().as_millis() < SCREEN_POLL_MS)
+        {
+            return;
+        }
+        self.screen_at = Some(Instant::now());
+        let active: Vec<&RunId> = self.active.values().map(|r| &r.run_id).collect();
+        self.screens.retain(|r, _| active.contains(&r));
+        let _ = self.io.read.send(Read::Screen(run_id));
     }
 
     // ----- notices ------------------------------------------------------------------

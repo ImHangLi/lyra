@@ -1088,6 +1088,8 @@ fn draw_logs(
             ),
         )
     });
+    // A PTY run that prints nothing is often waiting for input: show its screen's last line.
+    let waiting = app.silent_pty_run().map(|r| app.screens.get(r).cloned());
     let sel = t.selected();
     let Some(p) = app.panes.get_mut(a) else {
         f.render_widget(Paragraph::new(tab_bar(t, Tab::Logs, "", w)), tabs_area);
@@ -1107,6 +1109,27 @@ fn draw_logs(
         tabs = tabs.patch_style(t.fg(Tone::Amber));
     }
     f.render_widget(Paragraph::new(tabs), tabs_area);
+    if p.records.is_empty()
+        && p.error.is_none()
+        && !p.loading
+        && let Some(screen) = waiting
+    {
+        let mut lines = Vec::new();
+        if let Some(l) = screen {
+            lines.push(Line::from(Span::styled(
+                ellipsize(&display(&l), w),
+                t.dim(),
+            )));
+        }
+        lines.push(Line::from(vec![
+            Span::styled("waiting for input", t.fg(Tone::Amber)),
+            Span::styled(" · ", t.dim()),
+            Span::styled("a", t.bold()),
+            Span::styled(" attaches", t.dim()),
+        ]));
+        f.render_widget(Paragraph::new(lines), body);
+        return;
+    }
     if p.records.is_empty() {
         let msg = if let Some(e) = &p.error {
             format!("Cannot read logs: {e}")
