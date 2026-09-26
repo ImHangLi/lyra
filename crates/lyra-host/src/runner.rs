@@ -30,6 +30,11 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_millis(lyra_protocol::limits::C
 /// After the main process exits, keep draining pipes held by leftover group members this long.
 pub(crate) const DRAIN_AFTER_EXIT: Duration = Duration::from_millis(500);
 pub(crate) const FAR: Duration = Duration::from_secs(86_400 * 365);
+/// A live log batch is sent once it holds this many text bytes (or 256 records).
+const LIVE_BATCH_BYTES: usize = 64 * 1024;
+/// Live log batches are dropped (and reported as a gap) once this many events wait in the
+/// actor queue, so a fast producer cannot grow host memory. The log file stays complete.
+const LIVE_QUEUE_EVENTS: usize = 64;
 
 pub struct CommandSpec {
     pub run_id: RunId,
@@ -256,7 +261,9 @@ impl Batcher {
         if let Ok(mut log) = self.log.lock() {
             self.pending.extend(log.push_bytes(stream, bytes));
         }
-        if self.pending.len() >= 256 {
+        if self.pending.len() >= 256
+            || self.pending.iter().map(|r| r.text.len()).sum::<usize>() >= LIVE_BATCH_BYTES
+        {
             self.send();
         }
     }
@@ -286,6 +293,10 @@ impl Batcher {
             return;
         }
         let records = std::mem::take(&mut self.pending);
+        if self.events.max_capacity() - self.events.capacity() >= LIVE_QUEUE_EVENTS {
+            self.count_dropped(&records);
+            return;
+        }
         // Live delivery is best effort; the log file and ring stay authoritative. Undelivered
         // batches are counted and reported as one gap before the next delivered batch.
         if let Some((n, first, last)) = self.dropped {
