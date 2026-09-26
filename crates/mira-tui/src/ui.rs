@@ -5,7 +5,7 @@
 
 use mira_protocol::ipc::{SessionMode, SessionState};
 use mira_protocol::manifest::{ActionMode, ViewKind};
-use mira_protocol::run::{Lifecycle, LogStream, Outcome, RunRecord, RunResult};
+use mira_protocol::run::{CleanupState, Lifecycle, LogStream, Outcome, RunRecord, RunResult};
 use mira_protocol::time::Timestamp;
 use mira_protocol::view::Freshness;
 use ratatui::Frame;
@@ -361,6 +361,25 @@ fn run_word(l: Lifecycle) -> &'static str {
             Outcome::Interrupted => "interrupted",
         },
     }
+}
+
+/// A failed cleanup in a few words: `cleanup failed (exit 4)`, `cleanup timed out`;
+/// `None` when cleanup did not fail.
+pub fn cleanup_word(c: &CleanupState) -> Option<String> {
+    let CleanupState::Failed { error, .. } = c else {
+        return None;
+    };
+    let m = &error.message;
+    if m.contains("timed out") {
+        return Some("cleanup timed out".into());
+    }
+    let code = m
+        .rsplit_once("status ")
+        .and_then(|(_, n)| n.trim().parse::<i64>().ok());
+    Some(match code {
+        Some(c) => format!("cleanup failed (exit {c})"),
+        None => "cleanup failed".into(),
+    })
 }
 
 fn enum_word<T: serde::Serialize>(v: T) -> String {
@@ -944,7 +963,14 @@ fn status_spans(app: &App, t: &Theme, item: &Item) -> Vec<Span<'static>> {
             details.insert(0, ago(e));
         }
         details.push(short_id(&l.run_id.to_string()));
-        head(word)
+        let mut h = head(word);
+        if let Some(c) = l.cleanup.as_ref().and_then(cleanup_word) {
+            h.push(Span::styled(
+                format!("  {c}"),
+                t.fg(Tone::Rose).add_modifier(Modifier::BOLD),
+            ));
+        }
+        h
     } else if !item.enabled {
         head("disabled".into())
     } else {
@@ -1165,18 +1191,35 @@ fn draw_history(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         .as_ref()
         .and_then(|a| app.panes.get(a))
         .and_then(|p| p.run_id.as_ref());
-    let cols = |started: &str, outcome: &str, dur: &str, id: &str, state: &str| {
-        format!(
-            "{}{}{}{}{state}",
-            pad(started, 14),
-            pad(outcome, 18),
-            pad(dur, 12),
-            pad(id, 13)
-        )
+    // The outcome column grows to fit a failed cleanup next to the outcome.
+    let outcome_of = |rec: &RunRecord| {
+        let mut outcome = run_word(rec.lifecycle).to_owned();
+        if let Some(c) = rec.exit.as_ref().and_then(|e| e.code)
+            && c != 0
+        {
+            outcome = format!("{outcome} (exit {c})");
+        }
+        (outcome, cleanup_word(&rec.cleanup))
     };
+    let outcome_w = runs
+        .iter()
+        .flatten()
+        .map(|rec| match outcome_of(rec) {
+            (o, Some(c)) => cells(&o) + 2 + cells(&c) + 2,
+            (o, None) => cells(&o) + 2,
+        })
+        .max()
+        .unwrap_or(0)
+        .clamp(18, 44);
+    let rest = |dur: &str, id: &str, state: &str| format!("{}{}{state}", pad(dur, 12), pad(id, 13));
     let mut lines = vec![Line::from(Span::styled(
         ellipsize(
-            &format!("  {}", cols("started", "outcome", "took", "run", "state")),
+            &format!(
+                "  {}{}{}",
+                pad("started", 14),
+                pad("outcome", outcome_w),
+                rest("took", "run", "state")
+            ),
             w,
         ),
         t.dim().add_modifier(Modifier::BOLD),
@@ -1195,12 +1238,7 @@ fn draw_history(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
             let skip = (index + 1).saturating_sub(body_h);
             for (i, rec) in r.iter().enumerate().skip(skip).take(body_h) {
                 let m = life_mark(rec.lifecycle);
-                let mut outcome = run_word(rec.lifecycle).to_owned();
-                if let Some(c) = rec.exit.as_ref().and_then(|e| e.code)
-                    && c != 0
-                {
-                    outcome = format!("{outcome} (exit {c})");
-                }
+                let (outcome, cleanup) = outcome_of(rec);
                 let dur = match rec.ended_at {
                     Some(e) => took(e.unix_ms() - rec.started_at.unix_ms()),
                     None => format!("{} so far", rel_age(secs_since(rec.started_at))),
@@ -1213,25 +1251,41 @@ fn draw_history(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
                 if Some(&rec.run_id) == shown {
                     state.push_str(" · shown");
                 }
-                let text = cols(
-                    &started_word(app, rec.started_at),
-                    &outcome,
-                    &dur,
-                    &short_id(&rec.run_id.to_string()),
-                    &state,
-                );
-                if i == *index {
+                let selected = i == *index;
+                let (base, glyph_st, rose) = if selected {
                     let s = t.selected();
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("{} ", m.glyph), s),
-                        Span::styled(pad(&text, w.saturating_sub(2)), s),
-                    ]));
+                    (s, s, s.add_modifier(Modifier::BOLD))
                 } else {
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("{} ", m.glyph), m.style(t)),
-                        Span::raw(ellipsize(&text, w.saturating_sub(2))),
-                    ]));
+                    (
+                        Style::default(),
+                        m.style(t),
+                        t.fg(Tone::Rose).add_modifier(Modifier::BOLD),
+                    )
+                };
+                let mut used = cells(&outcome);
+                let mut spans = vec![
+                    Span::styled(format!("{} ", m.glyph), glyph_st),
+                    Span::styled(pad(&started_word(app, rec.started_at), 14), base),
+                    Span::styled(outcome, base),
+                ];
+                if let Some(c) = cleanup {
+                    used += 2 + cells(&c);
+                    spans.push(Span::styled("  ", base));
+                    spans.push(Span::styled(c, rose));
                 }
+                spans.push(Span::styled(
+                    " ".repeat(outcome_w.saturating_sub(used).max(1)),
+                    base,
+                ));
+                spans.push(Span::styled(
+                    rest(&dur, &short_id(&rec.run_id.to_string()), &state),
+                    base,
+                ));
+                if selected {
+                    let n = line_cells(&spans);
+                    spans.push(Span::styled(" ".repeat(w.saturating_sub(n)), base));
+                }
+                lines.push(Line::from(fit_spans(spans, w)));
             }
         }
     }
@@ -2143,7 +2197,33 @@ fn draw_row_actions(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChipSize, ellipsize, fit_chips, left_word, rel_age, sidebar_width, wrap};
+    use super::{
+        ChipSize, cleanup_word, ellipsize, fit_chips, left_word, rel_age, sidebar_width, wrap,
+    };
+    use mira_protocol::error::{ErrorCode, ErrorInfo};
+    use mira_protocol::run::CleanupState;
+    use mira_protocol::time::Timestamp;
+
+    #[test]
+    fn a_failed_cleanup_reads_as_a_short_phrase() {
+        let failed = |m: &str| CleanupState::Failed {
+            ended_at: Timestamp::now(),
+            error: ErrorInfo::new(ErrorCode::EXECUTION_FAILED, m.to_owned()),
+        };
+        assert_eq!(
+            cleanup_word(&failed("cleanup exited with status 4")).as_deref(),
+            Some("cleanup failed (exit 4)")
+        );
+        assert_eq!(
+            cleanup_word(&failed("cleanup timed out after 10 s")).as_deref(),
+            Some("cleanup timed out")
+        );
+        assert_eq!(
+            cleanup_word(&failed("cannot start cleanup: not found")).as_deref(),
+            Some("cleanup failed")
+        );
+        assert_eq!(cleanup_word(&CleanupState::NotNeeded), None);
+    }
 
     #[test]
     fn ellipsize_marks_the_cut() {
