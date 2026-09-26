@@ -234,6 +234,19 @@ pub struct Plan {
     pub stats: ScanStats,
 }
 
+/// Lyra's own files: `.lyra/` and installed Lyra skills (`.agents/skills/lyra*`,
+/// `.claude/skills/lyra*`). They are not project facts, so the scan skips them entirely,
+/// including symlinked skill installs that would otherwise be reported as truncation.
+fn lyra_owned(parent_rel: &str, name: &str) -> bool {
+    if name == ".lyra" {
+        return true;
+    }
+    let skills_dir = [".agents/skills", ".claude/skills"]
+        .iter()
+        .any(|d| parent_rel == *d || parent_rel.ends_with(&format!("/{d}")));
+    skills_dir && name.starts_with("lyra")
+}
+
 fn shown(rel: &str) -> String {
     if rel.is_empty() {
         ".".to_owned()
@@ -294,6 +307,10 @@ pub fn walk(root: &Path, limits: &Limits) -> Plan {
                 );
                 continue;
             };
+            if lyra_owned(&rel, &name) {
+                stats.dirs_skipped += 1;
+                continue;
+            }
             let child_rel = join(&rel, &name);
             let path = item.path();
             let Ok(ft) = item.file_type() else {
@@ -448,4 +465,37 @@ fn read_bounded(path: &Path, limits: &Limits, used: u64) -> Result<Vec<u8>, Trun
         return Err(TruncationReason::MaxTotalTextBytes);
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lyra_skill_installs_are_not_scanned() {
+        let root = std::env::temp_dir().join(format!("lyra-walk-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let deep = root.join(".claude/skills/lyra/a/b/c/d/e/f/g/h");
+        fs::create_dir_all(&deep).expect("create skill dir");
+        fs::create_dir_all(root.join(".agents/skills")).expect("create agents dir");
+        std::os::unix::fs::symlink("/tmp", root.join(".agents/skills/lyra-setup"))
+            .expect("symlink");
+        fs::write(root.join("package.json"), "{}").expect("write package.json");
+        let limits = Limits {
+            max_depth: 3,
+            ..Limits::DEFAULT
+        };
+        let plan = walk(&root, &limits);
+        let omitted: Vec<String> = plan
+            .log
+            .into_vec()
+            .into_iter()
+            .flat_map(|t| t.omitted)
+            .collect();
+        assert!(omitted.is_empty(), "unexpected truncation: {omitted:?}");
+        assert!(plan.entries.iter().all(|e| !e.rel.contains("skills/lyra")));
+        assert!(!lyra_owned(".claude/skills", "other"));
+        assert!(lyra_owned("", ".lyra"));
+        let _ = fs::remove_dir_all(root);
+    }
 }

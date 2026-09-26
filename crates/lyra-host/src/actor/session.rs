@@ -8,7 +8,7 @@ use lyra_protocol::ids::{ClientId, SessionId};
 use lyra_protocol::ipc::*;
 use lyra_protocol::manifest::{ActionMode, TimeoutPolicy, TimeoutWire};
 use lyra_protocol::reply::ReplyMeta;
-use lyra_protocol::run::StopReason;
+use lyra_protocol::run::{Lifecycle, StopReason};
 use lyra_protocol::time::Timestamp;
 use tokio::time::Instant;
 
@@ -187,8 +187,27 @@ impl Actor {
     }
 
     pub(super) fn session_stop_request(&mut self, r: Responder) {
+        let stopped_session = self.session.as_ref().map(|s| s.id.clone());
+        let stopped_runs = if stopped_session.is_some() {
+            self.runs
+                .values()
+                .filter(|run| {
+                    run.record.lifecycle.is_active()
+                        && !matches!(run.record.lifecycle, Lifecycle::Stopping { .. })
+                })
+                .count() as u32
+        } else {
+            0
+        };
         self.stop_session(StopReason::SessionClosed);
-        self.session_reply(r);
+        r.send(self.ok(
+            SessionStopData {
+                session: self.session_info(),
+                stopped_session,
+                stopped_runs,
+            },
+            ReplyMeta::default(),
+        ));
     }
 
     /// A controller disconnected or detached: stop owned work when it was the last one.

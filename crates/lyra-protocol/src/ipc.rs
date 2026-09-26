@@ -765,6 +765,18 @@ pub struct SessionData {
     pub session: Option<SessionInfo>,
 }
 
+/// Result of `session.stop`: the resulting session state and what the call stopped.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionStopData {
+    /// The session after the call; `null` once it has ended.
+    pub session: Option<SessionInfo>,
+    /// The session this call stopped; `null` when no session was running.
+    pub stopped_session: Option<SessionId>,
+    /// Active runs this call asked to stop.
+    pub stopped_runs: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Warning {
@@ -1245,7 +1257,7 @@ methods! {
     SessionDetach = "session.detach", Empty => SessionData, stream: false;
     SessionOpen = "session.open", SessionOpenParams => SessionData, stream: false;
     SessionKeep = "session.keep", SessionKeepParams => SessionData, stream: false;
-    SessionStop = "session.stop", Empty => SessionData, stream: false;
+    SessionStop = "session.stop", Empty => SessionStopData, stream: false;
     WorkspaceStatus = "workspace.status", Empty => StatusData, stream: false;
     CatalogListM = "catalog.list", CatalogListParams => CatalogList, stream: false;
     ItemDescribe = "item.describe", ItemDescribeParams => ItemDescription, stream: false;

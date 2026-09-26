@@ -13,6 +13,7 @@ mod reads;
 mod retention;
 mod runs;
 mod schedule;
+mod search;
 mod session;
 mod streams;
 mod terminal;
@@ -716,23 +717,7 @@ impl Actor {
             .limit
             .map_or(DEFAULT_CATALOG_LIMIT, |l| (l as usize).clamp(1, MAX_LIMIT));
         let budget = budget::budget(p.max_bytes);
-        let items: Vec<CatalogItem> = set
-            .catalog()
-            .into_iter()
-            .filter(|i| {
-                words.is_empty() || {
-                    let hay = format!(
-                        "{} {} {} {}",
-                        i.item_ref,
-                        i.title,
-                        i.description,
-                        i.tags.join(" ")
-                    )
-                    .to_lowercase();
-                    words.iter().all(|w| hay.contains(w.as_str()))
-                }
-            })
-            .collect();
+        let items: Vec<CatalogItem> = search::search(set.catalog(), &words);
         let start = offset.min(items.len());
         let candidates = &items[start..(start + limit).min(items.len())];
         let next = |taken: usize| {

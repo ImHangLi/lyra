@@ -363,12 +363,25 @@ pub fn exec(ctx: &Ctx, label: String, argv: Vec<String>, request_key: Option<Str
     })
 }
 
+/// `lyra stop` data. With `--wait`, the finished run record plus the `state` field that
+/// `lyra stop` returns without `--wait`.
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum StopData {
+    Accepted(StopAccepted),
+    Finished {
+        #[serde(flatten)]
+        record: Box<RunRecord>,
+        state: Lifecycle,
+    },
+}
+
 async fn stop_target(
     ctx: &Ctx,
     client: &mut Client,
     target: RunTarget,
     wait: bool,
-) -> Result<PublicReply<StopAccepted>, ExitCode> {
+) -> Result<PublicReply<StopData>, ExitCode> {
     let reply: PublicReply<StopAccepted> = client
         .call(Method::RunStop, &RunStopParams { target })
         .await
@@ -381,15 +394,15 @@ async fn stop_target(
         if let Some(rec) = fin.data() {
             return Ok(PublicReply::success(
                 ctx2,
-                StopAccepted {
-                    run_id,
+                StopData::Finished {
                     state: rec.lifecycle,
+                    record: Box::new(rec.clone()),
                 },
                 reply.meta().clone(),
             ));
         }
     }
-    Ok(reply)
+    Ok(reply.map(StopData::Accepted))
 }
 
 pub fn stop(ctx: &Ctx, target: &str, wait: bool) -> ExitCode {
@@ -403,8 +416,9 @@ pub fn stop(ctx: &Ctx, target: &str, wait: bool) -> ExitCode {
             Err(code) => return code,
         };
         match stop_target(ctx, &mut client, target, wait).await {
-            Ok(reply) => ctx.emit(&reply, |s| {
-                format!("{}  {}", s.run_id, lifecycle_text(&s.state))
+            Ok(reply) => ctx.emit(&reply, |d| match d {
+                StopData::Accepted(s) => format!("{}  {}", s.run_id, lifecycle_text(&s.state)),
+                StopData::Finished { record, .. } => run_text(record),
             }),
             Err(code) => code,
         }
@@ -582,26 +596,119 @@ pub fn keep(ctx: &Ctx, ttl: &str) -> ExitCode {
     })
 }
 
+fn stop_text(d: &SessionStopData) -> String {
+    match &d.stopped_session {
+        None => "no session".into(),
+        Some(id) => {
+            let state = if d.session.is_some() {
+                "; stopping"
+            } else {
+                ""
+            };
+            format!("stopped session {id} and {} run(s){state}", d.stopped_runs)
+        }
+    }
+}
+
+/// Stops a host from another Lyra build (for example after an upgrade), which the protocol
+/// handshake refuses. The host's owner file must name this workspace and the process must
+/// still be that `lyra __host`; the host then shuts down its work on SIGTERM as usual.
+async fn stop_other_build_host(ctx: &Ctx, cx: ReplyContext, refused: ErrorInfo) -> ExitCode {
+    use rustix::process::{Pid, Signal, kill_process, test_kill_process};
+    let Ok(paths) = ctx.paths() else {
+        return ctx.fail(cx, refused);
+    };
+    let owner: Option<Value> = std::fs::read(paths.owner())
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok());
+    let root_matches = owner
+        .as_ref()
+        .and_then(|o| o.get("root"))
+        .and_then(Value::as_str)
+        == Some(paths.root.as_str());
+    let pid = owner
+        .as_ref()
+        .and_then(|o| o.get("pid"))
+        .and_then(Value::as_i64)
+        .and_then(|p| i32::try_from(p).ok())
+        .and_then(Pid::from_raw);
+    let version = owner
+        .as_ref()
+        .and_then(|o| o.get("version"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned();
+    let is_host = |pid: Pid| {
+        std::process::Command::new("/bin/ps")
+            .args(["-o", "args=", "-p", &pid.as_raw_nonzero().to_string()])
+            .output()
+            .ok()
+            .is_some_and(|o| String::from_utf8_lossy(&o.stdout).contains("__host"))
+    };
+    let Some(pid) = pid.filter(|p| root_matches && is_host(*p)) else {
+        return ctx.fail(cx, refused);
+    };
+    if kill_process(pid, Signal::TERM).is_err() {
+        return ctx.fail(cx, refused);
+    }
+    // The host stops its runs within its shutdown deadline (15 s), then exits.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while test_kill_process(pid).is_ok() {
+        if tokio::time::Instant::now() >= deadline {
+            return ctx.fail(
+                cx,
+                ErrorInfo::new(
+                    ErrorCode::TIMEOUT,
+                    format!("the older host (lyra {version}) is still stopping after 30 s"),
+                ),
+            );
+        }
+        tokio::time::sleep(POLL).await;
+    }
+    let data = SessionStopData {
+        session: None,
+        stopped_session: None,
+        stopped_runs: 0,
+    };
+    let reply = PublicReply::success(cx, data, lyra_protocol::reply::ReplyMeta::default());
+    ctx.emit(&reply, |_| {
+        format!(
+            "stopped the host from lyra {version} and its work; the next command starts this build"
+        )
+    })
+}
+
 pub fn down(ctx: &Ctx, wait: bool) -> ExitCode {
     block_on(async {
-        let mut client = match connect(ctx).await {
+        let mut client = match ctx.client(&ConnectOptions::cli()).await {
             Ok(c) => c,
-            Err(code) => return code,
+            Err((cx, e)) if e.code == ErrorCode::PROTOCOL_MISMATCH => {
+                return stop_other_build_host(ctx, cx, e).await;
+            }
+            Err((cx, e)) => return ctx.fail(cx, e),
         };
         let reply = match client
-            .call::<_, SessionData>(Method::SessionStop, &Empty {})
+            .call::<_, SessionStopData>(Method::SessionStop, &Empty {})
             .await
         {
             Ok(r) => r,
             Err(e) => return ctx.fail(client.context(), e.to_error_info()),
         };
         if wait {
+            let (stopped_session, stopped_runs) = reply
+                .data()
+                .map(|d| (d.stopped_session.clone(), d.stopped_runs))
+                .unwrap_or_default();
             let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
             loop {
                 match client.status().await {
                     Ok(s) if s.data().is_some_and(|d| d.session.is_none()) => {
-                        return ctx
-                            .emit(&s.map(|d| SessionData { session: d.session }), session_text);
+                        let s = s.map(|d| SessionStopData {
+                            session: d.session,
+                            stopped_session,
+                            stopped_runs,
+                        });
+                        return ctx.emit(&s, stop_text);
                     }
                     Ok(_) if tokio::time::Instant::now() < deadline => {
                         tokio::time::sleep(POLL).await
@@ -619,7 +726,7 @@ pub fn down(ctx: &Ctx, wait: bool) -> ExitCode {
                 }
             }
         }
-        ctx.emit(&reply, session_text)
+        ctx.emit(&reply, stop_text)
     })
 }
 
