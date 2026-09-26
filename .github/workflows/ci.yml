@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: fmt, clippy, build, contract
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Build
+        run: cargo build --workspace --locked
+      - name: Contract (schemas and fixtures)
+        run: scripts/check-contract.sh
+      - name: Smoke (validate the playground and run a task)
+        env:
+          LYRA_DATA_HOME: ${{ runner.temp }}/lyra-data
+          LYRA_RUNTIME_DIR: /tmp/lyra-ci
+        run: |
+          target/debug/lyra validate examples/playground/.lyra --json
+          cd examples/playground
+          ../../target/debug/lyra run dev.check --json
+          ../../target/debug/lyra run demo.scan --json
+          ../../target/debug/lyra view demo.table --json > /dev/null
+          ../../target/debug/lyra down --wait --json
