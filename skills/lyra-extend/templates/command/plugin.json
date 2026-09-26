@@ -1,0 +1,24 @@
+{
+  "api": 1,
+  "id": "example-tools",
+  "name": "Example Tools",
+  "description": "Replace with the problem these commands solve.",
+  "tags": ["dev"],
+  "actions": [
+    {
+      "id": "check",
+      "title": "Check",
+      "description": "Replace with what this command verifies.",
+      "mode": "task",
+      "run": {"kind": "command", "argv": ["make", "check"]}
+    },
+    {
+      "id": "serve",
+      "title": "Dev server",
+      "description": "Replace with the long-running service this starts.",
+      "mode": "process",
+      "run": {"kind": "command", "argv": ["npm", "run", "dev"]},
+      "stop_grace_ms": 5000
+    }
+  ]
+}

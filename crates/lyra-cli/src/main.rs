@@ -284,6 +284,11 @@ enum Command {
         #[command(subcommand)]
         command: StorageCommand,
     },
+    /// Install or update the bundled agent skills in this workspace.
+    Skills {
+        #[command(subcommand)]
+        command: SkillsCommand,
+    },
     /// Internal: serve the workspace host.
     #[command(name = "__host", hide = true)]
     Host {
@@ -396,6 +401,15 @@ enum StorageCommand {
         /// Only `state` is supported.
         #[arg(long, default_value = "state")]
         kind: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillsCommand {
+    /// Copy `lyra` and `lyra-extend` into .agents/skills (and .claude/skills for Claude); never overwrites your edits.
+    Install {
+        #[arg(long, value_enum, default_value = "generic")]
+        agent: commands::skills::AgentKind,
     },
 }
 
@@ -588,6 +602,9 @@ fn main() -> ExitCode {
                 output::invalid_argument("only --kind state is supported"),
             ),
         },
+        Some(Command::Skills {
+            command: SkillsCommand::Install { agent },
+        }) => commands::skills::install(&ctx, agent),
         Some(Command::Reload) => commands::config::reload(&ctx),
         Some(Command::Setup { refresh }) => {
             commands::setup::run(mode, ctx.project.as_deref(), refresh)

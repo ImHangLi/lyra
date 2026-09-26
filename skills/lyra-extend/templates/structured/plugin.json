@@ -1,0 +1,23 @@
+{
+  "api": 1,
+  "id": "example-panel",
+  "name": "Example Panel",
+  "description": "Replace with the question this panel answers.",
+  "entry": {"argv": ["python3", "main.py"]},
+  "actions": [
+    {
+      "id": "refresh",
+      "title": "Refresh",
+      "description": "Collect the data and publish the table.",
+      "mode": "task",
+      "run": {"kind": "plugin"},
+      "timeout": {"kind": "after", "ms": 30000},
+      "input_schema": {
+        "type": "object",
+        "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}},
+        "additionalProperties": false
+      }
+    }
+  ],
+  "views": [{"id": "items", "title": "Items", "kind": "table"}]
+}
