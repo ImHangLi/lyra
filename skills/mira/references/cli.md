@@ -1,6 +1,8 @@
 # CLI reference
 
-All commands accept `--project PATH`, `--json`, `--text`. `REF` is `plugin.item`; `RUN` is a run ID (`r_…`).
+All commands accept `--project PATH`, `--json`, `--text`. `REF` is `plugin.item`; `RUN` is a run ID (`r_…`) or a unique prefix of one, such as `r_fb60aacf`; `logs`, `stop`, `terminal`, and `input` also take an action ref.
+
+`mira --help` does not list `apply`, `view-action`, `exec`, `artifacts`, `payload`, `storage`, `paths`, `skills`, `schema`, and `keep`, but they work as shown here.
 
 | Command | Notes |
 |---|---|
@@ -16,7 +18,7 @@ All commands accept `--project PATH`, `--json`, `--text`. `REF` is `plugin.item`
 | `up --background [--ttl 30m\|2h\|none]`, `keep [--ttl …]` | explicit background lease (default 2 h) |
 | `down [--wait]` | stop the session and its runs; no data is deleted |
 | `runs [RUN] [--action REF] [--outcome VALUE] [--limit N] [--after CURSOR]` | newest first |
-| `logs RUN_OR_ACTION [--after CURSOR] [--limit N] [--max-bytes N] [--follow]` | tail by default |
+| `logs RUN_OR_ACTION [--after CURSOR] [--limit N] [--max-bytes N] [--follow] [--grep PATTERN] [--stream stdout\|stderr]` | tail by default; `--grep` keeps records that contain PATTERN (case-insensitive) in the page and with `--follow` |
 | `view VIEW [--after CURSOR] [--limit N]`, `view-action VIEW ACTION --row ROW --expected-view-revision N` | typed data; row actions refuse stale rows (`VIEW_CHANGED`) |
 | `publish VIEW --input FILE\|- [--expected-view-revision N] [--request-key K]` | write one view frame without running a plugin |
 | `validate DRAFT_DIR`, `apply DRAFT_DIR --expected-revision N`, `reload` | config changes (see mira-extend) |

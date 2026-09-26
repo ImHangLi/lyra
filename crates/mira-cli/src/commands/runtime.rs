@@ -12,12 +12,14 @@ use mira_protocol::ipc::*;
 use mira_protocol::limits::MAX_PUBLIC_REPLY_BYTES;
 use mira_protocol::manifest::TimeoutWire;
 use mira_protocol::reply::{PublicReply, ReplyContext};
-use mira_protocol::run::{Lifecycle, Outcome, RunRecord};
+use mira_protocol::run::{CleanupState, Lifecycle, Outcome, RunRecord, StopReason};
 use mira_protocol::schema_profile::SchemaDoc;
 use serde_json::{Map, Value};
 
 use super::ctx::{Ctx, block_on};
 use super::inspect::lifecycle_text;
+use super::runref::{resolve_run_id, resolve_target};
+use crate::human;
 use crate::output::{self, Mode, invalid_argument};
 
 const POLL: Duration = Duration::from_millis(100);
@@ -64,16 +66,6 @@ fn parse_key(k: Option<String>) -> Result<Option<RequestKey>, ErrorInfo> {
     k.map(RequestKey::parse)
         .transpose()
         .map_err(|e| invalid_argument(e.to_string()))
-}
-
-pub fn parse_target(s: &str) -> Result<RunTarget, ErrorInfo> {
-    if s.starts_with("r_") {
-        RunId::parse(s.to_owned())
-            .map(|run_id| RunTarget::Run { run_id })
-            .map_err(|e| invalid_argument(e.to_string()))
-    } else {
-        parse_action(s).map(|action_ref| RunTarget::Action { action_ref })
-    }
 }
 
 /// `30s`, `30m`, `2h`, `1d`, or `none`.
@@ -141,6 +133,9 @@ fn run_text(r: &RunRecord) -> String {
             _ => {}
         }
     }
+    if let Some(c) = human::cleanup_failure(&r.cleanup) {
+        s.push_str(&format!("  {c}"));
+    }
     if let Some(res) = &r.result {
         s.push_str(&format!(
             "\n  result ({}): {}",
@@ -149,7 +144,121 @@ fn run_text(r: &RunRecord) -> String {
         ));
     }
     if let Some(n) = &r.note {
-        s.push_str(&format!("\n  note: {n}"));
+        s.push_str(&format!("\n  note: {}", human::note_text(n)));
+    }
+    s
+}
+
+/// `mira runs RUN --text`: what happened, in a few lines, and where the output is.
+fn run_summary(r: &RunRecord) -> String {
+    let target = r
+        .action_ref
+        .as_ref()
+        .map_or_else(|| format!("exec \"{}\"", r.label), ToString::to_string);
+    let mut outcome = match r.lifecycle {
+        Lifecycle::Finished { outcome } => outcome_text(outcome).to_owned(),
+        other => lifecycle_text(&other),
+    };
+    if let Some(e) = &r.exit {
+        match (e.code, &e.signal) {
+            (Some(c), _) => outcome.push_str(&format!(", exit {c}")),
+            (None, Some(sig)) => outcome.push_str(&format!(", ended by {sig}")),
+            _ => {}
+        }
+    }
+    let took = if r.lifecycle.is_active() {
+        "running for"
+    } else {
+        "took"
+    };
+    let mut s = format!(
+        "{}  {target}\n  {outcome}\n  started {}, {took} {}",
+        r.run_id,
+        human::clock_seconds(r.started_at),
+        human::run_duration(r)
+    );
+    match &r.cleanup {
+        CleanupState::NotNeeded => {}
+        CleanupState::Succeeded { .. } => s.push_str("\n  cleanup succeeded"),
+        CleanupState::Pending | CleanupState::Running { .. } => s.push_str("\n  cleanup running"),
+        CleanupState::Unknown { message } => s.push_str(&format!("\n  cleanup unknown: {message}")),
+        failed @ CleanupState::Failed { .. } => {
+            if let Some(c) = human::cleanup_failure(failed) {
+                s.push_str(&format!("\n  {c}"));
+            }
+        }
+    }
+    if let Some(res) = &r.result {
+        s.push_str(&format!(
+            "\n  result ({}): {}",
+            if res.ok { "ok" } else { "failed" },
+            res.summary
+        ));
+    }
+    if let Some(n) = &r.note {
+        s.push_str(&format!("\n  note: {}", human::note_text(n)));
+    }
+    s.push_str(&format!(
+        "\n  output: mira logs {}",
+        human::short_run(&r.run_id)
+    ));
+    s
+}
+
+fn outcome_text(o: Outcome) -> &'static str {
+    match o {
+        Outcome::Succeeded => "succeeded",
+        Outcome::Failed => "failed",
+        Outcome::Cancelled => "cancelled",
+        Outcome::TimedOut => "timed out",
+        Outcome::Interrupted => "interrupted",
+    }
+}
+
+/// Log lines shown under a failed `run --text`.
+const FAILURE_TAIL: u32 = 5;
+
+/// Text for a failed run: the status line, the last log lines, then what to do next.
+async fn failure_text(client: &mut Client, rec: &RunRecord, e: &ErrorInfo) -> String {
+    let target = rec
+        .action_ref
+        .as_ref()
+        .map_or_else(|| rec.label.clone(), ToString::to_string);
+    let mut status = match (rec.stop_reason, &rec.note) {
+        (Some(StopReason::ProtocolError), Some(note)) => {
+            format!("{target} stopped: {}", human::note_text(note))
+        }
+        (Some(StopReason::ProtocolError), None) => {
+            format!("{target} stopped: invalid plugin output")
+        }
+        _ => e.message.clone(),
+    };
+    if let Some(c) = human::cleanup_failure(&rec.cleanup) {
+        status.push_str(&format!(", {c}"));
+    }
+    let mut s = format!("error[{}]: {status}", e.code);
+    let page = client
+        .call::<_, LogPage>(
+            Method::LogRead,
+            &LogReadParams {
+                target: RunTarget::Run {
+                    run_id: rec.run_id.clone(),
+                },
+                cursor: None,
+                limit: Some(FAILURE_TAIL),
+                max_bytes: None,
+            },
+        )
+        .await;
+    if let Ok(page) = page
+        && let Some(pg) = page.data()
+    {
+        for r in &pg.items {
+            s.push_str(&format!("\n  {} {}", stream_tag(r), r.text));
+        }
+    }
+    if let Some(n) = &e.next_action {
+        s.push_str(&format!("\n  next: {} ({})", n.argv.join(" "), n.reason));
     }
     s
 }
@@ -224,6 +333,28 @@ fn final_reply(reply: PublicReply<RunRecord>) -> PublicReply<RunRecord> {
     PublicReply::failure(ctx, info)
 }
 
+/// Whether `action` is a long-running (process) action.
+async fn is_service(client: &mut Client, action: &str) -> bool {
+    let Ok(item_ref) = action.parse::<ItemRef>() else {
+        return false;
+    };
+    let reply: Result<PublicReply<ItemDescription>, _> = client
+        .call(
+            Method::ItemDescribe,
+            &ItemDescribeParams {
+                item_ref,
+                include_schema: false,
+                max_bytes: None,
+            },
+        )
+        .await;
+    reply.ok().is_some_and(|r| {
+        r.data()
+            .and_then(|d| d.action.as_ref())
+            .is_some_and(|a| a.mode == mira_protocol::manifest::ActionMode::Process)
+    })
+}
+
 pub(crate) async fn run_and_wait(
     ctx: &Ctx,
     client: &mut Client,
@@ -235,6 +366,18 @@ pub(crate) async fn run_and_wait(
         Ok(r) => r,
         Err(e) => return ctx.fail(client.context(), e.to_error_info()),
     };
+    if ctx.mode == Mode::Text
+        && let Some(e) = accepted.error()
+        && e.code == ErrorCode::SESSION_REQUIRED
+        && let Some(action) = params.get("action_ref").and_then(Value::as_str)
+        && is_service(client, action).await
+    {
+        eprintln!(
+            "error[{}]: {action} is a service. Start it with `mira start {action}`.",
+            e.code
+        );
+        return ExitCode::from(accepted.exit_code());
+    }
     if !wait || !accepted.is_ok() {
         return ctx.emit(&accepted, |a| {
             format!(
@@ -251,10 +394,19 @@ pub(crate) async fn run_and_wait(
     if ctx.mode == Mode::Text {
         eprintln!("{run_id} started; waiting (Ctrl-C stops it)...");
     }
-    match wait_finished(client, &run_id).await {
-        Ok(reply) => ctx.emit(&final_reply(reply), run_text),
-        Err(e) => ctx.fail(client.context(), e),
+    let finished = match wait_finished(client, &run_id).await {
+        Ok(reply) => reply,
+        Err(e) => return ctx.fail(client.context(), e),
+    };
+    let record = finished.data().cloned();
+    let reply = final_reply(finished);
+    if ctx.mode == Mode::Text
+        && let (Some(rec), Some(e)) = (record, reply.error())
+    {
+        eprintln!("{}", failure_text(client, &rec, e).await);
+        return ExitCode::from(reply.exit_code());
     }
+    ctx.emit(&reply, run_text)
 }
 
 pub fn run(
@@ -407,13 +559,13 @@ async fn stop_target(
 
 pub fn stop(ctx: &Ctx, target: &str, wait: bool) -> ExitCode {
     block_on(async {
-        let target = match parse_target(target) {
-            Ok(t) => t,
-            Err(e) => return ctx.fail(ReplyContext::default(), e),
-        };
         let mut client = match connect(ctx).await {
             Ok(c) => c,
             Err(code) => return code,
+        };
+        let target = match resolve_target(&mut client, target).await {
+            Ok(t) => t,
+            Err(e) => return ctx.fail(client.context(), e),
         };
         match stop_target(ctx, &mut client, target, wait).await {
             Ok(reply) => ctx.emit(&reply, |d| match d {
@@ -523,19 +675,7 @@ pub fn restart(ctx: &Ctx, action: &str, input: Option<&str>) -> ExitCode {
 }
 
 fn session_text(d: &SessionData) -> String {
-    match &d.session {
-        None => "no session".into(),
-        Some(s) => format!(
-            "session {} {} {}, {} controller(s){}",
-            s.id,
-            super::inspect::lc(&s.mode),
-            super::inspect::lc(&s.state),
-            s.controller_count,
-            s.expires_at
-                .map(|t| format!(", expires {t}"))
-                .unwrap_or_else(|| ", no expiry".into())
-        ),
-    }
+    human::session_line(d.session.as_ref())
 }
 
 pub fn up(ctx: &Ctx, background: bool, ttl: &str) -> ExitCode {
@@ -598,7 +738,7 @@ pub fn keep(ctx: &Ctx, ttl: &str) -> ExitCode {
 
 fn stop_text(d: &SessionStopData) -> String {
     match &d.stopped_session {
-        None => "no session".into(),
+        None => "Nothing is running.".into(),
         Some(id) => {
             let state = if d.session.is_some() {
                 "; stopping"
@@ -696,12 +836,41 @@ async fn stop_other_build_host(ctx: &Ctx, cx: ReplyContext, refused: ErrorInfo) 
 
 pub fn down(ctx: &Ctx, wait: bool) -> ExitCode {
     block_on(async {
-        let mut client = match ctx.client(&ConnectOptions::cli()).await {
+        let paths = match ctx.paths() {
+            Ok(p) => p,
+            Err(e) => return ctx.fail(ReplyContext::default(), e),
+        };
+        let cx = ReplyContext {
+            workspace: Some(mira_protocol::reply::WorkspaceRef {
+                id: paths.id.clone(),
+                root: paths.root.clone(),
+            }),
+            ..ReplyContext::default()
+        };
+        // Never start a host only to report that nothing runs.
+        let opts = ConnectOptions {
+            spawn: false,
+            ..ConnectOptions::cli()
+        };
+        let mut client = match mira_client::connect(&paths, &opts).await {
             Ok(c) => c,
-            Err((cx, e)) if e.code == ErrorCode::PROTOCOL_MISMATCH => {
-                return stop_other_build_host(ctx, cx, e).await;
+            Err(mira_client::ClientError::Connect(_)) => {
+                let data = SessionStopData {
+                    session: None,
+                    stopped_session: None,
+                    stopped_runs: 0,
+                };
+                let reply =
+                    PublicReply::success(cx, data, mira_protocol::reply::ReplyMeta::default());
+                return ctx.emit(&reply, |_| "Nothing is running.".to_owned());
             }
-            Err((cx, e)) => return ctx.fail(cx, e),
+            Err(e) => {
+                let e = e.to_error_info();
+                if e.code == ErrorCode::PROTOCOL_MISMATCH {
+                    return stop_other_build_host(ctx, cx, e).await;
+                }
+                return ctx.fail(cx, e);
+            }
         };
         let reply = match client
             .call::<_, SessionStopData>(Method::SessionStop, &Empty {})
@@ -761,17 +930,15 @@ pub fn runs(
             Err(code) => return code,
         };
         if let Some(run) = run {
-            let run_id = match RunId::parse(run) {
+            let run_id = match resolve_run_id(&mut client, &run).await {
                 Ok(r) => r,
-                Err(e) => return ctx.fail(client.context(), invalid_argument(e.to_string())),
+                Err(e) => return ctx.fail(client.context(), e),
             };
             return match client
                 .call::<_, RunRecord>(Method::RunGet, &RunGetParams { run_id })
                 .await
             {
-                Ok(r) => ctx.emit(&r, |rec| {
-                    serde_json::to_string_pretty(rec).unwrap_or_else(|_| run_text(rec))
-                }),
+                Ok(r) => ctx.emit(&r, run_summary),
                 Err(e) => ctx.fail(client.context(), e.to_error_info()),
             };
         }
@@ -809,33 +976,92 @@ pub fn runs(
     })
 }
 
-fn log_line(r: &mira_protocol::run::LogRecord) -> String {
-    let tag = match r.stream {
+fn stream_tag(r: &mira_protocol::run::LogRecord) -> &'static str {
+    match r.stream {
         mira_protocol::run::LogStream::Stderr => "err ",
         mira_protocol::run::LogStream::Host => "mira",
         mira_protocol::run::LogStream::Plugin => "plug",
         mira_protocol::run::LogStream::Pty => "pty ",
         mira_protocol::run::LogStream::Stdout => "out ",
-    };
-    format!("{:>6} {tag} {}", r.log_seq, r.text)
+    }
 }
 
-pub fn logs(
-    ctx: &Ctx,
-    target: &str,
-    after: Option<String>,
-    limit: Option<u32>,
-    max_bytes: Option<u32>,
-    follow: bool,
-) -> ExitCode {
-    block_on(async {
-        let target = match parse_target(target) {
-            Ok(t) => t,
-            Err(e) => return ctx.fail(ReplyContext::default(), e),
+fn log_line(r: &mira_protocol::run::LogRecord) -> String {
+    format!("{:>6} {} {}", r.log_seq, stream_tag(r), r.text)
+}
+
+/// `--stream` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum StreamArg {
+    Stdout,
+    Stderr,
+}
+
+/// Client-side log filter for `--grep` and `--stream`; the host still bounds the page.
+#[derive(Debug, Clone, Default)]
+pub struct LogFilter {
+    /// Lower-case pattern.
+    grep: Option<String>,
+    stream: Option<StreamArg>,
+}
+
+impl LogFilter {
+    pub fn new(grep: Option<&str>, stream: Option<StreamArg>) -> Self {
+        Self {
+            grep: grep.filter(|g| !g.is_empty()).map(str::to_lowercase),
+            stream,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.grep.is_none() && self.stream.is_none()
+    }
+
+    pub fn matches(&self, r: &mira_protocol::run::LogRecord) -> bool {
+        use mira_protocol::run::LogStream;
+        let stream_ok = match self.stream {
+            None => true,
+            Some(StreamArg::Stdout) => r.stream == LogStream::Stdout,
+            Some(StreamArg::Stderr) => r.stream == LogStream::Stderr,
         };
+        stream_ok
+            && self
+                .grep
+                .as_deref()
+                .is_none_or(|g| r.text.to_lowercase().contains(g))
+    }
+
+    pub fn apply(&self, records: &mut Vec<mira_protocol::run::LogRecord>) {
+        if !self.is_empty() {
+            records.retain(|r| self.matches(r));
+        }
+    }
+}
+
+pub struct LogArgs {
+    pub after: Option<String>,
+    pub limit: Option<u32>,
+    pub max_bytes: Option<u32>,
+    pub follow: bool,
+    pub filter: LogFilter,
+}
+
+pub fn logs(ctx: &Ctx, target: &str, args: LogArgs) -> ExitCode {
+    let LogArgs {
+        after,
+        limit,
+        max_bytes,
+        follow,
+        filter,
+    } = args;
+    block_on(async {
         let mut client = match connect(ctx).await {
             Ok(c) => c,
             Err(code) => return code,
+        };
+        let target = match resolve_target(&mut client, target).await {
+            Ok(t) => t,
+            Err(e) => return ctx.fail(client.context(), e),
         };
         let p = LogReadParams {
             target: target.clone(),
@@ -847,6 +1073,14 @@ pub fn logs(
             Ok(r) => r,
             Err(e) => return ctx.fail(client.context(), e.to_error_info()),
         };
+        // New records follow the unfiltered tail, so remember where it ended.
+        let last_seen = page
+            .data()
+            .and_then(|pg| pg.items.last().map(|r| r.log_seq));
+        let page = page.map(|mut pg| {
+            filter.apply(&mut pg.items);
+            pg
+        });
         if !follow || !page.is_ok() {
             return ctx.emit(&page, |pg| {
                 pg.items.iter().map(log_line).collect::<Vec<_>>().join("\n")
@@ -855,12 +1089,17 @@ pub fn logs(
         let Some(tail) = page.data().cloned() else {
             return ctx.emit(&page, |_| String::new());
         };
-        follow_logs(ctx, tail).await
+        follow_logs(ctx, tail, last_seen, &filter).await
     })
 }
 
 /// `--follow`: JSONL stream frames (ready first), or text lines after the tail.
-async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
+async fn follow_logs(
+    ctx: &Ctx,
+    tail: LogPage,
+    last_seen: Option<mira_protocol::ids::LogSeq>,
+    filter: &LogFilter,
+) -> ExitCode {
     let opts = ConnectOptions::cli().kind(ClientKind::Cli, ConnectionKind::Stream);
     let mut stream = match ctx.client(&opts).await {
         Ok(c) => c,
@@ -878,7 +1117,6 @@ async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
     {
         return ctx.fail(stream.context(), e.to_error_info());
     }
-    let last_seen = tail.items.last().map(|r| r.log_seq);
     let mut out = std::io::stdout().lock();
     if ctx.mode == Mode::Text {
         for r in &tail.items {
@@ -886,11 +1124,16 @@ async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
         }
     }
     loop {
-        let frame = match stream.next_event().await {
+        let mut frame = match stream.next_event().await {
             Ok(f) => f,
             Err(e) => return output::fail(ctx.mode, stream.context(), e.to_error_info()),
         };
         let mut done = false;
+        let mut skip = false;
+        if let StreamEvent::Log { records, .. } = &mut frame.event {
+            filter.apply(records);
+            skip = records.is_empty();
+        }
         match &frame.event {
             StreamEvent::Log { records, .. } => {
                 if ctx.mode == Mode::Text {
@@ -927,6 +1170,7 @@ async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
             StreamEvent::State { .. } | StreamEvent::Snapshot(_)
         );
         if ctx.mode == Mode::Json
+            && !skip
             && (relevant || done)
             && let Ok(line) = serde_json::to_string(&frame)
         {
@@ -936,5 +1180,45 @@ async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
         if done {
             return ExitCode::SUCCESS;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mira_protocol::run::{LogRecord, LogStream};
+
+    fn rec(stream: LogStream, text: &str) -> LogRecord {
+        serde_json::from_value(serde_json::json!({
+            "log_seq": 1,
+            "recorded_at": "2026-09-26T01:34:00.000Z",
+            "stream": stream,
+            "level": "info",
+            "text": text,
+            "continued": false,
+            "truncated": false,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn grep_is_a_case_insensitive_substring_and_stream_narrows_it() {
+        let f = LogFilter::new(Some("ERROR"), None);
+        assert!(f.matches(&rec(LogStream::Stdout, "db error: timeout")));
+        assert!(f.matches(&rec(LogStream::Stderr, "Error")));
+        assert!(!f.matches(&rec(LogStream::Stdout, "all good")));
+        let f = LogFilter::new(Some("error"), Some(StreamArg::Stderr));
+        assert!(!f.matches(&rec(LogStream::Stdout, "error")));
+        assert!(f.matches(&rec(LogStream::Stderr, "an ERROR")));
+        let f = LogFilter::new(None, Some(StreamArg::Stdout));
+        assert!(f.matches(&rec(LogStream::Stdout, "x")));
+        assert!(!f.matches(&rec(LogStream::Host, "x")));
+    }
+
+    #[test]
+    fn an_empty_filter_keeps_everything() {
+        let mut v = vec![rec(LogStream::Host, "a"), rec(LogStream::Pty, "b")];
+        LogFilter::new(Some(""), None).apply(&mut v);
+        assert_eq!(v.len(), 2);
     }
 }

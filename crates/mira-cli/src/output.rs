@@ -31,6 +31,11 @@ pub fn emit<T: Serialize>(
     reply: &PublicReply<T>,
     text: impl FnOnce(&T) -> String,
 ) -> ExitCode {
+    let hinted = reply
+        .error()
+        .and_then(item_hint)
+        .map(|e| PublicReply::<T>::failure(reply.context(), e));
+    let reply = hinted.as_ref().unwrap_or(reply);
     let mut out = std::io::stdout().lock();
     let written = match mode {
         Mode::Json => match serde_json::to_string(reply) {
@@ -60,8 +65,43 @@ pub fn fail(mode: Mode, ctx: ReplyContext, error: ErrorInfo) -> ExitCode {
     emit::<()>(mode, &PublicReply::failure(ctx, error), |_| String::new())
 }
 
+/// A NOT_FOUND reply for a catalog item gets a search hint when it has none.
+fn item_hint(e: &ErrorInfo) -> Option<ErrorInfo> {
+    if e.code != ErrorCode::NOT_FOUND || e.next_action.is_some() {
+        return None;
+    }
+    let rest = ["no catalog item `", "no action `", "no view `"]
+        .iter()
+        .find_map(|p| e.message.strip_prefix(p))?;
+    let item = rest.split('`').next()?;
+    let word = item.rsplit('.').next().filter(|w| !w.is_empty())?;
+    Some(e.clone().with_next_action(
+        &["mira", "catalog", "--search", word],
+        "Find the tool by a word from its name.",
+    ))
+}
+
+/// Plain wording for a few host messages; JSON keeps the original text.
+fn text_message(e: &ErrorInfo) -> String {
+    if e.code == ErrorCode::SESSION_REQUIRED {
+        return "Nothing is running in the background. Open `mira` or run `mira up --background`."
+            .into();
+    }
+    if e.code == ErrorCode::NOT_FOUND
+        && let Some(id) = e.message.strip_prefix("no run ")
+    {
+        return format!("No run `{id}`. See `mira runs`.");
+    }
+    // An empty JSON Pointer names no place.
+    e.message
+        .strip_suffix(" at ``")
+        .unwrap_or(&e.message)
+        .to_owned()
+}
+
 pub fn render_error(e: &ErrorInfo) -> String {
-    let mut s = format!("error[{}]: {}", e.code, e.message);
+    let message = text_message(e);
+    let mut s = format!("error[{}]: {message}", e.code);
     if let Some(details) = &e.details
         && let Some(issues) = details.get("issues").and_then(|v| v.as_array())
     {
@@ -73,11 +113,30 @@ pub fn render_error(e: &ErrorInfo) -> String {
         }
     }
     if let Some(n) = &e.next_action {
-        s.push_str(&format!("\n  next: {} ({})", n.argv.join(" "), n.reason));
+        let command = n.argv.join(" ");
+        // Skip the hint when the message already names the command (its first words).
+        let head = n.argv.iter().take(3).cloned().collect::<Vec<_>>().join(" ");
+        if !message.contains(&format!("`{head}")) {
+            s.push_str(&format!("\n  next: {command} ({})", n.reason));
+        }
     }
     s
 }
 
 pub fn invalid_argument(message: impl Into<String>) -> ErrorInfo {
     ErrorInfo::new(ErrorCode::INVALID_ARGUMENT, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_items_get_a_catalog_search_hint() {
+        let e = ErrorInfo::new(ErrorCode::NOT_FOUND, "no action `dev.webb`");
+        let hinted = item_hint(&e).expect("hint");
+        let argv = hinted.next_action.expect("next").argv;
+        assert_eq!(argv, ["mira", "catalog", "--search", "webb"]);
+        assert!(item_hint(&ErrorInfo::new(ErrorCode::NOT_FOUND, "no run r_1")).is_none());
+    }
 }

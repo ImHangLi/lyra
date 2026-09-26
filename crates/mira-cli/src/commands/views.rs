@@ -63,7 +63,9 @@ fn data_text(d: &ViewData) -> String {
             .map(|i| {
                 format!(
                     "{} {:<5} {}",
-                    i.recorded_at.map(|t| t.to_string()).unwrap_or_default(),
+                    i.recorded_at
+                        .map(crate::human::clock_seconds)
+                        .unwrap_or_default(),
                     format!("{:?}", i.level).to_lowercase(),
                     i.text
                 )
@@ -81,28 +83,47 @@ fn data_text(d: &ViewData) -> String {
     }
 }
 
-fn freshness_text(f: Freshness) -> &'static str {
-    match f {
-        Freshness::Current => "current",
-        Freshness::Historical => "historical",
-        Freshness::Stale => "stale",
+/// Where the data came from and when: `from run r_fb60aacf (ended), 14:07`.
+fn source_text(s: &ViewSnapshot) -> String {
+    let at = s
+        .recorded_at
+        .map(|t| format!(", {}", crate::human::clock(t)))
+        .unwrap_or_default();
+    if s.freshness == Freshness::Stale {
+        let why = s
+            .freshness_reason
+            .as_deref()
+            .unwrap_or("it may be out of date");
+        return format!("stale: {why}{at}");
+    }
+    match (&s.source_run_id, s.source_kind) {
+        (Some(id), _) => {
+            let state = if s.freshness == Freshness::Current {
+                "running"
+            } else {
+                "ended"
+            };
+            format!("from run {} ({state}){at}", crate::human::short_run(id))
+        }
+        (None, Some(SourceKind::Cli)) => format!("published from the CLI{at}"),
+        (None, Some(SourceKind::Hook)) => format!("published by a hook{at}"),
+        (None, Some(SourceKind::Plugin)) => format!("published by a plugin{at}"),
+        (None, None) => format!("no source{at}"),
     }
 }
 
 fn snapshot_text(s: &ViewSnapshot) -> String {
-    let mut head = format!(
-        "{}  {}",
-        s.view_ref,
-        s.view_revision
-            .map_or_else(|| "no data".to_owned(), |r| format!("revision {r}"))
-    );
-    head.push_str(&format!("  {}", freshness_text(s.freshness)));
-    if let Some(reason) = &s.freshness_reason {
-        head.push_str(&format!(" ({reason})"));
-    }
-    if let Some(at) = s.recorded_at {
-        head.push_str(&format!("\n  recorded {at}"));
-    }
+    let head = match s.view_revision {
+        None => format!(
+            "{}  no data yet{}",
+            s.view_ref,
+            s.freshness_reason
+                .as_deref()
+                .map(|r| format!(" ({r})"))
+                .unwrap_or_default()
+        ),
+        Some(r) => format!("{}  revision {r}\n  {}", s.view_ref, source_text(s)),
+    };
     let body = match &s.data {
         Some(ViewBody::Inline(d)) => data_text(d),
         Some(ViewBody::Reference(r)) => r.summary.clone(),
@@ -183,16 +204,11 @@ pub fn publish(
             .await
         {
             Ok(r) => ctx.emit(&r, |d| {
-                format!(
-                    "{}  revision {}  {}{}",
-                    d.view_ref,
-                    d.view_revision,
-                    serde_json::to_value(d.durability)
-                        .ok()
-                        .and_then(|v| v.as_str().map(str::to_owned))
-                        .unwrap_or_default(),
-                    if d.reused { "  (reused)" } else { "" }
-                )
+                if d.reused {
+                    format!("already published (revision {})", d.view_revision)
+                } else {
+                    format!("published (revision {})", d.view_revision)
+                }
             }),
             Err(e) => ctx.fail(client.context(), e.to_error_info()),
         }

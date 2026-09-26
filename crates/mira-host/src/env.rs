@@ -1,4 +1,6 @@
 //! Child environment composition (§7.2): client env → env_files → action env → MIRA_*.
+//! The caller's `MIRA_*` names are stripped; the host adds its own, including the few a
+//! plugin needs to call `mira` against the same host.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -84,12 +86,51 @@ pub fn compose(
     put("MIRA_RUN_ID", &host.run_id);
     put("MIRA_INPUT_FILE", &host.input_file);
     put("MIRA_CONFIG_FILE", &host.config_file);
+    for (k, v) in nested_vars(std::env::current_exe().ok(), |k| std::env::var(k).ok()) {
+        env.insert(k, v);
+    }
     Ok(ChildEnv(env))
+}
+
+/// Host variables a plugin needs to call `mira` against this same host: `MIRA_BIN` (the
+/// running executable) and the host's own `MIRA_DATA_HOME` and `MIRA_RUNTIME_DIR` when set.
+/// Every other `MIRA_*` name from the caller stays stripped.
+fn nested_vars(
+    exe: Option<std::path::PathBuf>,
+    host_env: impl Fn(&str) -> Option<String>,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if let Some(exe) = exe.and_then(|p| p.to_str().map(str::to_owned)) {
+        out.push(("MIRA_BIN".to_owned(), exe));
+    }
+    for k in ["MIRA_DATA_HOME", "MIRA_RUNTIME_DIR"] {
+        if let Some(v) = host_env(k).filter(|v| !v.is_empty()) {
+            out.push((k.to_owned(), v));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_calls_get_the_binary_and_the_host_locations_only() {
+        let vars = nested_vars(Some("/opt/mira/bin/mira".into()), |k| match k {
+            "MIRA_DATA_HOME" => Some("/tmp/d".to_owned()),
+            "MIRA_OTHER" => Some("x".to_owned()),
+            _ => None,
+        });
+        assert_eq!(
+            vars,
+            [
+                ("MIRA_BIN".to_owned(), "/opt/mira/bin/mira".to_owned()),
+                ("MIRA_DATA_HOME".to_owned(), "/tmp/d".to_owned()),
+            ]
+        );
+        assert!(nested_vars(None, |_| None).is_empty());
+    }
 
     #[test]
     fn a_malformed_env_line_never_appears_in_the_error() {
