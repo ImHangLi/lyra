@@ -23,6 +23,7 @@ case "$(uname -m)" in
 esac
 
 version="${LYRA_VERSION:-}"
+version="${version#v}"
 if [ -z "$version" ] && [ -z "${LYRA_INSTALL_FROM:-}" ]; then
   version="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
   [ -n "$version" ] || fail "cannot find the latest release; set LYRA_VERSION"
@@ -41,7 +42,7 @@ if [ -n "${LYRA_INSTALL_FROM:-}" ]; then
   cp "$LYRA_INSTALL_FROM/$name.tar.gz" "$LYRA_INSTALL_FROM/$name.tar.gz.sha256" "$tmp/" || fail "archive not found"
 else
   base="https://github.com/$repo/releases/download/v$version"
-  curl -fsSL "$base/$name.tar.gz" -o "$tmp/$name.tar.gz" || fail "download failed"
+  curl -fsSL "$base/$name.tar.gz" -o "$tmp/$name.tar.gz" || fail "download failed: lyra $version has no $target build (see https://github.com/$repo/releases)"
   curl -fsSL "$base/$name.tar.gz.sha256" -o "$tmp/$name.tar.gz.sha256" || fail "checksum download failed"
 fi
 (cd "$tmp" && shasum -a 256 -c "$name.tar.gz.sha256" >/dev/null) || fail "checksum mismatch; nothing was installed"
@@ -66,4 +67,4 @@ case ":$PATH:" in
   *) echo "Add it to PATH:  export PATH=\"$dir:\$PATH\"" ;;
 esac
 echo "Next: in your project, run 'lyra skills install --agent claude' (or codex/generic) and ask your agent to set up Lyra."
-echo "Uninstall: rm -rf \"$dir\" (project .lyra files and workspace data are kept)."
+echo "Uninstall: rm \"$dir/lyra\" \"$marker\" (project .lyra files and workspace data are kept)."
