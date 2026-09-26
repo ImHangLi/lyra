@@ -37,7 +37,7 @@ To show only part of another action's output (errors, one stream), declare a der
 ## 3. Write it
 
 Two ways to write it:
-- **Directly** (simplest, for one plugin): edit `.mira/plugins/<id>/plugin.json`, add the path to `.mira/workspace.json` `plugins` if it is new, then `mira validate .mira --json` and `mira reload`.
+- **Directly** (simplest, for one plugin): write the plugin folder (in `.mira/plugins/<id>/` or anywhere else), then `mira validate DIR --json` and `mira apply DIR --json`; apply copies an outside folder to `.mira/plugins/<id>/` and adds it to `.mira/workspace.json` when it is new.
 - **As a draft** (safe when others may change the catalog at the same time): copy `workspace.json` and `plugins/` from `.mira` into `.mira/.drafts/<name>/`, edit there, then validate and apply the draft as in step 4. Delete the draft after it is applied. Field reference: [manifest](references/manifest.md). Structured output: [MPP/1 and views](references/protocol.md). Starting points: [command template](templates/command/plugin.json), [structured template](templates/structured/).
 
 Rules that matter:
