@@ -15,6 +15,8 @@ All commands accept `--project PATH`, `--json`, `--text`. `REF` is `plugin.item`
 | `exec --label TEXT -- ARGV...` | ad-hoc task through the managed path; not added to the catalog |
 | `up --background [--ttl 30m\|2h\|none]`, `keep [--ttl …]` | explicit background lease (default 2 h) |
 | `down [--wait]` | stop the session and its runs; no data is deleted |
+| `down --all [--wait]` | stop the session of every Lyra host of this user on this machine (older builds get SIGTERM); per-workspace result and totals |
+| `ps` | every running Lyra host of this user: workspace, branch, session, runs with PID, ports, and memory, then problems (shared port, session ending within 10 min, older build, lost process group) and totals; never starts a host |
 | `runs [RUN] [--action REF] [--outcome VALUE] [--limit N] [--after CURSOR]` | newest first |
 | `logs RUN_OR_ACTION [--after CURSOR] [--limit N] [--max-bytes N] [--follow]` | tail by default |
 | `view VIEW [--after CURSOR] [--limit N]`, `view-action VIEW ACTION --row ROW --expected-view-revision N` | typed data; row actions refuse stale rows (`VIEW_CHANGED`) |

@@ -25,6 +25,8 @@ Every command prints exactly one JSON reply with `--json` (the default without a
 | Stop a run | `lyra stop RUN_ID_OR_ACTION [--wait]` |
 | Apply new input to a running service | `lyra restart PLUGIN.ACTION [--input FILE]` |
 | Ad-hoc command, same managed path | `lyra exec --label "what it does" -- ARGV...` |
+| See every workspace on this machine (ports, memory, runs) | `lyra ps` |
+| Stop the work of every workspace on this machine | `lyra down --all [--wait]` (ask the user first) |
 | Retry safely | add `--request-key KEY`; the same key returns the original run instead of repeating side effects |
 
 - `run` exits 0 on success, 5 on failure, 6 on timeout, 130 when cancelled; `error.details` has `run_id` and the child's `exit`.
