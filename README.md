@@ -54,4 +54,3 @@ lyra view demo.table      # the same table the TUI shows
 | `examples/playground` | A small workspace with command, PTY, and structured plugins |
 | `schemas/` | Generated JSON Schemas; `scripts/check-contract.sh` checks drift |
 
-Contributor and agent rules: [AGENTS.md](AGENTS.md).

@@ -11,3 +11,6 @@
 /.claude/
 /dist/
 __pycache__/
+
+# Agent instructions are local-only
+/AGENTS.md
