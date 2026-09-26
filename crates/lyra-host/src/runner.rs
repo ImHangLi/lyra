@@ -10,7 +10,7 @@ use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
 use lyra_protocol::error::{ErrorCode, ErrorInfo};
-use lyra_protocol::ids::{RunId, ViewId};
+use lyra_protocol::ids::{LogSeq, RunId, ViewId};
 use lyra_protocol::lpp::PluginEvent;
 use lyra_protocol::manifest::{StopSignal, TimeoutPolicy};
 use lyra_protocol::run::{CleanupState, ExitInfo, LogRecord, LogStream};
@@ -63,6 +63,13 @@ pub enum RunnerEvent {
     TimedOut,
     Logs {
         records: Vec<LogRecord>,
+    },
+    /// Live log batches in `[first_seq, last_seq]` were not delivered because the actor queue
+    /// was full. They are in the run log; subscribers get a gap event with a resume cursor.
+    LogGap {
+        dropped_records: u64,
+        first_seq: LogSeq,
+        last_seq: LogSeq,
     },
     /// A validated non-log LPP frame, in receive order.
     Frame(Box<PluginEvent>),
@@ -148,6 +155,8 @@ pub(crate) struct Batcher {
     frames: Option<FrameReader>,
     /// Frame events waiting for delivery. Delivery awaits the actor (backpressure).
     outbox: Vec<RunnerEvent>,
+    /// Live log records not delivered yet: (count, first seq, last seq).
+    dropped: Option<(u64, LogSeq, LogSeq)>,
 }
 
 impl Batcher {
@@ -160,6 +169,7 @@ impl Batcher {
             pending: Vec::new(),
             frames: None,
             outbox: Vec::new(),
+            dropped: None,
         }
     }
     /// Records one complete line of already plain text.
@@ -272,13 +282,51 @@ impl Batcher {
         self.send();
     }
     fn send(&mut self) {
-        if !self.pending.is_empty() {
-            let records = std::mem::take(&mut self.pending);
-            // Live delivery is best effort; the log file and ring stay authoritative.
-            let _ = self
-                .events
-                .try_send((self.run_id.clone(), RunnerEvent::Logs { records }));
+        if self.pending.is_empty() {
+            return;
         }
+        let records = std::mem::take(&mut self.pending);
+        // Live delivery is best effort; the log file and ring stay authoritative. Undelivered
+        // batches are counted and reported as one gap before the next delivered batch.
+        if let Some((n, first, last)) = self.dropped {
+            let gap = RunnerEvent::LogGap {
+                dropped_records: n,
+                first_seq: first,
+                last_seq: last,
+            };
+            if self.events.try_send((self.run_id.clone(), gap)).is_err() {
+                self.count_dropped(&records);
+                return;
+            }
+            self.dropped = None;
+        }
+        if let Err(mpsc::error::TrySendError::Full((_, RunnerEvent::Logs { records }))) = self
+            .events
+            .try_send((self.run_id.clone(), RunnerEvent::Logs { records }))
+        {
+            self.count_dropped(&records);
+        }
+    }
+    /// Reports a still-open gap at run end, waiting for queue space instead of dropping it.
+    async fn flush_gap(&mut self) {
+        if let Some((n, first, last)) = self.dropped.take() {
+            let gap = RunnerEvent::LogGap {
+                dropped_records: n,
+                first_seq: first,
+                last_seq: last,
+            };
+            let _ = self.events.send((self.run_id.clone(), gap)).await;
+        }
+    }
+    fn count_dropped(&mut self, records: &[LogRecord]) {
+        let (Some(first), Some(last)) = (records.first(), records.last()) else {
+            return;
+        };
+        let n = records.len() as u64;
+        self.dropped = Some(match self.dropped {
+            Some((m, f, _)) => (m + n, f, last.log_seq),
+            None => (n, first.log_seq, last.log_seq),
+        });
     }
 }
 
@@ -344,6 +392,9 @@ async fn drive(
             }
             _ = flush.tick() => batch.tick(),
         }
+        // A child that writes without pause keeps its pipe always ready. Yield after each
+        // chunk so floods on every worker cannot starve the actor and control connections.
+        tokio::task::yield_now().await;
     };
     // Drain what leftover group members still write, then clear the group if we were stopping.
     let drain_until = Instant::now() + DRAIN_AFTER_EXIT;
@@ -473,6 +524,7 @@ pub async fn supervise(
         pending: Vec::new(),
         frames: spec.protocol.as_ref().map(|p| FrameReader::new(p.mode)),
         outbox: Vec::new(),
+        dropped: None,
     };
     let signal = match spec.stop_signal {
         StopSignal::Term => Signal::TERM,
@@ -545,6 +597,7 @@ pub async fn supervise(
     batch.frames = None;
     let cleanup = run_cleanup(&spec, reason, &mut batch).await;
     batch.finish();
+    batch.flush_gap().await;
     remove_temp(&spec.temp_files);
     let _ = events
         .send((spec.run_id.clone(), finish(exit, None, cleanup)))

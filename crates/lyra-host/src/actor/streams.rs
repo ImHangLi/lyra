@@ -4,13 +4,13 @@
 use std::collections::BTreeSet;
 
 use lyra_protocol::error::{ErrorCode, ErrorInfo};
-use lyra_protocol::ids::{ClientId, RunId, ScreenRevision, SubscriptionId};
+use lyra_protocol::ids::{ClientId, LogSeq, RunId, ScreenRevision, SubscriptionId};
 use lyra_protocol::ipc::*;
 use lyra_protocol::reply::ReplyMeta;
 use lyra_protocol::run::LogRecord;
 use lyra_protocol::time::Timestamp;
 
-use super::{Actor, Outbound, Responder};
+use super::{Actor, Outbound, Responder, reads};
 
 /// Log events carry at most this many serialized bytes of records.
 const LOG_BATCH_BYTES: usize = 32 * 1024;
@@ -62,11 +62,19 @@ impl Actor {
                 "subscribe needs at least one kind",
             )));
         }
-        if p.cursor.is_some() {
-            // Live cursors do not survive a new subscription; the client re-reads a snapshot.
+        if let Some(c) = &p.cursor {
+            // The host keeps no replay ring: a live cursor never resumes. Say why, so the
+            // client knows to take a new snapshot instead of assuming it missed nothing.
+            let why = match c.split_once('.') {
+                Some((epoch, _)) if epoch != self.epoch.as_str() => {
+                    "the host restarted since this cursor was issued"
+                }
+                Some(_) => "this host keeps no event ring to replay from a cursor",
+                None => "the cursor is not a stream cursor",
+            };
             return r.send(self.fail(ErrorInfo::new(
                 ErrorCode::RESET_REQUIRED,
-                "resume by cursor is not supported; take a new snapshot",
+                format!("{why}; subscribe without a cursor and use the new snapshot"),
             )));
         }
         let Some(out) = self.clients.get(client).map(|c| c.out.clone()) else {
@@ -267,6 +275,49 @@ impl Actor {
         self.deliver(
             StreamKind::Terminal,
             |s| s.refs.iter().any(|r| keys.iter().flatten().any(|k| k == r)),
+            &line,
+        );
+    }
+
+    /// Live log records were not delivered (§11.3): the gap names the count and a `log.read`
+    /// cursor over exactly the missed range.
+    pub(crate) fn broadcast_log_gap(
+        &mut self,
+        run_id: &RunId,
+        dropped: u64,
+        first: LogSeq,
+        last: LogSeq,
+    ) {
+        if !self
+            .subs
+            .values()
+            .any(|s| s.kinds.contains(&StreamKind::Log))
+        {
+            return;
+        }
+        let action = self
+            .runs
+            .get(run_id)
+            .and_then(|r| r.record.action_ref.clone());
+        let keys = [
+            Some(run_id.to_string()),
+            action.as_ref().map(ToString::to_string),
+        ];
+        let line = self.frame(
+            Some(run_id.clone()),
+            action.as_ref().map(|a| a.to_item_ref()),
+            StreamEvent::Gap {
+                reason: format!(
+                    "live output outran the host: records {first}-{last} were not streamed; \
+                     they remain in the run log"
+                ),
+                dropped_records: Some(dropped),
+                resume_cursor: Some(reads::forward_cursor(run_id, first.get(), last.get())),
+            },
+        );
+        self.deliver(
+            StreamKind::Log,
+            |s| s.refs.is_empty() || s.refs.iter().any(|r| keys.iter().flatten().any(|k| k == r)),
             &line,
         );
     }

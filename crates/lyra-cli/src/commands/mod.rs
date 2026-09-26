@@ -2,6 +2,7 @@ pub mod config;
 pub mod contract;
 pub mod ctx;
 pub mod inspect;
+pub mod payload;
 pub mod runtime;
 pub mod schedule;
 pub mod setup;

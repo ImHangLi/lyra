@@ -15,6 +15,7 @@ use lyra_protocol::ids::{
     ActionId, ActionRef, CatalogRevision, RunId, SessionId, ViewRef, ViewRevision,
 };
 use lyra_protocol::ipc::*;
+use lyra_protocol::limits::MAX_REPLY_BUDGET_BYTES;
 use lyra_protocol::manifest::{JsonObject, TimeoutWire};
 use lyra_protocol::paths::WorkspacePaths;
 use lyra_protocol::reply::{PublicReply, ReplyMeta};
@@ -323,6 +324,8 @@ pub async fn read_worker(
                 let params = ItemDescribeParams {
                     item_ref: action_ref.to_item_ref(),
                     include_schema: true,
+                    // Forms need the schemas inline, not by payload reference.
+                    max_bytes: Some(MAX_REPLY_BUDGET_BYTES as u32),
                 };
                 let res = call::<_, ItemDescription>(&mut client, Method::ItemDescribe, &params)
                     .await
@@ -385,6 +388,7 @@ pub async fn read_worker(
                     outcome: None,
                     cursor: None,
                     limit: Some(200),
+                    max_bytes: Some(MAX_REPLY_BUDGET_BYTES as u32),
                 };
                 let res = call::<_, RunList>(&mut client, Method::RunListM, &params)
                     .await
@@ -405,6 +409,7 @@ pub async fn read_worker(
                 let params = ItemDescribeParams {
                     item_ref: view_ref.to_item_ref(),
                     include_schema: false,
+                    max_bytes: None,
                 };
                 let res = call::<_, ItemDescription>(&mut client, Method::ItemDescribe, &params)
                     .await
@@ -463,6 +468,9 @@ async fn read_view(client: &mut Client, view_ref: &ViewRef) -> Result<Box<ViewLo
         attempts += 1;
         let mut cursor: Option<String> = None;
         let mut first: Option<ViewSnapshot> = None;
+        // A row or item too large for one reply comes back by payload reference; the page
+        // shows as truncated instead of silently missing it.
+        let mut referenced = false;
         loop {
             let params = ViewReadParams {
                 view_ref: view_ref.clone(),
@@ -480,9 +488,16 @@ async fn read_view(client: &mut Client, view_ref: &ViewRef) -> Result<Box<ViewLo
             let next = page.meta.next_cursor.clone();
             let truncated = page.meta.truncated && next.is_none();
             let snap = page.data;
+            if next.is_some() && matches!(snap.data, Some(ViewBody::Reference(_))) {
+                referenced = true;
+            }
             match &mut first {
                 None => first = Some(snap),
                 Some(acc) => match (&mut acc.data, snap.data) {
+                    // The first page held only a referenced item: keep the rows that follow.
+                    (data @ Some(ViewBody::Reference(_)), Some(ViewBody::Inline(d))) => {
+                        *data = Some(ViewBody::Inline(d));
+                    }
                     (
                         Some(ViewBody::Inline(ViewData::Table { rows, .. })),
                         Some(ViewBody::Inline(ViewData::Table { rows: more, .. })),
@@ -505,7 +520,7 @@ async fn read_view(client: &mut Client, view_ref: &ViewRef) -> Result<Box<ViewLo
                     };
                     return Ok(Box::new(ViewLoad {
                         snapshot,
-                        truncated,
+                        truncated: truncated || referenced,
                     }));
                 }
             }
@@ -517,9 +532,10 @@ pub fn catalog_params() -> CatalogListParams {
     CatalogListParams {
         query: None,
         if_revision: None,
+        if_workspace: None,
         cursor: None,
         limit: Some(1000),
-        max_bytes: None,
+        max_bytes: Some(MAX_REPLY_BUDGET_BYTES as u32),
     }
 }
 

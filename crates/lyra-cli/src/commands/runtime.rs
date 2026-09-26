@@ -579,6 +579,7 @@ pub fn runs(
     outcome: Option<String>,
     limit: Option<u32>,
     after: Option<String>,
+    max_bytes: Option<u32>,
 ) -> ExitCode {
     block_on(async {
         let mut client = match connect(ctx).await {
@@ -619,6 +620,7 @@ pub fn runs(
             outcome,
             cursor: after,
             limit,
+            max_bytes,
         };
         match client.call::<_, RunList>(Method::RunListM, &p).await {
             Ok(r) => ctx.emit(&r, |l| {
@@ -728,6 +730,20 @@ async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
             }
             StreamEvent::State { runs, .. } | StreamEvent::Snapshot(StatusData { runs, .. }) => {
                 done = !runs.iter().any(|r| r.run_id == run_id);
+            }
+            StreamEvent::Gap {
+                dropped_records,
+                resume_cursor,
+                ..
+            } => {
+                if ctx.mode == Mode::Text {
+                    let n = dropped_records.map_or_else(|| "some".to_owned(), |n| n.to_string());
+                    let _ = writeln!(
+                        out,
+                        "-- {n} record(s) were not streamed live; read them with: lyra logs {run_id} --after {}",
+                        resume_cursor.as_deref().unwrap_or("<none>")
+                    );
+                }
             }
             StreamEvent::End { .. } => done = true,
             _ => {}

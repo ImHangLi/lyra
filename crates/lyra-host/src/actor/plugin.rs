@@ -15,10 +15,7 @@ use lyra_protocol::time::Timestamp;
 use lyra_protocol::view::{LogLevel, SourceKind};
 use serde_json::{Value, json};
 
-use super::Actor;
-
-/// Result data larger than this is not kept inline in the run record (payload refs: LYR-07).
-const MAX_INLINE_RESULT_BYTES: usize = 256 * 1024;
+use super::{Actor, reads};
 
 /// Per-run LPP/1 state. Present only for `run.kind = plugin` actions.
 pub struct LppRun {
@@ -206,27 +203,28 @@ impl Actor {
                 Err(e) => schema_error = Some(e),
             }
         }
-        let size = serde_json::to_vec(&data).map_or(0, |v| v.len());
+        if !self.runs.contains_key(run_id) {
+            return;
+        }
+        // Large data is retained once by reference (§11.1); the record itself stays small.
+        let bytes = serde_json::to_vec(&data).unwrap_or_default();
+        let (data, payload) = if bytes.len() > reads::INLINE_RESULT_BYTES {
+            let cap = self
+                .accepted()
+                .map_or(64 * 1024 * 1024, |s| s.storage.result_bytes_per_workspace);
+            let payload = self.payloads.retain_result(run_id, bytes, cap);
+            (Value::Null, Some(payload))
+        } else {
+            (data, None)
+        };
         let Some(run) = self.runs.get_mut(run_id) else {
             return;
-        };
-        let data = if size > MAX_INLINE_RESULT_BYTES {
-            append_note(
-                &mut run.record.note,
-                &format!(
-                    "result data ({size} bytes) exceeds the inline bound of {} KiB and was not kept",
-                    MAX_INLINE_RESULT_BYTES / 1024
-                ),
-            );
-            Value::Null
-        } else {
-            data
         };
         run.record.result = Some(RunResult {
             ok,
             summary,
             data,
-            payload: None,
+            payload,
             error,
         });
         if let Some(e) = schema_error {
