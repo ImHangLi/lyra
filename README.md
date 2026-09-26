@@ -35,13 +35,13 @@ Your agents do the work. You still have to find it, check it, and explain it aga
 curl -fsSL https://raw.githubusercontent.com/ImHangLi/lyra/main/scripts/install.sh | sh
 ```
 
-Then tell your agent:
+Then, in your project:
 
-```text
-Set up Lyra for this repo: run `lyra skills install --agent claude`, then follow the `lyra` skill.
+```sh
+lyra setup
 ```
 
-It reads your project and saves your real commands as plugins. Run `lyra` to open the workbench.
+It installs the Lyra skills for your agent and prints one command to run, such as `claude '…'` or `codex '…'`. Your agent reads the project and saves its real commands as tools. Then run `lyra` to open the workbench.
 
 **No AI inside.** Lyra runs no models and sends no telemetry. Everything stays on your machine.
 

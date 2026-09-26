@@ -66,5 +66,5 @@ case ":$PATH:" in
   *":$dir:"*) ;;
   *) echo "Add it to PATH:  export PATH=\"$dir:\$PATH\"" ;;
 esac
-echo "Next: in your project, run 'lyra skills install --agent claude' (or codex/generic) and ask your agent to set up Lyra."
+echo "Next: in your project, run 'lyra setup'. It prepares your coding agent and prints the one command to run."
 echo "Uninstall: rm \"$dir/lyra\" \"$marker\" (project .lyra files and workspace data are kept)."

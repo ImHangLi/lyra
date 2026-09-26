@@ -50,19 +50,19 @@ struct InstallRecord {
 }
 
 #[derive(Serialize, Default)]
-struct Report {
-    targets: Vec<String>,
-    written: Vec<String>,
-    updated: Vec<String>,
-    unchanged: Vec<String>,
+pub struct Report {
+    pub targets: Vec<String>,
+    pub written: Vec<String>,
+    pub updated: Vec<String>,
+    pub unchanged: Vec<String>,
     /// Files the user changed; the new version is written next to them as `*.lyra-new`.
-    conflicts: Vec<Conflict>,
+    pub conflicts: Vec<Conflict>,
 }
 
 #[derive(Serialize)]
-struct Conflict {
-    path: String,
-    new_version: String,
+pub struct Conflict {
+    pub path: String,
+    pub new_version: String,
 }
 
 fn hash(bytes: &[u8]) -> String {
@@ -124,6 +124,23 @@ fn install_skill(dir: &Path, skill: &str, report: &mut Report) -> Result<(), Str
     std::fs::write(&record_path, bytes).map_err(|e| format!("{}: {e}", record_path.display()))
 }
 
+/// Installs the bundled skills for `agent` under `root` (shared by `lyra setup`).
+pub fn install_into(root: &Path, agent: AgentKind) -> Result<Report, String> {
+    let mut bases = vec![root.join(".agents/skills")];
+    if agent == AgentKind::Claude {
+        bases.push(root.join(".claude/skills"));
+    }
+    let mut report = Report::default();
+    for base in &bases {
+        for skill in ["lyra", "lyra-extend"] {
+            let dir = base.join(skill);
+            report.targets.push(dir.to_string_lossy().into_owned());
+            install_skill(&dir, skill, &mut report)?;
+        }
+    }
+    Ok(report)
+}
+
 pub fn install(ctx: &Ctx, agent: AgentKind) -> ExitCode {
     let selected = match ctx.select() {
         Ok(s) => s,
@@ -137,26 +154,18 @@ pub fn install(ctx: &Ctx, agent: AgentKind) -> ExitCode {
         }),
         ..ReplyContext::default()
     };
-    let mut bases = vec![root.join(".agents/skills")];
-    if agent == AgentKind::Claude {
-        bases.push(root.join(".claude/skills"));
-    }
-    let mut report = Report::default();
-    for base in &bases {
-        for skill in ["lyra", "lyra-extend"] {
-            let dir = base.join(skill);
-            report.targets.push(dir.to_string_lossy().into_owned());
-            if let Err(e) = install_skill(&dir, skill, &mut report) {
-                return ctx.fail(
-                    rctx,
-                    ErrorInfo::new(
-                        ErrorCode::STORAGE_UNAVAILABLE,
-                        format!("cannot install skills: {e}"),
-                    ),
-                );
-            }
+    let report = match install_into(&root, agent) {
+        Ok(r) => r,
+        Err(e) => {
+            return ctx.fail(
+                rctx,
+                ErrorInfo::new(
+                    ErrorCode::STORAGE_UNAVAILABLE,
+                    format!("cannot install skills: {e}"),
+                ),
+            );
         }
-    }
+    };
     let reply = PublicReply::success(rctx, report, ReplyMeta::default());
     ctx.emit(&reply, |r| {
         let mut s = format!(
