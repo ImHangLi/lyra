@@ -79,53 +79,32 @@ pub struct ChipSize {
     pub pinned: bool,
 }
 
-/// Which chips (and which of their labels) fit in `width` cells. A chip is ` key ` plus
-/// ` label`; two spaces separate chips. From the last chip back, a chip loses its label
-/// before its key; pinned chips lose their labels last and their keys only when nothing
-/// else is left. A chip is never cut.
-pub fn fit_chips(chips: &[ChipSize], width: usize) -> Vec<(bool, bool)> {
-    let mut fit: Vec<(bool, bool)> = chips.iter().map(|_| (true, true)).collect();
-    let total = |fit: &[(bool, bool)]| -> usize {
-        let mut used = 0usize;
-        let mut n = 0usize;
-        for (c, (shown, label)) in chips.iter().zip(fit) {
-            if !shown {
-                continue;
-            }
-            used += c.keys + 2;
-            if *label && c.label > 0 {
-                used += 1 + c.label;
-            }
-            n += 1;
-        }
+/// Which chips fit in `width` cells. A chip is ` key ` plus ` label`; two spaces separate
+/// chips. A chip always shows with its label, or not at all: from the last chip back,
+/// unpinned chips go first, then pinned ones.
+pub fn fit_chips(chips: &[ChipSize], width: usize) -> Vec<bool> {
+    let mut shown: Vec<bool> = vec![true; chips.len()];
+    let total = |shown: &[bool]| -> usize {
+        let (used, n) = chips.iter().zip(shown).filter(|(_, s)| **s).fold(
+            (0usize, 0usize),
+            |(used, n), (c, _)| {
+                let label = if c.label > 0 { 1 + c.label } else { 0 };
+                (used + c.keys + 2 + label, n + 1)
+            },
+        );
         used + 2 * n.saturating_sub(1)
     };
-    // Per chip, from the last one back: its label first, then the chip itself.
     for pinned in [false, true] {
         for i in (0..chips.len()).rev() {
-            if chips[i].pinned != pinned {
-                continue;
+            if total(&shown) <= width {
+                return shown;
             }
-            for step in [1, 0] {
-                if total(&fit) <= width {
-                    return fit;
-                }
-                if step == 1 {
-                    fit[i].1 = false;
-                } else if !pinned {
-                    fit[i].0 = false;
-                }
+            if chips[i].pinned == pinned {
+                shown[i] = false;
             }
         }
     }
-    // Pinned chips go last, keys only.
-    for i in (0..chips.len()).rev() {
-        if total(&fit) <= width {
-            return fit;
-        }
-        fit[i].0 = false;
-    }
-    fit
+    shown
 }
 
 fn panel<'a>(t: &Theme, title: impl Into<Line<'a>>, focus: bool) -> Block<'a> {
@@ -1845,7 +1824,7 @@ fn draw_footer(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     let fit = fit_chips(&sizes, room);
     let mut spans = vec![Span::raw(" ")];
     let mut first = true;
-    for (b, (shown, label)) in all.iter().zip(fit) {
+    for (b, shown) in all.iter().zip(fit) {
         if !shown {
             continue;
         }
@@ -1854,7 +1833,7 @@ fn draw_footer(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         }
         first = false;
         spans.push(key_chip(t, b.keys));
-        if label && !b.label.is_empty() {
+        if !b.label.is_empty() {
             spans.push(Span::styled(format!(" {}", b.label), t.dim()));
         }
     }
@@ -2317,29 +2296,16 @@ mod tests {
     }
 
     #[test]
-    fn footer_drops_labels_before_keys_and_never_cuts_a_chip() {
+    fn footer_drops_whole_chips_and_never_shows_a_key_alone() {
         // ` j/k  move` (10) + `  ` + ` s  stop` (8) + `  ` + ` q  quit` (8) = 30.
         let chips = [chip(3, 4, false), chip(1, 4, false), chip(1, 4, true)];
-        assert_eq!(fit_chips(&chips, 30), [(true, true); 3]);
-        // The last unpinned chip loses its label first...
-        assert_eq!(
-            fit_chips(&chips, 29),
-            [(true, true), (true, false), (true, true)]
-        );
-        // ...then its key, before the chip in front of it changes.
-        assert_eq!(
-            fit_chips(&chips, 24),
-            [(true, true), (false, false), (true, true)]
-        );
-        assert_eq!(
-            fit_chips(&chips, 15),
-            [(true, false), (false, false), (true, true)]
-        );
-        // Pinned chips keep their key last.
-        assert_eq!(
-            fit_chips(&chips, 3),
-            [(false, false), (false, false), (true, false)]
-        );
-        assert_eq!(fit_chips(&chips, 0), [(false, false); 3]);
+        assert_eq!(fit_chips(&chips, 30), [true; 3]);
+        // The last unpinned chip goes first, with its label.
+        assert_eq!(fit_chips(&chips, 29), [true, false, true]);
+        assert_eq!(fit_chips(&chips, 20), [true, false, true]);
+        assert_eq!(fit_chips(&chips, 19), [false, false, true]);
+        // Pinned chips go last.
+        assert_eq!(fit_chips(&chips, 8), [false, false, true]);
+        assert_eq!(fit_chips(&chips, 7), [false; 3]);
     }
 }
