@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 
-use mira_protocol::ids::{ActionRef, LogSeq, RunId};
+use mira_protocol::ids::{LogSeq, RunId};
 use mira_protocol::ipc::LogPage;
 use mira_protocol::run::LogRecord;
 use unicode_segmentation::UnicodeSegmentation;
@@ -29,7 +29,6 @@ pub enum Viewport {
 }
 
 pub struct LogPane {
-    pub action_ref: ActionRef,
     pub run_id: Option<RunId>,
     pub records: VecDeque<LogRecord>,
     pub loading: bool,
@@ -55,10 +54,15 @@ pub struct LogPane {
     pub width: usize,
 }
 
+impl Default for LogPane {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LogPane {
-    pub fn new(action_ref: ActionRef) -> Self {
+    pub fn new() -> Self {
         Self {
-            action_ref,
             run_id: None,
             records: VecDeque::new(),
             loading: false,
@@ -83,7 +87,7 @@ impl LogPane {
     pub fn reset(&mut self, run_id: Option<RunId>) {
         let (wrap, hscroll) = (self.wrap, self.hscroll);
         let (height, width) = (self.height, self.width);
-        *self = Self::new(self.action_ref.clone());
+        *self = Self::new();
         self.run_id = run_id;
         self.wrap = wrap;
         self.hscroll = hscroll;

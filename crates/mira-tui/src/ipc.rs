@@ -46,6 +46,8 @@ pub enum Control {
         action_ref: ActionRef,
         run_id: RunId,
     },
+    /// Stop a one-off `mira exec` run, which has no action.
+    StopRun(RunId),
     Keep,
     /// A table row action bound to the revision the user chose the row in.
     ViewAction {
@@ -64,6 +66,8 @@ pub enum Read {
     Describe(ActionRef),
     /// The run's tail; the action's current or latest run when no run is known.
     Tail(ActionRef, Option<RunId>),
+    /// The tail of one run without an action (a one-off `mira exec` run).
+    RunTail(RunId),
     Older {
         run_id: RunId,
         cursor: String,
@@ -104,9 +108,11 @@ pub enum Event {
         Option<SessionId>,
     ),
     Stopped(ActionRef, Result<StopAccepted, ErrorInfo>),
+    RunStopped(RunId, Result<StopAccepted, ErrorInfo>),
     Kept(Result<SessionData, ErrorInfo>),
     Described(ActionRef, Result<Box<ItemDescription>, ErrorInfo>),
     Tail(ActionRef, Result<LogChunk, ErrorInfo>),
+    RunTail(RunId, Result<LogChunk, ErrorInfo>),
     Older(RunId, Result<LogChunk, ErrorInfo>),
     Run(Result<Box<RunRecord>, ErrorInfo>),
     Recent(Result<RunList, ErrorInfo>),
@@ -244,6 +250,20 @@ pub async fn control_worker(
                 ));
                 lost
             }
+            Control::StopRun(run_id) => {
+                let params = RunStopParams {
+                    target: RunTarget::Run {
+                        run_id: run_id.clone(),
+                    },
+                };
+                let res = call::<_, StopAccepted>(&mut client, Method::RunStop, &params).await;
+                let lost = matches!(res, Err(Failure::Lost(_)));
+                let _ = tx.send(Event::RunStopped(
+                    run_id,
+                    res.map(|a| a.data).map_err(|f| f.info()),
+                ));
+                lost
+            }
             Control::ViewAction {
                 view_ref,
                 action,
@@ -376,6 +396,21 @@ pub async fn read_worker(
                     note(f);
                 }
                 let _ = tx.send(Event::Tail(action_ref, res.map_err(|f| f.info())));
+            }
+            Read::RunTail(run_id) => {
+                let params = LogReadParams {
+                    target: RunTarget::Run {
+                        run_id: run_id.clone(),
+                    },
+                    cursor: None,
+                    limit: Some(TAIL_LIMIT),
+                    max_bytes: Some(TAIL_BYTES),
+                };
+                let res = call(&mut client, Method::LogRead, &params).await.map(chunk);
+                if let Err(f) = &res {
+                    note(f);
+                }
+                let _ = tx.send(Event::RunTail(run_id, res.map_err(|f| f.info())));
             }
             Read::Older { run_id, cursor } => {
                 let params = LogReadParams {
