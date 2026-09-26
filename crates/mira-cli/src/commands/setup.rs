@@ -131,7 +131,7 @@ const TEXT_FACTS: usize = 40;
 fn render(r: &SetupReport) -> String {
     let Some(root) = &r.selected_root else {
         let searched = r.searched.as_ref().map_or("", |s| s.as_str());
-        let mut s = format!("no workspace selected at {searched}");
+        let mut s = format!("no project selected at {searched}");
         match r.candidates.len() {
             0 => s.push_str("\n  no candidate projects found; pass --project PATH"),
             n => {
@@ -148,7 +148,7 @@ fn render(r: &SetupReport) -> String {
         _ => "not set up",
     };
     let reason = r.reason.as_ref().map(json_name).unwrap_or_default();
-    let mut s = format!("workspace {root} ({reason}, {state})");
+    let mut s = format!("project {root} ({reason}, {state})");
 
     let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
     for f in &r.facts {

@@ -19,7 +19,7 @@ use output::Mode;
     about = "A local control center for everything you run, built entirely from plugins."
 )]
 struct Cli {
-    /// Select the workspace explicitly.
+    /// Select the project explicitly.
     #[arg(long, global = true, value_name = "PATH")]
     project: Option<PathBuf>,
     /// Print exactly one JSON reply object (default when stdout is not a TTY).
@@ -36,14 +36,14 @@ struct Cli {
 enum Command {
     /// Print a raw JSON Schema: workspace, plugin, local, invocation, plugin-event, cli-reply, ipc.
     Schema { name: String },
-    /// Validate a draft directory, workspace.json, or plugin.json without executing anything.
+    /// Check a .mira draft, workspace.json, or plugin.json without running anything.
     Validate {
         #[arg(value_name = "DRAFT_DIR")]
         path: PathBuf,
     },
-    /// Current session, active runs, and storage/config warnings.
+    /// Show the session, active runs, schedules, and warnings.
     Status,
-    /// Bounded tool catalog (default 30 items within 32 KiB; continue with --after).
+    /// List this project's tools.
     Catalog {
         /// Search words. An item matches when any word matches its ref, id, title, tags,
         /// or description. Results rank by exact ref or id, exact title, ref/id/title
@@ -54,9 +54,10 @@ enum Command {
         /// Return not_modified when the catalog revision still equals N.
         #[arg(long, value_name = "N")]
         if_revision: Option<u64>,
-        /// With --if-revision: the workspace ID the cached catalog came from.
+        /// With --if-revision: the project ID the cached catalog came from.
         #[arg(long, value_name = "WORKSPACE_ID", requires = "if_revision")]
         if_workspace: Option<String>,
+        /// Items per page (default 30).
         #[arg(long)]
         limit: Option<u32>,
         /// Continue from the previous reply's meta.next_cursor.
@@ -66,42 +67,48 @@ enum Command {
         #[arg(long)]
         max_bytes: Option<u32>,
     },
-    /// Purpose, inputs, and invocation hints of one plugin.item.
+    /// Show what one tool does, its inputs, and how to run it.
     Describe {
+        /// The tool as plugin.item, such as dev.web.
         #[arg(value_name = "REF")]
         item: String,
+        /// Include the input and output JSON Schemas.
         #[arg(long)]
         include_schema: bool,
         /// Reply budget; schemas that do not fit are returned by payload reference.
         #[arg(long)]
         max_bytes: Option<u32>,
     },
-    /// This workspace's config, state, log, cache, and runtime locations.
+    /// Show where this project's config, state, logs, cache, and runtime files are.
     Paths,
-    /// Check the Core, configuration, socket, and required executables.
+    /// Check the project, plugins, and required programs.
     Doctor,
-    /// Run a task; waits for the result unless --no-wait (which needs a session).
+    /// Run a task and wait for the result (--no-wait needs a session).
     Run {
         #[arg(value_name = "ACTION")]
         action: String,
         /// JSON object input file, or `-` for stdin.
         #[arg(long, value_name = "FILE")]
         input: Option<String>,
+        /// Return once the run started; it keeps running in the session.
         #[arg(long)]
         no_wait: bool,
+        /// Run at most once per key; a repeat returns the first run.
         #[arg(long, value_name = "KEY")]
         request_key: Option<String>,
     },
-    /// Start a process, or reuse the running instance with the same input.
+    /// Start a service, or reuse the running one with the same input.
     Start {
         #[arg(value_name = "ACTION")]
         action: String,
+        /// JSON object input file, or `-` for stdin.
         #[arg(long, value_name = "FILE")]
         input: Option<String>,
+        /// Start at most once per key; a repeat returns the first run.
         #[arg(long, value_name = "KEY")]
         request_key: Option<String>,
     },
-    /// Stop one managed run (by run ID or action ref).
+    /// Stop one run (by run ID or action ref).
     Stop {
         /// A run ID, a unique prefix of one (such as r_fb60aacf), or an action ref.
         #[arg(value_name = "RUN_OR_ACTION")]
@@ -114,10 +121,11 @@ enum Command {
     Restart {
         #[arg(value_name = "ACTION")]
         action: String,
+        /// JSON object input file, or `-` for stdin.
         #[arg(long, value_name = "FILE")]
         input: Option<String>,
     },
-    /// Run an ad-hoc command through the managed task path (not saved to the catalog).
+    /// Run a one-off command (not saved as a plugin).
     Exec {
         #[arg(long)]
         label: String,
@@ -126,51 +134,64 @@ enum Command {
         #[arg(last = true, required = true, value_name = "ARGV")]
         argv: Vec<String>,
     },
-    /// Keep a session running without an open TUI, until the TTL or `mira down`.
+    /// Keep work running without an open window, until the time limit or `mira down`.
     Up {
+        /// Required: run the session in the background.
         #[arg(long)]
         background: bool,
+        /// How long to keep it: 30m, 2h, 1d, or none.
         #[arg(long, default_value = "2h")]
         ttl: String,
     },
-    /// Keep the existing session running in the background.
+    /// Keep the current session running in the background.
     Keep {
+        /// How long to keep it: 30m, 2h, 1d, or none.
         #[arg(long, default_value = "2h")]
         ttl: String,
     },
-    /// Stop the workspace session and the work it owns (no data is deleted).
+    /// Stop everything this project runs (no data is deleted).
     Down {
+        /// Wait until everything stopped.
         #[arg(long)]
         wait: bool,
     },
-    /// Recent runs, or one run's details.
+    /// List recent runs, or show one run.
     Runs {
         /// Show one run: its ID or a unique prefix of it (such as r_fb60aacf).
         #[arg(value_name = "RUN")]
         run: Option<String>,
+        /// Only runs of this action.
         #[arg(long, value_name = "REF")]
         action: Option<String>,
+        /// Only runs with this outcome: succeeded, failed, cancelled, timed_out, interrupted.
         #[arg(long)]
         outcome: Option<String>,
+        /// Runs per page.
         #[arg(long)]
         limit: Option<u32>,
+        /// Continue from the previous reply's meta.next_cursor.
         #[arg(long, value_name = "CURSOR")]
         after: Option<String>,
+        /// Reply budget in bytes (default 32 KiB).
         #[arg(long)]
         max_bytes: Option<u32>,
     },
-    /// Bounded run output: the tail of the current or latest run by default.
+    /// Show a run's output: the end of the current or latest run by default.
     Logs {
         /// A run ID, a unique prefix of one (such as r_fb60aacf), or an action ref for its
         /// current or latest run.
         #[arg(value_name = "RUN_OR_ACTION")]
         target: String,
+        /// Read forward from this cursor instead of the end.
         #[arg(long, value_name = "CURSOR")]
         after: Option<String>,
+        /// Records per page.
         #[arg(long)]
         limit: Option<u32>,
+        /// Reply budget in bytes (default 32 KiB).
         #[arg(long)]
         max_bytes: Option<u32>,
+        /// Keep printing new records until the run ends.
         #[arg(long)]
         follow: bool,
         /// Keep only records whose text contains PATTERN (case-insensitive), in the page and
@@ -181,41 +202,50 @@ enum Command {
         #[arg(long, value_enum, value_name = "STREAM")]
         stream: Option<commands::runtime::StreamArg>,
     },
-    /// Read one page of a view with its source, revision, and freshness (never re-runs it).
+    /// Show a view with its source and age (never re-runs it).
     View {
         #[arg(value_name = "VIEW")]
         view: String,
+        /// Continue from the previous reply's meta.next_cursor.
         #[arg(long, value_name = "CURSOR")]
         after: Option<String>,
+        /// Rows or items per page.
         #[arg(long)]
         limit: Option<u32>,
+        /// Reply budget in bytes (default 32 KiB).
         #[arg(long)]
         max_bytes: Option<u32>,
     },
-    /// Publish one MPP view frame to VIEW; needs no session for `last` views.
+    /// Publish an update to a view. No session needed.
     Publish {
         #[arg(value_name = "VIEW")]
         view: String,
         /// The frame file, or `-` for stdin.
         #[arg(long, value_name = "FILE")]
         input: String,
+        /// Refuse unless the view is still at revision N.
         #[arg(long, value_name = "N")]
         expected_view_revision: Option<u64>,
+        /// Publish at most once per key.
         #[arg(long, value_name = "KEY")]
         request_key: Option<String>,
     },
-    /// Run a table row action with input bound from that row at the given view revision.
+    /// Run a table row action with input taken from that row.
     ViewAction {
+        /// The table view, as plugin.view.
         #[arg(value_name = "VIEW")]
         view: String,
+        /// The row action ID, as listed by `mira describe VIEW`.
         #[arg(value_name = "ACTION")]
         action: String,
+        /// The row ID.
         #[arg(long, value_name = "ROW")]
         row: String,
+        /// The view revision you read the row at; a changed view is refused.
         #[arg(long, value_name = "N")]
         expected_view_revision: u64,
     },
-    /// List registered artifacts (optionally of one run), or read one as bounded text.
+    /// List saved run outputs (artifacts), or read one.
     #[command(args_conflicts_with_subcommands = true)]
     Artifacts {
         #[arg(value_name = "RUN")]
@@ -223,12 +253,12 @@ enum Command {
         #[command(subcommand)]
         read: Option<ArtifactsCommand>,
     },
-    /// Read host-held payloads referenced by meta.payload or result.payload.
+    /// Read the rest of a large reply.
     Payload {
         #[command(subcommand)]
         command: PayloadCommand,
     },
-    /// Accept a draft definition set (validate first; the catalog revision must match).
+    /// Apply a validated draft of .mira.
     Apply {
         #[arg(value_name = "DRAFT_DIR")]
         draft: PathBuf,
@@ -238,9 +268,9 @@ enum Command {
         #[arg(long, value_name = "KEY")]
         request_key: Option<String>,
     },
-    /// Re-validate `.mira` from disk; accept it only when valid.
+    /// Load .mira again from disk; keep the old plugins if it is not valid.
     Reload,
-    /// Turn an action's interval schedule on or off (runs only inside a session).
+    /// Turn an action's schedule on or off (it runs only while a session is open).
     Schedule {
         #[arg(value_name = "ACTION")]
         action: String,
@@ -264,8 +294,6 @@ enum Command {
     },
     /// Type into an interactive (PTY) run; prints the screen after the program reacts.
     ///
-    /// Usage: mira input RUN (--text TEXT | --key KEY) [--expected-screen-revision N]
-    ///
     /// Inside `input`, --text is the input text, not the output-mode flag; output is JSON
     /// unless stdout is a terminal.
     /// Each call takes the input lock for that one write and fails with INPUT_BUSY while
@@ -277,12 +305,15 @@ enum Command {
     /// when the screen moved past revision N (read it with `mira terminal RUN`).
     /// Example: mira run dev.prompt --no-wait; mira terminal RUN;
     ///          mira input RUN --text Ada; mira input RUN --key enter
-    #[command(verbatim_doc_comment)]
+    #[command(
+        verbatim_doc_comment,
+        override_usage = "mira input <RUN_OR_ACTION> (--text TEXT | --key KEY) [--expected-screen-revision N]"
+    )]
     Input {
         /// A run ID, a unique prefix of one (such as r_fb60aacf), or an action ref.
         #[arg(value_name = "RUN_OR_ACTION")]
         run: String,
-        /// Given as `--text TEXT` (see the usage above).
+        /// Given as `--text TEXT` (see the usage).
         #[arg(
             long = "input-text",
             value_name = "TEXT",
@@ -298,25 +329,25 @@ enum Command {
         #[arg(long, value_name = "N")]
         expected_screen_revision: Option<u64>,
     },
-    /// Storage usage, retention cleanup, and explicit private-state clearing.
+    /// Show disk use, clean up old data, or clear a plugin's state.
     Storage {
         #[command(subcommand)]
         command: StorageCommand,
     },
-    /// Install or update the bundled agent skills in this workspace.
+    /// Install or update the agent skills in this project.
     Skills {
         #[command(subcommand)]
         command: SkillsCommand,
     },
-    /// Internal: serve the workspace host.
+    /// Internal: serve the project host.
     #[command(name = "__host", hide = true)]
     Host {
         #[arg(long)]
         root: PathBuf,
     },
-    /// Report bounded, read-only project facts for the setup skill; never runs project code.
-    /// In a terminal: install the agent skills and print the prompt for your agent.
-    /// With --json (agents): read-only project facts.
+    /// In a terminal: install the agent skills and print a prompt for your agent. With --json: project facts.
+    ///
+    /// It never runs project code.
     Setup {
         /// Rescan even when the discovery cache is still valid.
         #[arg(long)]
@@ -412,7 +443,7 @@ enum GcKindArg {
 
 #[derive(Subcommand)]
 enum StorageCommand {
-    /// Managed usage by category and budget; `--all` also lists other workspaces (observe only).
+    /// Show disk use by category; `--all` also lists other projects.
     Status {
         #[arg(long)]
         all: bool,

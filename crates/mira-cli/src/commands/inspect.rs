@@ -12,6 +12,7 @@ use mira_protocol::manifest::Runner;
 use mira_protocol::paths::{WorkspacePaths, current_uid};
 use mira_protocol::reply::{PublicReply, ReplyContext, ReplyMeta};
 use mira_protocol::run::Lifecycle;
+use mira_protocol::workspace::SelectionReason;
 use serde::Serialize;
 
 use super::ctx::{Ctx, block_on};
@@ -21,14 +22,49 @@ pub fn lc<T: std::fmt::Debug>(v: &T) -> String {
     format!("{v:?}").to_lowercase()
 }
 
+/// The serde name of a simple enum with spaces for underscores: `timed out`, `state db`.
+pub fn words<T: Serialize>(v: &T) -> String {
+    serde_json::to_value(v)
+        .ok()
+        .and_then(|v| v.as_str().map(|s| s.replace('_', " ")))
+        .unwrap_or_default()
+}
+
 pub fn lifecycle_text(l: &Lifecycle) -> String {
     match l {
         Lifecycle::Starting => "starting".into(),
         Lifecycle::Running => "running".into(),
-        Lifecycle::Stopping { reason } => format!("stopping ({reason:?})").to_lowercase(),
-        Lifecycle::Finished { outcome } => format!("finished: {outcome:?}").to_lowercase(),
+        Lifecycle::Stopping { reason } => format!("stopping ({})", words(reason)),
+        Lifecycle::Finished { outcome } => format!("finished: {}", words(outcome)),
     }
 }
+
+/// `service` for process actions, `task` for tasks.
+pub fn mode_text(m: mira_protocol::manifest::ActionMode) -> &'static str {
+    match m {
+        mira_protocol::manifest::ActionMode::Process => "service",
+        mira_protocol::manifest::ActionMode::Task => "task",
+    }
+}
+
+pub fn path_label(c: PathClass) -> &'static str {
+    match c {
+        PathClass::WorkspaceConfig => "project config",
+        PathClass::Plugins => "plugins",
+        PathClass::LocalConfig => "local config",
+        PathClass::Discovery => "setup cache",
+        PathClass::Drafts => "drafts",
+        PathClass::StateDb => "state database",
+        PathClass::FingerprintKey => "fingerprint key",
+        PathClass::PluginState => "plugin state",
+        PathClass::Artifacts => "artifacts",
+        PathClass::Logs => "logs",
+        PathClass::HostLog => "host log",
+        PathClass::Cache => "cache",
+        PathClass::Runtime => "runtime files",
+    }
+}
+
 
 pub fn status(ctx: &Ctx) -> ExitCode {
     block_on(async {
@@ -38,18 +74,7 @@ pub fn status(ctx: &Ctx) -> ExitCode {
         };
         match client.status().await {
             Ok(reply) => ctx.emit(&reply, |s| {
-                let mut out = match &s.session {
-                    None => "session: none".to_owned(),
-                    Some(se) => format!(
-                        "session: {} {}, {} controller(s){}",
-                        lc(&se.mode),
-                        lc(&se.state),
-                        se.controller_count,
-                        se.expires_at
-                            .map(|t| format!(", expires {t}"))
-                            .unwrap_or_default()
-                    ),
-                };
+                let mut out = crate::human::session_line(s.session.as_ref());
                 if s.runs.is_empty() {
                     out.push_str("\nruns: none active");
                 }
@@ -132,6 +157,13 @@ pub fn catalog(ctx: &Ctx, args: CatalogArgs) -> ExitCode {
         {
             Ok(reply) => {
                 let not_modified = reply.meta().not_modified;
+                let more = match (&reply.meta().next_cursor, ctx.mode) {
+                    (Some(cursor), crate::output::Mode::Text) => {
+                        let n = count_rest(&mut client, &p, cursor.clone()).await;
+                        Some((n, cursor.clone()))
+                    }
+                    _ => None,
+                };
                 ctx.emit(&reply, |c| {
                     if not_modified {
                         return "catalog not modified".to_owned();
@@ -143,11 +175,9 @@ pub fn catalog(ctx: &Ctx, args: CatalogArgs) -> ExitCode {
                         .iter()
                         .map(|i| {
                             let kind = match &i.item {
-                                CatalogItemKind::Action { mode } => {
-                                    format!("{mode:?}").to_lowercase()
-                                }
+                                CatalogItemKind::Action { mode } => mode_text(*mode).to_owned(),
                                 CatalogItemKind::View { view_kind } => {
-                                    format!("view:{view_kind:?}").to_lowercase()
+                                    format!("{} view", words(view_kind))
                                 }
                             };
                             format!(
@@ -160,11 +190,48 @@ pub fn catalog(ctx: &Ctx, args: CatalogArgs) -> ExitCode {
                         })
                         .collect::<Vec<_>>()
                         .join("\n")
+                        + &more
+                            .map(|(n, cursor)| format!("\n{n} more: mira catalog --after {cursor}"))
+                            .unwrap_or_default()
                 })
             }
             Err(e) => ctx.fail(client.context(), e.to_error_info()),
         }
     })
+}
+
+/// Counts the catalog items after `cursor` for the `N more` line (text mode only).
+async fn count_rest(client: &mut mira_client::Client, p: &CatalogListParams, cursor: String) -> String {
+    let mut n = 0usize;
+    let mut next = Some(cursor);
+    for _ in 0..20 {
+        let Some(c) = next.take() else {
+            return n.to_string();
+        };
+        let page = CatalogListParams {
+            query: p.query.clone(),
+            if_revision: None,
+            if_workspace: None,
+            cursor: Some(c),
+            limit: Some(200),
+            max_bytes: Some(256 * 1024),
+        };
+        match client
+            .call::<_, CatalogList>(Method::CatalogListM, &page)
+            .await
+        {
+            Ok(r) if r.is_ok() => {
+                n += r.data().map_or(0, |d| d.items.len());
+                next = r.meta().next_cursor.clone();
+            }
+            _ => break,
+        }
+    }
+    if next.is_some() || n == 0 {
+        format!("{n}+")
+    } else {
+        n.to_string()
+    }
 }
 
 pub fn describe(ctx: &Ctx, item: String, include_schema: bool, max_bytes: Option<u32>) -> ExitCode {
@@ -193,38 +260,84 @@ pub fn describe(ctx: &Ctx, item: String, include_schema: bool, max_bytes: Option
             )
             .await
         {
-            Ok(reply) => ctx.emit(&reply, |d| {
+            Ok(reply) => {
+                let schedule = match reply.data() {
+                    Some(d)
+                        if ctx.mode == crate::output::Mode::Text
+                            && d.action.as_ref().is_some_and(|a| a.has_schedule) =>
+                    {
+                        Some(schedule_line(ctx, &mut client, &d.item.item_ref.to_string()).await)
+                    }
+                    _ => None,
+                };
+                ctx.emit(&reply, |d| {
                 let mut s = format!(
                     "{}  {}\n  {}\n  plugin: {} ({})",
                     d.item.item_ref, d.item.title, d.item.description, d.plugin.name, d.plugin.id
                 );
                 if let Some(a) = &d.action {
-                    s.push_str(
-                        &format!(
-                            "\n  {:?} via {} runner, terminal {:?}, cwd {}",
-                            a.mode, a.runner, a.terminal, a.cwd
-                        )
-                        .to_lowercase(),
-                    );
+                    s.push_str(&format!(
+                        "\n  {} ({} runner), terminal {}, cwd {}",
+                        mode_text(a.mode),
+                        a.runner,
+                        words(&a.terminal),
+                        a.cwd
+                    ));
+                    if let Some(line) = &schedule {
+                        s.push_str(&format!("\n  schedule: {line}"));
+                    }
                     if !a.effects.is_empty() {
                         s.push_str(&format!("\n  effects: {}", a.effects.join(", ")));
                     }
                 }
                 if let Some(v) = &d.view {
-                    s.push_str(
-                        &format!(
-                            "\n  view kind {:?}, persistence {:?}",
-                            v.view_kind, v.persistence
-                        )
-                        .to_lowercase(),
-                    );
+                    s.push_str(&format!(
+                        "\n  {} view, kept {}",
+                        words(&v.view_kind),
+                        match v.persistence {
+                            mira_protocol::manifest::Persistence::Session => "for the session",
+                            mira_protocol::manifest::Persistence::Last => "until replaced",
+                        }
+                    ));
                 }
                 s.push_str(&format!("\n  try: {}", d.invoke_hint.join(" ")));
                 s
-            }),
+            })
+            }
             Err(e) => ctx.fail(client.context(), e.to_error_info()),
         }
     })
+}
+
+/// `every 24h, off`: the interval from the accepted schedule state, or from the definition
+/// on disk when the switch was never set.
+async fn schedule_line(ctx: &Ctx, client: &mut mira_client::Client, action: &str) -> String {
+    let known = match client.status().await {
+        Ok(r) => r
+            .data()
+            .and_then(|s| s.schedules.iter().find(|x| x.action_ref.to_string() == action))
+            .map(|x| (x.every_ms, x.enabled)),
+        Err(_) => None,
+    };
+    let every = known.map(|(ms, _)| ms).or_else(|| {
+        let paths = ctx.paths().ok()?;
+        let Ok(mira_protocol::config::Draft::Workspace(set)) = validate_draft(&paths.mira_dir)
+        else {
+            return None;
+        };
+        set.plugins.iter().find_map(|lp| {
+            lp.plugin.actions.iter().find_map(|a| {
+                (format!("{}.{}", lp.plugin.id, a.id) == action)
+                    .then(|| a.schedule.as_ref().map(|s| s.every_ms))
+                    .flatten()
+            })
+        })
+    });
+    let on = if known.is_some_and(|(_, on)| on) { "on" } else { "off" };
+    match every {
+        Some(ms) => format!("{}, {on}", crate::human::interval(ms)),
+        None => on.to_owned(),
+    }
 }
 
 pub fn paths(ctx: &Ctx) -> ExitCode {
@@ -248,7 +361,7 @@ pub fn paths(ctx: &Ctx) -> ExitCode {
             .map(|e| {
                 format!(
                     "{:<16} {}\n                 {}",
-                    format!("{:?}", e.class).to_lowercase(),
+                    path_label(e.class),
                     e.path,
                     e.purpose
                 )
@@ -307,6 +420,16 @@ pub fn doctor(ctx: &Ctx) -> ExitCode {
             Ok(s) => s,
             Err(e) => return ctx.fail(ReplyContext::default(), e),
         };
+        let project_text = format!(
+            "{} ({})",
+            selected.root,
+            match selected.reason {
+                SelectionReason::ExplicitProject => "chosen with --project",
+                SelectionReason::MiraConfig => "has .mira/workspace.json",
+                SelectionReason::GitWorktree => "git repository root",
+                SelectionReason::ProjectManifest => "has a project manifest",
+            }
+        );
         push(
             "workspace",
             CheckStatus::Ok,
@@ -420,7 +543,17 @@ pub fn doctor(ctx: &Ctx) -> ExitCode {
                         CheckStatus::Warn => "warn",
                         CheckStatus::Fail => "FAIL",
                     };
-                    format!("[{tag}] {:<12} {}", c.name, c.message)
+                    let ok = matches!(c.status, CheckStatus::Ok);
+                    let (label, message) = match c.name.as_str() {
+                        "workspace" => ("project", project_text.clone()),
+                        "config" => ("plugins", c.message.clone()),
+                        "runtime_dir" => ("runtime files", c.message.clone()),
+                        "host" if ok => ("Mira", "Mira is running.".to_owned()),
+                        "host" => ("Mira", c.message.clone()),
+                        "executable" => ("program", c.message.clone()),
+                        other => (other, c.message.clone()),
+                    };
+                    format!("[{tag}] {label:<13} {message}")
                 })
                 .collect::<Vec<_>>()
                 .join("\n")

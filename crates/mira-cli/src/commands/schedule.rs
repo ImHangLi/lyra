@@ -17,11 +17,13 @@ pub enum Switch {
 
 pub fn text(d: &ScheduleData) -> String {
     format!(
-        "{}  every {} ms  {}{}{}",
+        "{}  {}, {}{}{}",
         d.action_ref,
-        d.every_ms,
+        crate::human::interval(d.every_ms),
         if d.enabled { "on" } else { "off" },
-        d.next_at.map(|t| format!(", next {t}")).unwrap_or_default(),
+        d.next_at
+            .map(|t| format!(", next at {}", crate::human::clock_seconds(t)))
+            .unwrap_or_default(),
         if d.missed_ticks > 0 {
             format!(", {} tick(s) skipped while busy", d.missed_ticks)
         } else {

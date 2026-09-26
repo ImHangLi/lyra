@@ -30,11 +30,14 @@ pub fn status(ctx: &Ctx, all: bool) -> ExitCode {
             .await
         {
             Ok(r) => ctx.emit(&r, |d| {
-                let mut s = format!("schema v{}, SQLite {}", d.schema_version, d.sqlite_version);
+                let mut s = format!(
+                    "storage version {}, SQLite {}",
+                    d.schema_version, d.sqlite_version
+                );
                 for u in &d.usage {
                     s.push_str(&format!(
                         "\n  {:<16} {:>10}{}{}",
-                        lc(&u.class),
+                        super::inspect::path_label(u.class),
                         mib(u.bytes),
                         u.records
                             .map(|n| format!("  {n} record(s)"))
@@ -49,7 +52,7 @@ pub fn status(ctx: &Ctx, all: bool) -> ExitCode {
                 }
                 for o in &d.other_workspaces {
                     s.push_str(&format!(
-                        "\nother {}: state {}, logs {}, cache {}",
+                        "\nother project {}: state {}, logs {}, cache {}",
                         o.id,
                         mib(o.state_bytes),
                         mib(o.log_bytes),

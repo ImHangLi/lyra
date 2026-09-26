@@ -142,6 +142,21 @@ pub fn cleanup_failure(c: &CleanupState) -> Option<String> {
     }
 }
 
+/// A run note in plain words: host protocol errors become `invalid plugin output: ...`.
+pub fn note_text(note: &str) -> String {
+    match note
+        .strip_prefix("protocol error [")
+        .and_then(|r| r.split_once("]: "))
+    {
+        Some((_, detail)) => {
+            let detail = detail.strip_suffix(" at ``").unwrap_or(detail);
+            let detail = detail.strip_prefix("invalid MPP/1 frame: ").unwrap_or(detail);
+            format!("invalid plugin output: {detail}")
+        }
+        None => note.to_owned(),
+    }
+}
+
 /// How long a run took (or has been running).
 pub fn run_duration(r: &RunRecord) -> String {
     let end = r.ended_at.unwrap_or_else(Timestamp::now);
@@ -171,6 +186,15 @@ mod tests {
         assert_eq!(duration(310_000), "5m10s");
         assert_eq!(duration(7_140_000), "1h59m");
         assert_eq!(duration(86_400_000), "24h");
+    }
+
+    #[test]
+    fn protocol_notes_say_invalid_plugin_output() {
+        assert_eq!(
+            note_text("protocol error [INVALID_FRAME]: invalid MPP/1 frame: EOF at ``"),
+            "invalid plugin output: EOF"
+        );
+        assert_eq!(note_text("the host restarted"), "the host restarted");
     }
 
     #[test]
