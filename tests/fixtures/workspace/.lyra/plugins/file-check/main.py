@@ -63,9 +63,11 @@ def main() -> int:
         for index, name in enumerate(paths):
             if not isinstance(name, str) or not 1 <= len(name) <= 4096 or "\x00" in name:
                 raise ValueError("Each path must be a nonempty file name")
-            path = Path(name)
-            if not path.is_absolute():
-                path = cwd / path
+            # Only files inside the workspace: absolute paths and `..` escapes are rejected, so
+            # the tool never reports on files elsewhere on the machine.
+            path = (cwd / name).resolve()
+            if Path(name).is_absolute() or not path.is_relative_to(cwd.resolve()):
+                raise ValueError(f"{name!r} is outside the workspace")
             try:
                 info = path.stat()
             except FileNotFoundError:
