@@ -118,7 +118,7 @@ pub fn session_line(s: Option<&SessionInfo>) -> String {
             let left = if left < 60_000 {
                 "under 1m".to_owned()
             } else {
-                duration(left - left % 60_000)
+                duration(left.div_ceil(60_000) * 60_000)
             };
             format!("session: background, stops at {} (in {left})", clock(t))
         }
