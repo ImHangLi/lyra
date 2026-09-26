@@ -7,7 +7,7 @@ description: Set up, discover, run, read, and stop a project's tools through the
 
 Lyra runs a project's commands for you and the human through one host per workspace. The human uses the TUI (`lyra`); you use the CLI. Both see the same runs, logs, and views. Never start project services outside Lyra when a Lyra action exists for them.
 
-Every command prints exactly one JSON reply with `--json` (the default without a TTY): `{ok, data, error, meta, catalog_revision, state_revision, ...}`. On failure read `error.code`, `error.message`, and `error.next_action`; do not guess.
+Every command prints exactly one JSON reply with `--json` (the default without a TTY): `{ok, data, error, meta, catalog_revision, state_revision, ...}`. On failure read `error.code`, `error.message`, and `error.next_action`; do not guess. Without a session the host exits when idle and a new one starts on the next command, so `host_epoch` changes; compare `state_revision` values only within one `host_epoch`.
 
 ## Start of a task
 

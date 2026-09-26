@@ -1,6 +1,6 @@
 # Manifest reference (api 1)
 
-Strict JSON: unknown fields, duplicate keys, and `null` for optional fields are errors. IDs match `^[a-z][a-z0-9-]{0,47}$`. `lyra schema plugin` prints the full JSON Schema.
+Strict JSON: unknown fields, duplicate keys, and `null` for optional fields are errors. IDs match `^[a-z][a-z0-9-]{0,47}$`, and action and view IDs share one namespace per plugin. `lyra schema plugin` prints the full JSON Schema.
 
 ## `.lyra/workspace.json`
 
@@ -27,9 +27,9 @@ Strict JSON: unknown fields, duplicate keys, and `null` for optional fields are 
 | Field | Default / rule |
 |---|---|
 | `id`, `title`, `description`, `mode` | required; `mode` is `task` (ends) or `process` (keeps running) |
-| `run` | `{"kind":"command","argv":[...]}` or `{"kind":"plugin"}` |
+| `run` | `{"kind":"command","argv":[...]}` or `{"kind":"plugin"}`; argv is never templated, so input arrives only through `LYRA_INPUT_FILE` |
 | `cwd` | `.` = workspace root; relative to the root |
-| `env_files`, `env` | layered after the caller's env; `LYRA_*` names are reserved |
+| `env_files`, `env` | layered after the caller's env (the CLI's or the TUI's shell, including `PATH`); `LYRA_*` names are reserved |
 | `input_schema` | JSON Schema 2020-12 with an object root; top-level `default`s are filled for CLI and TUI alike; `writeOnly` fields are never echoed |
 | `output_schema` | validates a successful structured result's `data` |
 | `timeout` | tasks default `{"kind":"after","ms":300000}`, processes `{"kind":"none"}`; never `null` |

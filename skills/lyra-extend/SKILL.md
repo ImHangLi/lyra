@@ -10,7 +10,7 @@ A plugin is a directory with `plugin.json` and optional scripts. New capability 
 ## 1. Reuse before creating
 
 ```sh
-lyra catalog --search "words from the request" --json
+lyra catalog --search "one or two distinctive words" --json
 lyra describe PLUGIN.ITEM --include-schema --json
 ```
 
@@ -29,11 +29,15 @@ Pass argv as a list; there is no implicit shell. If you need a shell, write `["/
 
 Saving a command that worked (`lyra exec … -- ARGV`): turn it into a command action with a clear `title`, a `description` that says what problem it solves, the right `cwd`, and an `input_schema` for the parts that change between uses.
 
+Command actions do not template `argv`: input reaches the child only as JSON in `LYRA_INPUT_FILE`. When arguments change between uses (a port, a test path), point the action at a small wrapper in the plugin directory that reads the input and runs the command with a list of arguments: see [with_input.py](templates/command/with_input.py) and the `serve-on-port` action in the [command template](templates/command/plugin.json).
+
 ## 3. Write it
 
 Work in a draft: copy `.lyra` to `.lyra/.drafts/<name>/` (without `.drafts`), edit there, and add the plugin path to `workspace.json` `plugins` if it is new. Field reference: [manifest](references/manifest.md). Structured output: [LPP/1 and views](references/protocol.md). Starting points: [command template](templates/command/plugin.json), [structured template](templates/structured/).
 
 Rules that matter:
+- Action IDs and view IDs share one namespace inside a plugin: an action `slowest` and a view `slowest` conflict.
+- Relative paths: a command's `argv` and `cwd` resolve from the workspace root (`cwd` defaults to `.`); a structured plugin's `entry` runs in the plugin directory. Use `LYRA_WORKSPACE_ROOT` for project paths inside scripts.
 - stdout of a structured plugin carries only protocol frames; debug output goes to stderr. Exactly one `result` frame, last, for tasks; none for processes.
 - Keep secrets out of stdout, views, and manifests. Put required env names in the docs; values come from the user's environment or `env_files`.
 - Write private files to `LYRA_STATE_DIR`, rebuildable files to `LYRA_CACHE_DIR`, run outputs to `LYRA_ARTIFACT_DIR`. Never scatter logs in the repo.

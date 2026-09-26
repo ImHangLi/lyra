@@ -37,11 +37,32 @@ An invalid update is rejected whole and the previous data stays (marked stale). 
 
 ```python
 import json, sys
+
 req = json.loads(sys.stdin.readline())
-def emit(frame): print(json.dumps({"api": 1, **frame}), flush=True)
+
+
+def emit(frame):
+    print(json.dumps({"api": 1, **frame}), flush=True)
+
+
 rows = [{"id": "1", "values": {"name": "example", "count": 3}}]
-emit({"type": "view", "view_id": "items", "op": "replace", "data": {"kind": "table",
-      "columns": [{"id": "name", "label": "Name", "type": "text"}, {"id": "count", "label": "Count", "type": "number"}],
-      "rows": rows}})
-emit({"type": "result", "ok": True, "summary": f"{len(rows)} item(s)", "data": {"items": len(rows)}})
+emit({
+    "type": "view",
+    "view_id": "items",
+    "op": "replace",
+    "data": {
+        "kind": "table",
+        "columns": [
+            {"id": "name", "label": "Name", "type": "text"},
+            {"id": "count", "label": "Count", "type": "number"},
+        ],
+        "rows": rows,
+    },
+})
+emit({
+    "type": "result",
+    "ok": True,
+    "summary": f"{len(rows)} item(s)",
+    "data": {"items": len(rows)},
+})
 ```
