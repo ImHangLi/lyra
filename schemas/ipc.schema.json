@@ -1330,7 +1330,6 @@
         "workspace_config",
         "plugins",
         "local_config",
-        "discovery",
         "drafts",
         "state_db",
         "fingerprint_key",
@@ -2414,6 +2413,14 @@
         "plugin",
         "cli",
         "hook"
+      ],
+      "type": "string"
+    },
+    "SourceStream": {
+      "description": "Which output streams a derived log view keeps.",
+      "enum": [
+        "stdout",
+        "stderr"
       ],
       "type": "string"
     },
@@ -3669,6 +3676,10 @@
           },
           "type": "array"
         },
+        "source": {
+          "$ref": "#/$defs/ViewSourceWire",
+          "description": "Set for a log view the host derives from another action's run log."
+        },
         "view_kind": {
           "$ref": "#/$defs/ViewKind"
         }
@@ -3835,6 +3846,28 @@
         "definition_hash",
         "freshness",
         "durability"
+      ],
+      "type": "object"
+    },
+    "ViewSourceWire": {
+      "additionalProperties": false,
+      "description": "A log view the host derives from another action's run log; no plugin process runs.",
+      "properties": {
+        "grep": {
+          "description": "Keep only lines that contain this text, ignoring case.",
+          "type": "string"
+        },
+        "logs": {
+          "$ref": "#/$defs/ItemRef",
+          "description": "`PLUGIN.ACTION` whose current run (or latest run) supplies the lines."
+        },
+        "stream": {
+          "$ref": "#/$defs/SourceStream",
+          "description": "Keep only lines from this stream."
+        }
+      },
+      "required": [
+        "logs"
       ],
       "type": "object"
     },

@@ -106,7 +106,7 @@ impl WorkspacePaths {
 
     /// The public path table.
     pub fn to_data(&self) -> PathsData {
-        let rows: [(PathClass, PathBuf, &str, bool, bool); 13] = [
+        let rows: [(PathClass, PathBuf, &str, bool, bool); 12] = [
             (
                 PathClass::WorkspaceConfig,
                 self.mira_dir.join("workspace.json"),
@@ -126,13 +126,6 @@ impl WorkspacePaths {
                 self.mira_dir.join("local.json"),
                 "Personal overrides; not committed; values are not echoed",
                 false,
-                false,
-            ),
-            (
-                PathClass::Discovery,
-                self.mira_dir.join(".generated/discovery.json"),
-                "Rebuildable static discovery cache",
-                true,
                 false,
             ),
             (

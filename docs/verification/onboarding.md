@@ -26,6 +26,8 @@ Agents set up Mira on these repositories by following the installed skills liter
 
 ## Use cases
 
+The static setup scanner (`setup --json` facts) was removed after v0.7.0; agents now read the repository themselves. The discovery row below records the earlier version.
+
 | Check | Persona | Result | Evidence |
 |---|---|---|---|
 | First setup from a clean checkout (FastAPI) | A/H | pass | The agent read the skill, ran `mira setup --json`, and read the docs and scripts. It then wrote 9 `dev` actions: Compose services with a `docker compose stop` cleanup (never `down -v`), prestart, backend, frontend, lint, tests, and prek. It validated and applied them and appended 3 ignore rules. It reported what it could not verify. 14 turns. |

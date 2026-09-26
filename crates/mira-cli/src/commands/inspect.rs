@@ -52,7 +52,6 @@ pub fn path_label(c: PathClass) -> &'static str {
         PathClass::WorkspaceConfig => "project config",
         PathClass::Plugins => "plugins",
         PathClass::LocalConfig => "local config",
-        PathClass::Discovery => "setup cache",
         PathClass::Drafts => "drafts",
         PathClass::StateDb => "state database",
         PathClass::FingerprintKey => "fingerprint key",

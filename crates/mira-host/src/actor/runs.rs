@@ -273,6 +273,19 @@ impl Actor {
         if !issues.is_empty() {
             return Err(issues.to_error_info());
         }
+        // `{input.NAME}` placeholders in a command argv (the plugin entry is never templated).
+        let argv = match &action.run {
+            Runner::Command { .. } => {
+                let rendered = mira_protocol::template::render_argv(&argv, &effective)
+                    .map_err(|i| i.to_error_info())?;
+                let mut issues = mira_protocol::Issues::default();
+                Argv::parse(rendered, "/input", &mut issues)
+                    .ok_or_else(|| issues.to_error_info())?
+                    .as_slice()
+                    .to_vec()
+            }
+            Runner::Plugin => argv,
+        };
         let storage = self.storage.as_ref().map_err(|e| e.to_error_info())?;
         let fingerprint = storage
             .fingerprint(&json!({"input": effective, "definition_hash": action.definition_hash}));
@@ -509,6 +522,7 @@ impl Actor {
         )));
         if let Some(a) = &prep.action_ref {
             self.by_action.insert(a.clone(), run_id.clone());
+            self.derived_run_started(a, &run_id);
         }
         let claim = prep.request_key.clone().map(|key| KeyClaim {
             scope: prep.scope.clone(),
@@ -913,13 +927,17 @@ impl Actor {
                     run.record.log.first_seq.get_or_insert(first.log_seq);
                     run.record.log.last_seq = Some(last.log_seq);
                 }
+                self.derived_logs(&run_id, &records);
                 self.broadcast_logs(&run_id, records);
             }
             RunnerEvent::LogGap {
                 dropped_records,
                 first_seq,
                 last_seq,
-            } => self.broadcast_log_gap(&run_id, dropped_records, first_seq, last_seq),
+            } => {
+                self.derived_gap(&run_id);
+                self.broadcast_log_gap(&run_id, dropped_records, first_seq, last_seq)
+            }
             RunnerEvent::Frame(ev) => self.plugin_event(run_id, *ev),
             RunnerEvent::ProtocolError { error, view_hint } => {
                 self.protocol_error(&run_id, error, view_hint)
@@ -1025,6 +1043,9 @@ impl Actor {
         self.recent
             .push_front((run.record.clone(), run.log.clone()));
         self.recent.truncate(RECENT_RUNS);
+        if let Some(a) = &run.record.action_ref {
+            self.derived_run_ended(a, &run_id);
+        }
         if let Some(c) = &run.temp_controller {
             self.release_temp_controller(c);
         }

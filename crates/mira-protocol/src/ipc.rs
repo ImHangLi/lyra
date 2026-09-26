@@ -863,6 +863,14 @@ pub struct ViewDescription {
     pub view_kind: ViewKind,
     pub persistence: Persistence,
     pub row_actions: Vec<ActionId>,
+    /// Set for a log view the host derives from another action's run log.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    #[schemars(with = "crate::manifest::ViewSourceWire")]
+    pub source: Option<crate::manifest::ViewSourceWire>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1019,7 +1027,6 @@ pub enum PathClass {
     WorkspaceConfig,
     Plugins,
     LocalConfig,
-    Discovery,
     Drafts,
     StateDb,
     FingerprintKey,

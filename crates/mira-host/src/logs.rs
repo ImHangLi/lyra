@@ -20,7 +20,7 @@ const SEGMENT_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const FLUSH_BYTES: usize = 64 * 1024;
 pub const FLUSH_EVERY: Duration = Duration::from_millis(250);
 /// Recent records kept in memory for cheap tail reads and streaming.
-const RING_RECORDS: usize = 2000;
+pub const RING_RECORDS: usize = 2000;
 
 pub type SharedLog = Arc<Mutex<RunLog>>;
 

@@ -13,7 +13,7 @@ Every command prints exactly one JSON reply with `--json` (the default without a
 
 1. `mira status --json` — current session, active runs, warnings. `NEEDS_PROJECT` means pass `--project PATH`.
 2. `mira catalog --json` — the tools, 30 per page; continue with `--after "$(meta.next_cursor)"`. Remember `workspace.id` and `catalog_revision`; later use `mira catalog --if-revision N --if-workspace W --json` and reuse your copy when `meta.not_modified` is true. The cache is valid only for the same workspace and query.
-3. `NOT_SETUP` → follow [setup](references/setup.md) before anything else.
+3. `NOT_SETUP` → follow [setup](references/setup.md) before anything else: read the repository's docs, scripts, task files, Compose files, and CI config yourself, and never run project code to learn what it does.
 4. Pick a tool: `mira catalog --search "words" --json`, then `mira describe PLUGIN.ITEM --json`. Add `--include-schema` only when the inputs are unclear.
 
 ## Run work
@@ -28,7 +28,7 @@ Every command prints exactly one JSON reply with `--json` (the default without a
 | Retry safely | add `--request-key KEY`; the same key returns the original run instead of repeating side effects |
 
 - `run` exits 0 on success, 5 on failure, 6 on timeout, 130 when cancelled; `error.details` has `run_id` and the child's `exit`.
-- A service needs an owner. If the human has the TUI open, `start` works. Otherwise `SESSION_REQUIRED`: run `mira up --background --ttl 2h` only when the user wants work to keep running without the TUI, and tell them. `mira down` stops the session and its runs; it deletes no data.
+- A service needs an owner. If the human has the TUI open, `start` works. Otherwise `SESSION_REQUIRED`: run `mira up --background --ttl 2h` only when the user wants work to keep running without the TUI, and tell them. Run it again to set a new time limit. `mira down` stops the session and its runs; it deletes no data.
 - `start` returning `reused: true` means the existing instance kept its original environment. Use `restart` if you need new input or env.
 - Interactive (PTY) actions: start with `mira run ACTION --no-wait` inside a session, then loop `mira terminal RUN` → `mira input RUN --text ...` / `--key enter`. Never block on a prompt with a waiting `run`. `INPUT_BUSY` means a human holds the terminal; wait or ask.
 - If an IPC call times out, check `mira status` or `mira runs --action REF` before retrying. Do not switch request keys to force a rerun.

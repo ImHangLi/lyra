@@ -1684,6 +1684,35 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                     t.dim(),
                 ),
             ],
+            // A derived view names its source action and filter; its revision and
+            // durability are host bookkeeping, not facts for the reader.
+            Some(_) if p.source.is_some() => {
+                let src = p
+                    .source
+                    .as_ref()
+                    .map_or(String::new(), |s| s.logs.to_string());
+                let filter = p
+                    .source
+                    .as_ref()
+                    .map_or(String::new(), |s| s.filter_words());
+                let n = p.len();
+                let lines = format!(" · {n} line{}{filter}", if n == 1 { "" } else { "s" });
+                match m.freshness {
+                    Freshness::Current => vec![
+                        Span::styled("● live", t.fg(Tone::Leaf).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!(" · from {src} (running){lines}"), t.dim()),
+                    ],
+                    _ => {
+                        let ended = m
+                            .recorded_at
+                            .map_or(String::new(), |a| format!(" {}", clock(a)));
+                        vec![
+                            Span::styled(format!("○ from {src} (ended{ended})"), t.bold()),
+                            Span::styled(lines, t.dim()),
+                        ]
+                    }
+                }
+            }
             Some(rev) => {
                 let src = match (m.source_kind, &m.source_run_id) {
                     (_, Some(run)) => format!(" · from run {}", short_id(&run.to_string())),

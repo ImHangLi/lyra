@@ -236,12 +236,12 @@ impl ViewEntry {
 }
 
 /// The request side of one view page.
-struct Page<'a> {
-    source: &'a str,
-    revision: ViewRevision,
-    offset: usize,
-    limit: usize,
-    budget: usize,
+pub(super) struct Page<'a> {
+    pub(super) source: &'a str,
+    pub(super) revision: ViewRevision,
+    pub(super) offset: usize,
+    pub(super) limit: usize,
+    pub(super) budget: usize,
 }
 
 impl Actor {
@@ -365,16 +365,20 @@ impl Actor {
     ) {
         // Definition checks that need no content fail the run at once, in frame order.
         if let Some(run_id) = &source_run_id {
-            let known = self
-                .accepted()
-                .ok()
-                .and_then(|set| set.view(&view_ref).map(|(_, d)| d.kind));
+            let known = self.accepted().ok().and_then(|set| {
+                set.view(&view_ref)
+                    .map(|(_, d)| (d.kind, d.source.as_ref().map(|s| s.logs.clone())))
+            });
             let problem = match known {
                 None => Some(format!(
                     "the plugin sent view `{}`, which its manifest does not declare",
                     view_ref.view
                 )),
-                Some(kind) if kind != data.kind() => Some(
+                Some((_, Some(logs))) => Some(format!(
+                    "view `{}` is derived from the logs of `{logs}`; plugins cannot write it",
+                    view_ref.view
+                )),
+                Some((kind, None)) if kind != data.kind() => Some(
                     format!(
                         "view `{}` is a {kind:?} view; the frame carries {:?} data",
                         view_ref.view,
@@ -832,7 +836,16 @@ impl Actor {
     }
 
     pub(super) fn view_read(&mut self, p: ViewReadParams, r: Responder) {
-        let reply = match self.view_read_inner(p) {
+        let derived = self.accepted().ok().and_then(|set| {
+            set.view(&p.view_ref)
+                .filter(|(_, d)| d.source.is_some())
+                .map(|(_, d)| d.clone())
+        });
+        let read = match derived {
+            Some(def) => self.derived_read(p, &def),
+            None => self.view_read_inner(p),
+        };
+        let reply = match read {
             Ok(h) => h,
             Err(e) => self.fail(e),
         };
@@ -975,7 +988,7 @@ impl Actor {
 
     /// One page of table rows or log items within the budget. A first item that alone is
     /// too large is returned by payload reference, and the cursor moves past it.
-    fn view_page<T: Clone + serde::Serialize>(
+    pub(super) fn view_page<T: Clone + serde::Serialize>(
         &self,
         page: &Page<'_>,
         all: &[T],
@@ -1070,6 +1083,19 @@ impl Actor {
         let (_, def) = set
             .view(&p.view_ref)
             .ok_or_else(|| verr(ErrorCode::NOT_FOUND, format!("no view `{}`", p.view_ref)))?;
+        if let Some(src) = &def.source {
+            return Err(verr(
+                ErrorCode::INVALID_ARGUMENT,
+                format!(
+                    "`{}` is derived from the logs of `{}`; it cannot be published to",
+                    p.view_ref, src.logs
+                ),
+            )
+            .with_next_action(
+                &["mira", "view", &p.view_ref.to_string()],
+                "Read the derived view instead.",
+            ));
+        }
         let frame_value = Value::Object(p.frame.clone());
         let event = wire_from_value::<PluginFrame>(frame_value.clone())
             .and_then(PluginFrame::validate)

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Fixture server stand-in: logs a heartbeat every second until stopped."""
+"""Fixture server stand-in: logs a heartbeat every second, and every third second an
+error on stderr, until stopped."""
 import signal, sys, time
 
 def stop(signum, _frame):
@@ -13,4 +14,6 @@ n = 0
 while True:
     n += 1
     print(f"GET /health 200 ({n})", flush=True)
+    if n % 3 == 0:
+        print(f"GET /api/items 500 ({n}): error: upstream timed out", file=sys.stderr, flush=True)
     time.sleep(1)

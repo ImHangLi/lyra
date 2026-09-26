@@ -1,0 +1,16 @@
+{
+  "api": 1,
+  "id": "watch",
+  "name": "Watch",
+  "description": "Filtered views of other tools' logs, derived by the host; no plugin process runs.",
+  "tags": ["logs"],
+  "views": [
+    {
+      "id": "errors",
+      "title": "Web errors",
+      "kind": "log",
+      "description": "Error lines that dev.web writes to stderr.",
+      "source": {"logs": "dev.web", "grep": "error", "stream": "stderr"}
+    }
+  ]
+}
