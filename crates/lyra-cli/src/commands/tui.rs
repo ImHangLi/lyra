@@ -44,32 +44,18 @@ pub fn open(ctx: &Ctx) -> ExitCode {
 }
 
 fn setup_screen(root: &str, e: &ErrorInfo) -> String {
-    let reason = e
-        .next_action
-        .as_ref()
-        .map(|n| n.reason.clone())
-        .unwrap_or_default();
     format!(
         "Lyra is not set up in {root}
 {message}.
 
-Lyra does not guess project commands and does not run a setup wizard.
-Set it up with your coding agent:
+Set it up in one step. Lyra never guesses commands; your coding agent writes the tools:
 
-  1. Collect read-only project facts (runs no project code):
+  lyra setup
 
-       lyra setup --json
+It installs the Lyra skills for your agent and prints the one command to run
+(for example `claude '...'`). When the agent is done, run `lyra` again.
 
-  2. Give the output to your agent and ask it:
-
-       Create .lyra/workspace.json and plugins for this project from the
-       `lyra setup --json` facts, then check them with `lyra validate`.
-
-     {reason}
-
-  3. Run `lyra` again to open the TUI.
-
-Agents: every command answers with one JSON object under --json; see `lyra --help`.
+Agents: run `lyra setup --json` for read-only project facts; see `lyra --help`.
 ",
         message = e.message
     )

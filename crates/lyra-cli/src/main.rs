@@ -305,10 +305,18 @@ enum Command {
         root: PathBuf,
     },
     /// Report bounded, read-only project facts for the setup skill; never runs project code.
+    /// In a terminal: install the agent skills and print the prompt for your agent.
+    /// With --json (agents): read-only project facts.
     Setup {
         /// Rescan even when the discovery cache is still valid.
         #[arg(long)]
         refresh: bool,
+        /// The agent to set up for (default: Claude Code when installed, else generic).
+        #[arg(long, value_enum)]
+        agent: Option<commands::skills::AgentKind>,
+        /// Print the discovered facts as text instead of the guided setup.
+        #[arg(long)]
+        facts: bool,
     },
 }
 
@@ -629,8 +637,16 @@ fn main() -> ExitCode {
             command: SkillsCommand::Install { agent },
         }) => commands::skills::install(&ctx, agent),
         Some(Command::Reload) => commands::config::reload(&ctx),
-        Some(Command::Setup { refresh }) => {
-            commands::setup::run(mode, ctx.project.as_deref(), refresh)
+        Some(Command::Setup {
+            refresh,
+            agent,
+            facts,
+        }) => {
+            if mode == Mode::Text && !facts {
+                commands::setup::guided(ctx.project.as_deref(), agent)
+            } else {
+                commands::setup::run(mode, ctx.project.as_deref(), refresh)
+            }
         }
         None => commands::tui::open(&ctx),
     }
