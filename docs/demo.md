@@ -3,7 +3,7 @@
 The demo shows the main path: a project launchpad (UC-01), then saving a one-off command as a tool (UC-02), then the human and the agent using the same run. Label any sped-up segment as sped up. Keep real repositories and fixtures apart: the FastAPI template is the real project, and the playground is a fixture.
 
 **Preparation** (not recorded):
-- Check out the FastAPI full-stack template at the pinned commit.
+- Check out the [FastAPI full-stack template](https://github.com/fastapi/full-stack-fastapi-template) at commit `cb740b656d7a`.
 - Pull the Compose images and run `uv sync` in `backend/`.
 - Install Lyra and run `lyra skills install --agent claude`.
 - Keep a terminal with the agent and a second terminal for `lyra` side by side.
