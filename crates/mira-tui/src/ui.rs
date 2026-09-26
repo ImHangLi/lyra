@@ -782,7 +782,8 @@ fn draw_main(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                 t,
                 area,
                 "No tools yet",
-                "Run `mira setup` and ask your agent to create them.",
+                "Run `mira setup` and ask your agent, or write a plugin in .mira/plugins/ \
+                 (see `mira schema plugin`), then `mira validate .mira`.",
             ),
         }
         return;
