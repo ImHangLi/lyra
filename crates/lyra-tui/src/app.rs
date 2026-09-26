@@ -1764,11 +1764,8 @@ impl App {
             Cmd::Search => {
                 self.modal = Modal::Search {
                     logs: self.focus == Focus::Logs,
-                    text: if self.focus == Focus::List {
-                        self.filter.clone()
-                    } else {
-                        String::new()
-                    },
+                    // A new search starts empty; Esc restores `prev_filter`.
+                    text: String::new(),
                     prev_filter: self.filter.clone(),
                 }
             }
