@@ -319,8 +319,10 @@ enum ArtifactsCommand {
 /// `lyra input RUN --text TEXT` (§10.2) spells its text option like the global `--text`
 /// output flag. After the `input` subcommand, `--text` means the input text.
 fn rewrite_input_text(args: Vec<String>) -> Vec<String> {
+    // With `--key`, or as the last argument, `--text` is the output-mode flag.
+    let has_key = args.iter().any(|a| a == "--key" || a.starts_with("--key="));
     let mut out = Vec::with_capacity(args.len());
-    let mut iter = args.into_iter();
+    let mut iter = args.into_iter().peekable();
     out.extend(iter.next());
     let mut in_input = false;
     while let Some(a) = iter.next() {
@@ -346,6 +348,7 @@ fn rewrite_input_text(args: Vec<String>) -> Vec<String> {
             continue;
         }
         match a.strip_prefix("--text") {
+            Some("") if has_key || iter.peek().is_none() => out.push(a),
             Some("") => out.push("--input-text".to_owned()),
             Some(v) if v.starts_with('=') => out.push(format!("--input-text{v}")),
             _ => out.push(a),
@@ -436,13 +439,22 @@ fn main() -> ExitCode {
                 let _ = e.print();
                 return ExitCode::from(2);
             }
+            // Keep the details (such as the missing flag names) but not the usage block.
             let message = e.render().to_string();
             let first = message
                 .lines()
-                .next()
-                .unwrap_or("invalid arguments")
+                .take_while(|l| !l.starts_with("Usage:") && !l.starts_with("For more information"))
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
                 .trim_start_matches("error: ")
                 .replace("--input-text", "--text");
+            let first = if first.is_empty() {
+                "invalid arguments".to_owned()
+            } else {
+                first
+            };
             return output::fail(
                 mode,
                 ReplyContext::default(),

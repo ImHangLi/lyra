@@ -53,9 +53,14 @@ pub fn compose(
         })?;
         for item in iter {
             let (k, v) = item.map_err(|e| {
+                // A parse error carries the whole line, which may hold a secret value.
+                let detail = match e {
+                    dotenvy::Error::LineParse(_, at) => format!("cannot parse a line at byte {at}"),
+                    other => other.to_string(),
+                };
                 ErrorInfo::new(
                     ErrorCode::EXECUTION_FAILED,
-                    format!("invalid env file {f}: {e}"),
+                    format!("invalid env file {f}: {detail}"),
                 )
             })?;
             if !k.starts_with("LYRA_") {

@@ -310,7 +310,7 @@ pub fn doctor(ctx: &Ctx) -> ExitCode {
         push(
             "workspace",
             CheckStatus::Ok,
-            format!("{} ({:?})", selected.root, selected.reason).to_lowercase(),
+            format!("{} ({})", selected.root, lc(&selected.reason)),
         );
         let paths = WorkspacePaths::new(selected.root.clone());
         let mut set = None;
@@ -399,8 +399,12 @@ pub fn doctor(ctx: &Ctx) -> ExitCode {
             protocol_hash: lyra_protocol::schemas::protocol_hash().to_string(),
             checks,
         };
+        let failed = data
+            .checks
+            .iter()
+            .any(|c| matches!(c.status, CheckStatus::Fail));
         let reply = PublicReply::success(ReplyContext::default(), data, ReplyMeta::default());
-        ctx.emit(&reply, |d| {
+        let code = ctx.emit(&reply, |d| {
             d.checks
                 .iter()
                 .map(|c| {
@@ -413,6 +417,8 @@ pub fn doctor(ctx: &Ctx) -> ExitCode {
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
-        })
+        });
+        // The report itself succeeded; exit 1 tells scripts that a check failed.
+        if failed { ExitCode::from(1) } else { code }
     })
 }

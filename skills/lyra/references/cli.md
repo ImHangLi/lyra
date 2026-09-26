@@ -30,7 +30,7 @@ All commands accept `--project PATH`, `--json`, `--text`. `REF` is `plugin.item`
 
 ## Exit codes
 
-0 success · 2 invalid argument/schema/frame · 3 not found / not set up · 4 conflict (session, busy, revision, view changed) · 5 plugin or command failed · 6 timeout · 7 IPC/Core error · 8 required storage unavailable · 130 cancelled.
+0 success · 1 `doctor` found a failing check · 2 invalid argument/schema/frame · 3 not found / not set up · 4 conflict (session, busy, revision, view changed) · 5 plugin or command failed · 6 timeout · 7 IPC/Core error · 8 required storage unavailable · 130 cancelled.
 
 ## Frequent error codes
 

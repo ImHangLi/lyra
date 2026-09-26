@@ -302,20 +302,24 @@ impl RunLog {
             out.extend(self.push_line(stream, level, &String::from_utf8_lossy(line), false));
             start += pos + 1;
         }
-        let mut rest = buf[start..].to_vec();
-        if rest.len() > MAX_LOG_TEXT_BYTES {
-            let mut cut = MAX_LOG_TEXT_BYTES;
-            while cut > 0 && std::str::from_utf8(&rest[..cut]).is_err() {
-                cut -= 1;
-            }
-            let head: Vec<u8> = rest.drain(..cut.max(1)).collect();
-            let mut records = self.push_line(stream, level, &String::from_utf8_lossy(&head), false);
+        // One read can add many chunks, so drain until the tail fits.
+        while buf.len() - start > MAX_LOG_TEXT_BYTES {
+            let chunk = &buf[start..start + MAX_LOG_TEXT_BYTES];
+            // Cut at the last UTF-8 boundary; bytes that are not UTF-8 go out whole, lossily.
+            let cut = match std::str::from_utf8(chunk) {
+                Ok(_) => MAX_LOG_TEXT_BYTES,
+                Err(e) if e.valid_up_to() > 0 => e.valid_up_to(),
+                Err(_) => MAX_LOG_TEXT_BYTES,
+            };
+            let head = String::from_utf8_lossy(&buf[start..start + cut]).into_owned();
+            let mut records = self.push_line(stream, level, &head, false);
             if let Some(r) = records.last_mut() {
                 r.truncated = true;
             }
             out.extend(records);
+            start += cut;
         }
-        self.partial[idx] = rest;
+        self.partial[idx] = buf[start..].to_vec();
         out
     }
 

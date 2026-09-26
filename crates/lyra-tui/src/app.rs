@@ -1181,6 +1181,13 @@ impl App {
             }
             match self.toggle_intent(item) {
                 Some(Intent::Stop) => v.push(bind("s", "stop", Cmd::Toggle)),
+                // When Enter already shows the same word, keep `s` in help only.
+                Some(_)
+                    if v.iter()
+                        .any(|b| b.keys == "Enter" && b.label == start_word(item)) =>
+                {
+                    v.push(hidden("s", start_word(item), Cmd::Toggle))
+                }
                 Some(_) => v.push(bind("s", start_word(item), Cmd::Toggle)),
                 None => {}
             }
