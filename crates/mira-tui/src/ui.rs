@@ -5,7 +5,7 @@
 
 use mira_protocol::ipc::{SessionMode, SessionState};
 use mira_protocol::manifest::{ActionMode, ViewKind};
-use mira_protocol::run::{Lifecycle, LogStream, Outcome, RunRecord, RunResult};
+use mira_protocol::run::{CleanupState, Lifecycle, LogStream, Outcome, RunRecord, RunResult};
 use mira_protocol::time::Timestamp;
 use mira_protocol::view::Freshness;
 use ratatui::Frame;
@@ -57,6 +57,12 @@ pub fn left_word(secs: i64) -> String {
     }
 }
 
+/// A future local time like the CLI writes it: `16:07 (in 1h59m)`.
+fn until_word(app: &App, ts: Timestamp) -> String {
+    let left = (ts.unix_ms() - Timestamp::now().unix_ms()) / 1000;
+    format!("{} (in {})", app.clock(ts, false), left_word(left))
+}
+
 fn secs_since(ts: Timestamp) -> i64 {
     (Timestamp::now().unix_ms() - ts.unix_ms()) / 1000
 }
@@ -73,53 +79,32 @@ pub struct ChipSize {
     pub pinned: bool,
 }
 
-/// Which chips (and which of their labels) fit in `width` cells. A chip is ` key ` plus
-/// ` label`; two spaces separate chips. From the last chip back, a chip loses its label
-/// before its key; pinned chips lose their labels last and their keys only when nothing
-/// else is left. A chip is never cut.
-pub fn fit_chips(chips: &[ChipSize], width: usize) -> Vec<(bool, bool)> {
-    let mut fit: Vec<(bool, bool)> = chips.iter().map(|_| (true, true)).collect();
-    let total = |fit: &[(bool, bool)]| -> usize {
-        let mut used = 0usize;
-        let mut n = 0usize;
-        for (c, (shown, label)) in chips.iter().zip(fit) {
-            if !shown {
-                continue;
-            }
-            used += c.keys + 2;
-            if *label && c.label > 0 {
-                used += 1 + c.label;
-            }
-            n += 1;
-        }
+/// Which chips fit in `width` cells. A chip is ` key ` plus ` label`; two spaces separate
+/// chips. A chip always shows with its label, or not at all: from the last chip back,
+/// unpinned chips go first, then pinned ones.
+pub fn fit_chips(chips: &[ChipSize], width: usize) -> Vec<bool> {
+    let mut shown: Vec<bool> = vec![true; chips.len()];
+    let total = |shown: &[bool]| -> usize {
+        let (used, n) = chips.iter().zip(shown).filter(|(_, s)| **s).fold(
+            (0usize, 0usize),
+            |(used, n), (c, _)| {
+                let label = if c.label > 0 { 1 + c.label } else { 0 };
+                (used + c.keys + 2 + label, n + 1)
+            },
+        );
         used + 2 * n.saturating_sub(1)
     };
-    // Per chip, from the last one back: its label first, then the chip itself.
     for pinned in [false, true] {
         for i in (0..chips.len()).rev() {
-            if chips[i].pinned != pinned {
-                continue;
+            if total(&shown) <= width {
+                return shown;
             }
-            for step in [1, 0] {
-                if total(&fit) <= width {
-                    return fit;
-                }
-                if step == 1 {
-                    fit[i].1 = false;
-                } else if !pinned {
-                    fit[i].0 = false;
-                }
+            if chips[i].pinned == pinned {
+                shown[i] = false;
             }
         }
     }
-    // Pinned chips go last, keys only.
-    for i in (0..chips.len()).rev() {
-        if total(&fit) <= width {
-            return fit;
-        }
-        fit[i].0 = false;
-    }
-    fit
+    shown
 }
 
 fn panel<'a>(t: &Theme, title: impl Into<Line<'a>>, focus: bool) -> Block<'a> {
@@ -363,6 +348,25 @@ fn run_word(l: Lifecycle) -> &'static str {
     }
 }
 
+/// A failed cleanup in a few words: `cleanup failed (exit 4)`, `cleanup timed out`;
+/// `None` when cleanup did not fail.
+pub fn cleanup_word(c: &CleanupState) -> Option<String> {
+    let CleanupState::Failed { error, .. } = c else {
+        return None;
+    };
+    let m = &error.message;
+    if m.contains("timed out") {
+        return Some("cleanup timed out".into());
+    }
+    let code = m
+        .rsplit_once("status ")
+        .and_then(|(_, n)| n.trim().parse::<i64>().ok());
+    Some(match code {
+        Some(c) => format!("cleanup failed (exit {c})"),
+        None => "cleanup failed".into(),
+    })
+}
+
 fn enum_word<T: serde::Serialize>(v: T) -> String {
     serde_json::to_value(v)
         .ok()
@@ -465,11 +469,9 @@ fn session_spans(app: &App, t: &Theme) -> Vec<Span<'static>> {
             Span::styled(" stopping", t.fg(Tone::Amber)),
         ],
         Some(s) => {
-            let left = s
-                .expires_at
-                .map(|e| left_word((e.unix_ms() - Timestamp::now().unix_ms()) / 1000));
-            match (s.mode, left) {
-                (SessionMode::Foreground, left) => {
+            let until = s.expires_at.map(|e| app.clock(e, false));
+            match (s.mode, until) {
+                (SessionMode::Foreground, until) => {
                     let n = s.controller_count;
                     let mut v = vec![
                         Span::styled("●", t.fg(Tone::Leaf)),
@@ -478,15 +480,18 @@ fn session_spans(app: &App, t: &Theme) -> Vec<Span<'static>> {
                             t.bold(),
                         ),
                     ];
-                    // A background lease also holds the session after the last window.
-                    if let Some(l) = left {
-                        v.push(Span::styled(format!(" · kept {l}"), t.fg(Tone::Amber)));
+                    // Kept in the background: runs outlive the last window until then.
+                    if let Some(u) = until {
+                        v.push(Span::styled(
+                            format!(" · kept until {u}"),
+                            t.fg(Tone::Amber),
+                        ));
                     }
                     v
                 }
-                (SessionMode::Background, left) => {
-                    let text = match left {
-                        Some(l) => format!(" background · {l} left"),
+                (SessionMode::Background, until) => {
+                    let text = match until {
+                        Some(u) => format!(" background · until {u}"),
                         None => " background".to_owned(),
                     };
                     vec![
@@ -498,7 +503,7 @@ fn session_spans(app: &App, t: &Theme) -> Vec<Span<'static>> {
         }
     };
     if !app.is_controller() && app.session.is_some() {
-        out.push(Span::styled(" · observing", t.dim()));
+        out.push(Span::styled(" · watching", t.dim()));
     }
     let warnings = app.storage_warnings.len() + app.config_warnings.len();
     if warnings > 0 {
@@ -777,7 +782,8 @@ fn draw_main(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                 t,
                 area,
                 "No tools yet",
-                "Run `mira setup` and ask your agent to create them.",
+                "Run `mira setup` and ask your agent, or write a plugin in .mira/plugins/ \
+                 (see `mira schema plugin`), then `mira validate .mira`.",
             ),
         }
         return;
@@ -913,7 +919,7 @@ fn status_spans(app: &App, t: &Theme, item: &Item) -> Vec<Span<'static>> {
         details.push(format!(
             "started {} ({})",
             ago(r.started_at),
-            app.clock(r.started_at, true)
+            app.clock(r.started_at, false)
         ));
         details.push(short_id(&r.run_id.to_string()));
         let health = enum_word(r.reported_health.state);
@@ -944,7 +950,14 @@ fn status_spans(app: &App, t: &Theme, item: &Item) -> Vec<Span<'static>> {
             details.insert(0, ago(e));
         }
         details.push(short_id(&l.run_id.to_string()));
-        head(word)
+        let mut h = head(word);
+        if let Some(c) = l.cleanup.as_ref().and_then(cleanup_word) {
+            h.push(Span::styled(
+                format!("  {c}"),
+                t.fg(Tone::Rose).add_modifier(Modifier::BOLD),
+            ));
+        }
+        h
     } else if !item.enabled {
         head("disabled".into())
     } else {
@@ -981,7 +994,7 @@ fn extras_text(app: &App, a: &mira_protocol::ids::ActionRef) -> String {
         };
         let next = sc
             .next_at
-            .map_or(String::new(), |n| format!(", next {}", app.clock(n, true)));
+            .map_or(String::new(), |n| format!(", next {}", until_word(app, n)));
         let missed = if sc.missed_ticks > 0 {
             format!(", {} skipped tick(s)", sc.missed_ticks)
         } else {
@@ -1052,7 +1065,7 @@ fn draw_logs(
     let old = app.viewing.get(a).map(|rec| {
         let when = rec
             .ended_at
-            .map_or(String::new(), |e| format!(" at {}", app.clock(e, true)));
+            .map_or(String::new(), |e| format!(" at {}", app.clock(e, false)));
         (
             rec.run_id.clone(),
             format!(
@@ -1062,6 +1075,8 @@ fn draw_logs(
             ),
         )
     });
+    // A PTY run that prints nothing is often waiting for input: show its screen's last line.
+    let waiting = app.silent_pty_run().map(|r| app.screens.get(r).cloned());
     let sel = t.selected();
     let Some(p) = app.panes.get_mut(a) else {
         f.render_widget(Paragraph::new(tab_bar(t, Tab::Logs, "", w)), tabs_area);
@@ -1081,6 +1096,27 @@ fn draw_logs(
         tabs = tabs.patch_style(t.fg(Tone::Amber));
     }
     f.render_widget(Paragraph::new(tabs), tabs_area);
+    if p.records.is_empty()
+        && p.error.is_none()
+        && !p.loading
+        && let Some(screen) = waiting
+    {
+        let mut lines = Vec::new();
+        if let Some(l) = screen {
+            lines.push(Line::from(Span::styled(
+                ellipsize(&display(&l), w),
+                t.dim(),
+            )));
+        }
+        lines.push(Line::from(vec![
+            Span::styled("waiting for input", t.fg(Tone::Amber)),
+            Span::styled(" · ", t.dim()),
+            Span::styled("a", t.bold()),
+            Span::styled(" attaches", t.dim()),
+        ]));
+        f.render_widget(Paragraph::new(lines), body);
+        return;
+    }
     if p.records.is_empty() {
         let msg = if let Some(e) = &p.error {
             format!("Cannot read logs: {e}")
@@ -1165,18 +1201,35 @@ fn draw_history(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         .as_ref()
         .and_then(|a| app.panes.get(a))
         .and_then(|p| p.run_id.as_ref());
-    let cols = |started: &str, outcome: &str, dur: &str, id: &str, state: &str| {
-        format!(
-            "{}{}{}{}{state}",
-            pad(started, 14),
-            pad(outcome, 18),
-            pad(dur, 12),
-            pad(id, 13)
-        )
+    // The outcome column grows to fit a failed cleanup next to the outcome.
+    let outcome_of = |rec: &RunRecord| {
+        let mut outcome = run_word(rec.lifecycle).to_owned();
+        if let Some(c) = rec.exit.as_ref().and_then(|e| e.code)
+            && c != 0
+        {
+            outcome = format!("{outcome} (exit {c})");
+        }
+        (outcome, cleanup_word(&rec.cleanup))
     };
+    let outcome_w = runs
+        .iter()
+        .flatten()
+        .map(|rec| match outcome_of(rec) {
+            (o, Some(c)) => cells(&o) + 2 + cells(&c) + 2,
+            (o, None) => cells(&o) + 2,
+        })
+        .max()
+        .unwrap_or(0)
+        .clamp(18, 44);
+    let rest = |dur: &str, id: &str, state: &str| format!("{}{}{state}", pad(dur, 12), pad(id, 13));
     let mut lines = vec![Line::from(Span::styled(
         ellipsize(
-            &format!("  {}", cols("started", "outcome", "took", "run", "state")),
+            &format!(
+                "  {}{}{}",
+                pad("started", 14),
+                pad("outcome", outcome_w),
+                rest("took", "run", "state")
+            ),
             w,
         ),
         t.dim().add_modifier(Modifier::BOLD),
@@ -1195,12 +1248,7 @@ fn draw_history(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
             let skip = (index + 1).saturating_sub(body_h);
             for (i, rec) in r.iter().enumerate().skip(skip).take(body_h) {
                 let m = life_mark(rec.lifecycle);
-                let mut outcome = run_word(rec.lifecycle).to_owned();
-                if let Some(c) = rec.exit.as_ref().and_then(|e| e.code)
-                    && c != 0
-                {
-                    outcome = format!("{outcome} (exit {c})");
-                }
+                let (outcome, cleanup) = outcome_of(rec);
                 let dur = match rec.ended_at {
                     Some(e) => took(e.unix_ms() - rec.started_at.unix_ms()),
                     None => format!("{} so far", rel_age(secs_since(rec.started_at))),
@@ -1213,25 +1261,41 @@ fn draw_history(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
                 if Some(&rec.run_id) == shown {
                     state.push_str(" · shown");
                 }
-                let text = cols(
-                    &started_word(app, rec.started_at),
-                    &outcome,
-                    &dur,
-                    &short_id(&rec.run_id.to_string()),
-                    &state,
-                );
-                if i == *index {
+                let selected = i == *index;
+                let (base, glyph_st, rose) = if selected {
                     let s = t.selected();
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("{} ", m.glyph), s),
-                        Span::styled(pad(&text, w.saturating_sub(2)), s),
-                    ]));
+                    (s, s, s.add_modifier(Modifier::BOLD))
                 } else {
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("{} ", m.glyph), m.style(t)),
-                        Span::raw(ellipsize(&text, w.saturating_sub(2))),
-                    ]));
+                    (
+                        Style::default(),
+                        m.style(t),
+                        t.fg(Tone::Rose).add_modifier(Modifier::BOLD),
+                    )
+                };
+                let mut used = cells(&outcome);
+                let mut spans = vec![
+                    Span::styled(format!("{} ", m.glyph), glyph_st),
+                    Span::styled(pad(&started_word(app, rec.started_at), 14), base),
+                    Span::styled(outcome, base),
+                ];
+                if let Some(c) = cleanup {
+                    used += 2 + cells(&c);
+                    spans.push(Span::styled("  ", base));
+                    spans.push(Span::styled(c, rose));
                 }
+                spans.push(Span::styled(
+                    " ".repeat(outcome_w.saturating_sub(used).max(1)),
+                    base,
+                ));
+                spans.push(Span::styled(
+                    rest(&dur, &short_id(&rec.run_id.to_string()), &state),
+                    base,
+                ));
+                if selected {
+                    let n = line_cells(&spans);
+                    spans.push(Span::styled(" ".repeat(w.saturating_sub(n)), base));
+                }
+                lines.push(Line::from(fit_spans(spans, w)));
             }
         }
     }
@@ -1355,9 +1419,9 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
             .map(|d| {
                 let d = d.to_offset(offset);
-                format!("{:02}:{:02}:{:02}", d.hour(), d.minute(), d.second())
+                format!("{:02}:{:02}", d.hour(), d.minute())
             })
-            .unwrap_or_else(|_| "--:--:--".into())
+            .unwrap_or_else(|_| "--:--".into())
     };
     let sel = t.selected();
     let Some(p) = app.view_panes.get_mut(&r) else {
@@ -1408,7 +1472,7 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                 });
                 let why = match (&m.freshness, &m.freshness_reason) {
                     (Freshness::Current, _) | (_, None) => String::new(),
-                    (_, Some(reason)) => format!(": {reason}"),
+                    (_, Some(reason)) => format!(" · {reason}"),
                 };
                 let glyph = match m.freshness {
                     Freshness::Current => "●",
@@ -1416,13 +1480,31 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
                     Freshness::Historical => "○",
                 };
                 let st = tone.map_or(t.dim(), |c| t.fg(c));
-                vec![
-                    Span::styled(
-                        format!("{glyph} {}{why}", freshness_word(m.freshness)),
-                        st.add_modifier(Modifier::BOLD),
+                // Past data names where it came from instead of the word "historical".
+                // The head says it all; the host's reason would only repeat it.
+                let (word, why, at, src) = match (m.freshness, &m.source_run_id, m.recorded_at) {
+                    (Freshness::Historical, Some(run), _) => (
+                        format!("from run {} (ended)", short_id(&run.to_string())),
+                        String::new(),
+                        at,
+                        String::new(),
                     ),
+                    (Freshness::Historical, None, Some(a)) if m.source_kind.is_some() => (
+                        format!("published {}", ago(a)),
+                        String::new(),
+                        format!(" · {}", clock(a)),
+                        String::new(),
+                    ),
+                    _ => (freshness_word(m.freshness).to_owned(), why, at, src),
+                };
+                // The revision comes right after the state, so a narrow pane cuts the
+                // details first.
+                vec![
+                    Span::styled(format!("{glyph} {word}"), st.add_modifier(Modifier::BOLD)),
+                    Span::styled(" · ", t.dim()),
+                    Span::styled(format!("rev {rev}"), t.bold()),
                     Span::styled(
-                        format!(" · rev {rev}{at}{src} · {}", durability_word(m.durability)),
+                        format!("{why} · {}{at}{src}", durability_word(m.durability)),
                         t.dim(),
                     ),
                 ]
@@ -1437,19 +1519,7 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
         )));
     }
     card.push(Line::from(fit_spans(status, w)));
-    let mut bar = vec![format!(
-        "{} {}",
-        p.len(),
-        match p.kind {
-            ViewKind::Table => "rows",
-            ViewKind::Log => "items",
-            ViewKind::Tree => "shown nodes",
-            _ => "lines",
-        }
-    )];
-    if p.len() > 0 {
-        bar.push(format!("at {}", p.cursor + 1));
-    }
+    let mut bar = vec![position_word(p.kind, p.cursor, p.len())];
     if let (Some(s), Some(cur)) = (p.sel_rev, p.revision())
         && s != cur
     {
@@ -1541,6 +1611,21 @@ fn draw_view(f: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     f.render_widget(Paragraph::new(lines), body);
 }
 
+/// Where the cursor is in a view: `row 1 of 4`; `no rows` when empty.
+fn position_word(kind: ViewKind, cursor: usize, len: usize) -> String {
+    let (one, many) = match kind {
+        ViewKind::Table => ("row", "rows"),
+        ViewKind::Log => ("item", "items"),
+        ViewKind::Tree => ("node", "nodes"),
+        _ => ("line", "lines"),
+    };
+    if len == 0 {
+        format!("no {many}")
+    } else {
+        format!("{one} {} of {len}", cursor.min(len - 1) + 1)
+    }
+}
+
 fn capitalized(s: &str) -> String {
     let mut c = s.chars();
     c.next()
@@ -1612,17 +1697,13 @@ fn draw_rail(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
             lines.push(row("mode", mode.into(), st));
             lines.push(row(
                 "windows",
-                format!("{} controller(s)", s.controller_count),
+                format!("{} open", s.controller_count),
                 Style::default(),
             ));
             let exp = match s.expires_at {
-                Some(e) => format!(
-                    "{} · {} left",
-                    app.clock(e, false),
-                    left_word((e.unix_ms() - Timestamp::now().unix_ms()) / 1000)
-                ),
-                None if s.background_lease => "no expiry".into(),
-                None => "when the last window closes".into(),
+                Some(e) => until_word(app, e),
+                None if s.background_lease => "at `mira down`".into(),
+                None => "last window closes".into(),
             };
             lines.push(row("ends", exp, Style::default()));
         }
@@ -1635,9 +1716,9 @@ fn draw_rail(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     lines.push(row(
         "this window",
         if app.is_controller() {
-            "controller".into()
+            "in control".into()
         } else {
-            "observing".into()
+            "watching".into()
         },
         Style::default(),
     ));
@@ -1682,6 +1763,8 @@ fn status_line(app: &App, t: &Theme) -> Option<Line<'static>> {
             let (glyph, text, tone) = if let Some(n) = &app.notice {
                 if n.error {
                     ("✗", n.text.clone(), Some(Tone::Rose))
+                } else if n.ok {
+                    ("✓", n.text.clone(), Some(Tone::Leaf))
                 } else {
                     ("›", n.text.clone(), Some(Tone::Sky))
                 }
@@ -1711,7 +1794,7 @@ fn status_line(app: &App, t: &Theme) -> Option<Line<'static>> {
             let st = tone.map_or(t.dim(), |c| t.fg(c));
             let text_st = match tone {
                 Some(Tone::Rose) => st.add_modifier(Modifier::BOLD),
-                Some(Tone::Sky) | None => Style::default(),
+                Some(Tone::Sky | Tone::Leaf) | None => Style::default(),
                 _ => st,
             };
             vec![
@@ -1756,7 +1839,7 @@ fn draw_footer(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     let fit = fit_chips(&sizes, room);
     let mut spans = vec![Span::raw(" ")];
     let mut first = true;
-    for (b, (shown, label)) in all.iter().zip(fit) {
+    for (b, shown) in all.iter().zip(fit) {
         if !shown {
             continue;
         }
@@ -1765,7 +1848,7 @@ fn draw_footer(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         }
         first = false;
         spans.push(key_chip(t, b.keys));
-        if label && !b.label.is_empty() {
+        if !b.label.is_empty() {
             spans.push(Span::styled(format!(" {}", b.label), t.dim()));
         }
     }
@@ -1861,8 +1944,8 @@ fn help_lines(app: &App, t: &Theme, avail: usize) -> (Vec<Line<'static>>, usize)
         "Tabs: [ and ] switch Logs, History, and Output; 1, 2, 3 go straight to one. \
          H opens History; Enter there shows that run's logs.",
         ": runs one public mira command (not a shell). Forms: Tab moves, Enter runs.",
-        "q and Ctrl-C close this TUI; the host stops owned work only when no controller or \
-         background lease remains. b keeps work running for 2h (mira down stops it).",
+        "q and Ctrl-C close this window. When it is the last Mira window, its runs stop. \
+         b keeps them running for 2h; `mira down` stops them.",
         "If a crash leaves the terminal in raw mode, type `reset` and press Enter.",
     ];
     for n in notes {
@@ -2143,7 +2226,41 @@ fn draw_row_actions(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChipSize, ellipsize, fit_chips, left_word, rel_age, sidebar_width, wrap};
+    use super::{
+        ChipSize, cleanup_word, ellipsize, fit_chips, left_word, rel_age, sidebar_width, wrap,
+    };
+    use mira_protocol::error::{ErrorCode, ErrorInfo};
+    use mira_protocol::run::CleanupState;
+    use mira_protocol::time::Timestamp;
+
+    #[test]
+    fn view_positions_count_from_one() {
+        use mira_protocol::manifest::ViewKind;
+        assert_eq!(super::position_word(ViewKind::Table, 0, 4), "row 1 of 4");
+        assert_eq!(super::position_word(ViewKind::Log, 9, 4), "item 4 of 4");
+        assert_eq!(super::position_word(ViewKind::Table, 0, 0), "no rows");
+    }
+
+    #[test]
+    fn a_failed_cleanup_reads_as_a_short_phrase() {
+        let failed = |m: &str| CleanupState::Failed {
+            ended_at: Timestamp::now(),
+            error: ErrorInfo::new(ErrorCode::EXECUTION_FAILED, m.to_owned()),
+        };
+        assert_eq!(
+            cleanup_word(&failed("cleanup exited with status 4")).as_deref(),
+            Some("cleanup failed (exit 4)")
+        );
+        assert_eq!(
+            cleanup_word(&failed("cleanup timed out after 10 s")).as_deref(),
+            Some("cleanup timed out")
+        );
+        assert_eq!(
+            cleanup_word(&failed("cannot start cleanup: not found")).as_deref(),
+            Some("cleanup failed")
+        );
+        assert_eq!(cleanup_word(&CleanupState::NotNeeded), None);
+    }
 
     #[test]
     fn ellipsize_marks_the_cut() {
@@ -2194,29 +2311,16 @@ mod tests {
     }
 
     #[test]
-    fn footer_drops_labels_before_keys_and_never_cuts_a_chip() {
+    fn footer_drops_whole_chips_and_never_shows_a_key_alone() {
         // ` j/k  move` (10) + `  ` + ` s  stop` (8) + `  ` + ` q  quit` (8) = 30.
         let chips = [chip(3, 4, false), chip(1, 4, false), chip(1, 4, true)];
-        assert_eq!(fit_chips(&chips, 30), [(true, true); 3]);
-        // The last unpinned chip loses its label first...
-        assert_eq!(
-            fit_chips(&chips, 29),
-            [(true, true), (true, false), (true, true)]
-        );
-        // ...then its key, before the chip in front of it changes.
-        assert_eq!(
-            fit_chips(&chips, 24),
-            [(true, true), (false, false), (true, true)]
-        );
-        assert_eq!(
-            fit_chips(&chips, 15),
-            [(true, false), (false, false), (true, true)]
-        );
-        // Pinned chips keep their key last.
-        assert_eq!(
-            fit_chips(&chips, 3),
-            [(false, false), (false, false), (true, false)]
-        );
-        assert_eq!(fit_chips(&chips, 0), [(false, false); 3]);
+        assert_eq!(fit_chips(&chips, 30), [true; 3]);
+        // The last unpinned chip goes first, with its label.
+        assert_eq!(fit_chips(&chips, 29), [true, false, true]);
+        assert_eq!(fit_chips(&chips, 20), [true, false, true]);
+        assert_eq!(fit_chips(&chips, 19), [false, false, true]);
+        // Pinned chips go last.
+        assert_eq!(fit_chips(&chips, 8), [false, false, true]);
+        assert_eq!(fit_chips(&chips, 7), [false; 3]);
     }
 }

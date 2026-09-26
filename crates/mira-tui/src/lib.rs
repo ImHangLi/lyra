@@ -191,14 +191,12 @@ async fn serve(paths: WorkspacePaths, offset: time::UtcOffset) -> Result<TuiEnd,
         }
     }
     let message = match app.quit.take() {
-        Some(Quit::Kept(until)) => format!(
-            "Mira keeps this session running in the background{}. `mira down` stops it; `mira` reopens it.",
-            until
-                .map(|t| format!(" until {}", app.clock(t, false)))
-                .unwrap_or_default()
+        Some(Quit::Kept(until)) => crate::app::close_message(
+            &crate::app::Close::Kept(until.map(|t| app.clock(t, false))),
+            app.run_count(),
         ),
-        Some(Quit::Normal(Some(sig))) => format!("{sig}: {}", app.quit_effect(false)),
-        Some(Quit::Normal(None)) | None => app.quit_effect(false),
+        Some(Quit::Normal(Some(sig))) => format!("{sig}: {}", app.quit_message()),
+        Some(Quit::Normal(None)) | None => app.quit_message(),
     };
     // Restore the outer terminal now; the host finishes any stop on its own.
     drop(guard);

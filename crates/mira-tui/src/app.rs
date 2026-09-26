@@ -10,7 +10,7 @@ use mira_protocol::error::ErrorInfo;
 use mira_protocol::ids::{ActionId, ActionRef, Digest, ItemRef, RunId, SessionId, ViewRef};
 use mira_protocol::ipc::*;
 use mira_protocol::manifest::{ActionMode, JsonObject, ViewKind};
-use mira_protocol::run::{ExitInfo, Lifecycle, RunRecord, RunResult, RunSummary};
+use mira_protocol::run::{CleanupState, ExitInfo, Lifecycle, RunRecord, RunResult, RunSummary};
 use mira_protocol::time::Timestamp;
 use serde_json::{Map, Value};
 use tokio::sync::mpsc::UnboundedSender;
@@ -32,6 +32,8 @@ const BRANCH_SECS: u64 = 3;
 /// Open views whose metadata can still change (a save in progress, or a producing run
 /// that ended) are read again at most this often.
 const VIEW_POLL_MS: u128 = 1000;
+/// The screen of a silent PTY run is read again at most this often.
+const SCREEN_POLL_MS: u128 = 1000;
 
 pub struct Item {
     pub action_ref: ActionRef,
@@ -185,6 +187,8 @@ pub enum Cmd {
     PrevTab,
     /// Go to one tab by number (`1`, `2`, `3`).
     GoTab(u8),
+    /// Open the view the last row action wrote (`o`).
+    OpenWritten,
 }
 
 pub struct Binding {
@@ -218,6 +222,8 @@ pub struct LastRun {
     pub ended_at: Option<Timestamp>,
     /// The structured result of the run, once its final record is read.
     pub result: Option<RunResult>,
+    /// The cleanup state, once the final record is read.
+    pub cleanup: Option<CleanupState>,
 }
 
 pub struct Notice {
@@ -229,6 +235,19 @@ pub struct Notice {
     about: Option<(ActionRef, RunId)>,
     /// The run's [`stage`] when the notice was last checked.
     seen: Option<u8>,
+    /// A finished run succeeded: the notice reads with a check mark.
+    pub ok: bool,
+    /// A view the finished row action wrote; `o` opens it while the notice shows.
+    pub open: Option<ViewRef>,
+}
+
+/// A row action started from a table view, followed until its run ends.
+struct RowRun {
+    view_ref: ViewRef,
+    action: ActionId,
+    run_id: Option<RunId>,
+    /// Other views of the same plugin that changed while it ran.
+    wrote: Vec<ViewRef>,
 }
 
 pub enum Quit {
@@ -315,6 +334,10 @@ pub struct App {
     recent_key: HashMap<ActionRef, (Option<RunId>, u8, bool)>,
     /// The PTY attach view (§13).
     pub term: Terminals,
+    /// The last non-empty screen line of active PTY runs whose log is still empty.
+    pub screens: HashMap<RunId, String>,
+    screen_at: Option<Instant>,
+    row_run: Option<RowRun>,
     io: Io,
 }
 
@@ -372,6 +395,9 @@ impl App {
             recent: HashMap::new(),
             recent_key: HashMap::new(),
             term: Terminals::new(io.paths.clone()),
+            screens: HashMap::new(),
+            screen_at: None,
+            row_run: None,
             io,
         }
     }
@@ -470,6 +496,7 @@ impl App {
                     started_at: Some(r.started_at),
                     ended_at: None,
                     result: None,
+                    cleanup: None,
                 },
             );
             let _ = self.io.read.send(Read::RunGet(r.run_id.clone()));
@@ -481,6 +508,11 @@ impl App {
             {
                 self.invoke(a, input);
             }
+        }
+        if let Some(id) = self.row_run.as_ref().and_then(|r| r.run_id.as_ref())
+            && !self.active.values().any(|r| &r.run_id == id)
+        {
+            let _ = self.io.read.send(Read::RunGet(id.clone()));
         }
         self.session = session;
         if let Some(a) = self.selected_ref() {
@@ -662,7 +694,10 @@ impl App {
                     }
                 }
             }
-            Event::Run(Ok(rec)) => self.record(*rec),
+            Event::Run(Ok(rec)) => {
+                self.row_run_ended(&rec);
+                self.record(*rec)
+            }
             Event::Run(Err(_)) => {}
             Event::Recent(Ok(list)) => {
                 for rec in list.runs {
@@ -736,11 +771,19 @@ impl App {
                 }
             }
             Event::ViewActed(r, action, res) => match res {
-                Ok(acc) => self.info(format!(
-                    "started {}.{action} for the selected row ({}); select that action to see its logs",
-                    r.plugin, acc.run_id
-                )),
+                Ok(acc) => {
+                    self.info(format!("running {action} for this row…"));
+                    if let Some(rr) = &mut self.row_run
+                        && rr.view_ref == r
+                        && rr.action == action
+                    {
+                        rr.run_id = Some(acc.run_id.clone());
+                    }
+                    // A quick run can end before any state event names it.
+                    let _ = self.io.read.send(Read::RunGet(acc.run_id));
+                }
                 Err(e) if e.code == mira_protocol::ErrorCode::VIEW_CHANGED => {
+                    self.row_run = None;
                     if let Some(p) = self.view_panes.get_mut(&r) {
                         p.accept_current();
                     }
@@ -750,7 +793,10 @@ impl App {
                         e.message
                     ));
                 }
-                Err(e) => self.error_info(&format!("{}.{action} did not start", r.plugin), &e),
+                Err(e) => {
+                    self.row_run = None;
+                    self.error_info(&format!("{action} did not start"), &e)
+                }
             },
             Event::ScheduleSet(a, res) => {
                 self.pending.remove(&a);
@@ -771,6 +817,14 @@ impl App {
                 self.config_warnings = st.config_warnings;
             }
             Event::Status(Err(_)) => {}
+            Event::Screen(run_id, line) => match line {
+                Some(l) => {
+                    self.screens.insert(run_id, l);
+                }
+                None => {
+                    self.screens.remove(&run_id);
+                }
+            },
             Event::CommandDone(out) => {
                 if matches!(self.modal, Modal::Command { .. } | Modal::None) {
                     self.modal = Modal::Output(Box::new(out));
@@ -814,6 +868,13 @@ impl App {
                 view_ref,
                 view_revision,
             } => {
+                if let Some(rr) = &mut self.row_run
+                    && rr.view_ref.plugin == view_ref.plugin
+                    && rr.view_ref != view_ref
+                    && !rr.wrote.contains(&view_ref)
+                {
+                    rr.wrote.push(view_ref.clone());
+                }
                 // Only opened views keep a panel; others read when they are selected.
                 if self
                     .view_panes
@@ -860,6 +921,7 @@ impl App {
                 started_at: Some(rec.started_at),
                 ended_at: rec.ended_at,
                 result: rec.result,
+                cleanup: Some(rec.cleanup),
             },
         );
     }
@@ -898,8 +960,14 @@ impl App {
     pub fn tick(&mut self) {
         self.refresh_branch(false);
         self.poll_views();
+        self.poll_screen();
         if self.notice.as_ref().is_some_and(|n| {
-            n.at.elapsed().as_secs() >= if n.error { NOTICE_SECS } else { INFO_SECS }
+            n.at.elapsed().as_secs()
+                >= if n.error || n.open.is_some() {
+                    NOTICE_SECS
+                } else {
+                    INFO_SECS
+                }
         }) {
             self.notice = None;
         }
@@ -924,6 +992,37 @@ impl App {
         }
     }
 
+    /// The selected item's active PTY run while its log has no lines: the run a
+    /// "waiting for input" hint is about.
+    pub fn silent_pty_run(&self) -> Option<&RunId> {
+        let a = self.selected_item()?.action_ref.clone();
+        let run = self.active.get(&a)?;
+        let p = self.panes.get(&a)?;
+        (self.term.is_pty(&a)
+            && run.lifecycle.is_active()
+            && p.records.is_empty()
+            && !self.viewing.contains_key(&a)
+            && p.run_id.as_ref().is_none_or(|r| r == &run.run_id))
+        .then_some(&run.run_id)
+    }
+
+    /// Reads the screen of the selected silent PTY run at most once a second.
+    fn poll_screen(&mut self) {
+        let Some(run_id) = self.silent_pty_run().cloned() else {
+            return;
+        };
+        if self
+            .screen_at
+            .is_some_and(|t| t.elapsed().as_millis() < SCREEN_POLL_MS)
+        {
+            return;
+        }
+        self.screen_at = Some(Instant::now());
+        let active: Vec<&RunId> = self.active.values().map(|r| &r.run_id).collect();
+        self.screens.retain(|r, _| active.contains(&r));
+        let _ = self.io.read.send(Read::Screen(run_id));
+    }
+
     // ----- notices ------------------------------------------------------------------
 
     pub fn info(&mut self, text: impl Into<String>) {
@@ -933,6 +1032,8 @@ impl App {
             at: Instant::now(),
             about: None,
             seen: None,
+            ok: false,
+            open: None,
         });
     }
 
@@ -945,6 +1046,84 @@ impl App {
         self.settle_notice();
     }
 
+    /// Shows the result of a finished row action run, with `o` for a view it wrote.
+    fn row_run_ended(&mut self, rec: &RunRecord) {
+        if rec.lifecycle.is_active()
+            || self
+                .row_run
+                .as_ref()
+                .is_none_or(|r| r.run_id.as_ref() != Some(&rec.run_id))
+        {
+            return;
+        }
+        let Some(rr) = self.row_run.take() else {
+            return;
+        };
+        let succeeded = matches!(
+            rec.lifecycle,
+            Lifecycle::Finished {
+                outcome: mira_protocol::run::Outcome::Succeeded
+            }
+        );
+        let ok = rec.result.as_ref().map_or(succeeded, |r| r.ok && succeeded);
+        let summary = rec
+            .result
+            .as_ref()
+            .map(|r| r.summary.trim().trim_end_matches('.').to_owned())
+            .filter(|s| !s.is_empty());
+        if !ok {
+            let why = summary
+                .or_else(|| {
+                    rec.result
+                        .as_ref()
+                        .and_then(|r| r.error.as_ref())
+                        .map(|e| e.message.clone())
+                })
+                .unwrap_or_else(|| "see its logs".into());
+            self.error(format!("{} failed: {why}", rr.action));
+            return;
+        }
+        let text = summary.unwrap_or_else(|| format!("{} finished", rr.action));
+        let open = rr
+            .wrote
+            .iter()
+            .find(|v| self.views.iter().any(|x| &x.view_ref == *v))
+            .cloned();
+        let text = match open.as_ref().and_then(|v| self.view_title(v)) {
+            Some(title) => format!("{text} · o opens {title}"),
+            None => text,
+        };
+        self.info(text);
+        if let Some(n) = &mut self.notice {
+            n.ok = true;
+            n.open = open;
+        }
+    }
+
+    fn view_title(&self, r: &ViewRef) -> Option<String> {
+        self.views
+            .iter()
+            .find(|v| &v.view_ref == r)
+            .map(|v| v.title.clone())
+    }
+
+    /// Selects the view `r` and gives it the focus, clearing a filter that hides it.
+    fn open_view(&mut self, r: &ViewRef) {
+        let Some(vi) = self.views.iter().position(|v| &v.view_ref == r) else {
+            return;
+        };
+        if !self.visible.contains(&Entry::View(vi)) {
+            self.filter.clear();
+            self.refilter(None);
+        }
+        if let Some(pos) = self.visible.iter().position(|e| *e == Entry::View(vi)) {
+            self.notice = None;
+            self.selected = pos;
+            self.on_select();
+            self.focus = Focus::Logs;
+        }
+    }
+
     pub fn error(&mut self, text: impl Into<String>) {
         self.notice = Some(Notice {
             text: text.into(),
@@ -952,6 +1131,8 @@ impl App {
             at: Instant::now(),
             about: None,
             seen: None,
+            ok: false,
+            open: None,
         });
     }
 
@@ -1321,10 +1502,13 @@ impl App {
             self.error("select a row first");
             return;
         };
-        self.info(format!(
-            "running {}.{action} for row {row} of revision {expected}...",
-            view_ref.plugin
-        ));
+        self.info(format!("running {action} for this row…"));
+        self.row_run = Some(RowRun {
+            view_ref: view_ref.clone(),
+            action: action.clone(),
+            run_id: None,
+            wrote: Vec::new(),
+        });
         let _ = self.io.control.send(Control::ViewAction {
             view_ref,
             action,
@@ -1565,6 +1749,14 @@ impl App {
         if self.focus == Focus::List && !self.filter.is_empty() && self.selected_view().is_some() {
             v.push(bind("Esc", "clear filter", Cmd::Escape));
         }
+        if let Some(title) = self
+            .notice
+            .as_ref()
+            .and_then(|n| n.open.as_ref())
+            .and_then(|r| self.view_title(r))
+        {
+            v.insert(0, bind("o", format!("open {title}"), Cmd::OpenWritten));
+        }
         v.push(bind(":", "command", Cmd::Command));
         v.push(hidden(
             "m",
@@ -1586,11 +1778,7 @@ impl App {
             v.push(bind("b", "background", Cmd::Keep));
         }
         v.push(bind("?", "help", Cmd::Help));
-        v.push(bind(
-            "q",
-            format!("quit ({})", self.quit_effect(true)),
-            Cmd::Quit,
-        ));
+        v.push(bind("q", self.quit_label(), Cmd::Quit));
     }
 
     /// Keys for a selected view (list or view focus).
@@ -1709,72 +1897,39 @@ impl App {
                 .is_some_and(|s| Some(&s.id) == self.attached_to.as_ref())
     }
 
-    /// What closing this TUI does to the session's work (§5.1).
-    pub fn quit_effect(&self, short: bool) -> String {
-        let runs = self.active.len() + self.adhoc_runs;
+    /// What closing this window does to the runs (§5.1).
+    pub fn close_effect(&self) -> Close {
         let Some(s) = &self.session else {
-            return if short {
-                "no session".into()
-            } else {
-                "No work session was running.".into()
-            };
+            return Close::NoSession;
         };
         if !self.is_controller() {
-            return if short {
-                "work continues".into()
-            } else {
-                "This TUI was not a controller of the current session; its work continues.".into()
-            };
+            return Close::Watching;
         }
         if s.state == SessionState::Stopping {
-            return if short {
-                "session stopping".into()
-            } else {
-                "The session was already stopping.".into()
-            };
+            return Close::Stopping;
         }
         if s.controller_count > 1 {
-            let others = s.controller_count - 1;
-            return if short {
-                "work continues".into()
-            } else {
-                format!(
-                    "Work continues: {others} other controller(s) still attached ({runs} active run(s))."
-                )
-            };
+            return Close::OtherWindows(s.controller_count as usize - 1);
         }
-        if s.background_lease && s.expires_at.is_none() {
-            return if short {
-                "kept in background".into()
-            } else {
-                format!(
-                    "Work continues under a background lease without expiry ({runs} active run(s)); `mira down` stops it."
-                )
-            };
+        if s.background_lease || s.expires_at.is_some() {
+            return Close::Kept(s.expires_at.map(|t| self.clock(t, false)));
         }
-        if let Some(t) = s.expires_at {
-            return if short {
-                format!("kept until {}", self.clock(t, false))
-            } else {
-                format!(
-                    "Work continues in the background until {} ({runs} active run(s)); `mira down` stops it.",
-                    self.clock(t, false)
-                )
-            };
-        }
-        if runs == 0 {
-            if short {
-                "ends session".into()
-            } else {
-                "This was the last controller; the session ends.".into()
-            }
-        } else if short {
-            format!("stops {runs} run{}", if runs == 1 { "" } else { "s" })
-        } else {
-            format!(
-                "This was the last controller: the host is stopping {runs} run(s) this session owned."
-            )
-        }
+        Close::Last
+    }
+
+    /// Runs that closing this window stops or leaves running.
+    pub fn run_count(&self) -> usize {
+        self.active.len() + self.adhoc_runs
+    }
+
+    /// The footer label of `q`: `quit (stops 2 runs)`, `quit (keeps running until 16:07)`.
+    pub fn quit_label(&self) -> String {
+        close_label(&self.close_effect(), self.run_count())
+    }
+
+    /// The line printed after the window closes.
+    pub fn quit_message(&self) -> String {
+        close_message(&self.close_effect(), self.run_count())
     }
 
     pub fn clock(&self, t: Timestamp, seconds: bool) -> String {
@@ -2016,6 +2171,7 @@ impl App {
             (KeyCode::Char('m'), _) => Cmd::Mouse,
             (KeyCode::Char('Y'), _) => Cmd::CopyAll,
             (KeyCode::Char('H'), _) => Cmd::History,
+            (KeyCode::Char('o'), _) => Cmd::OpenWritten,
             (KeyCode::Char(']'), _) => Cmd::NextTab,
             (KeyCode::Char('['), _) => Cmd::PrevTab,
             (KeyCode::Char(c @ '1'..='3'), _) => Cmd::GoTab(c as u8 - b'1'),
@@ -2262,6 +2418,11 @@ impl App {
                     self.term.open(a, run_id, self.io.events.clone());
                 }
             }
+            Cmd::OpenWritten => {
+                if let Some(r) = self.notice.as_ref().and_then(|n| n.open.clone()) {
+                    self.open_view(&r);
+                }
+            }
             Cmd::Detach | Cmd::Forward => {}
         }
     }
@@ -2481,6 +2642,73 @@ fn rank(
     let tiers: Vec<u8> = words.iter().filter_map(|w| tier(w)).collect();
     let best = tiers.iter().min()?;
     Some((*best, std::cmp::Reverse(tiers.len())))
+}
+
+/// What closing this window does to the runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Close {
+    NoSession,
+    /// This window does not control the runs.
+    Watching,
+    Stopping,
+    /// This many other windows stay open.
+    OtherWindows(usize),
+    /// The runs keep running in the background, until this local time when set.
+    Kept(Option<String>),
+    /// The last window: its runs stop.
+    Last,
+}
+
+/// `1 run`, `2 runs`.
+pub fn runs_word(n: usize) -> String {
+    format!("{n} run{}", if n == 1 { "" } else { "s" })
+}
+
+pub fn close_label(c: &Close, runs: usize) -> String {
+    match c {
+        Close::Kept(Some(t)) => format!("quit (keeps running until {t})"),
+        Close::Kept(None) => "quit (keeps running)".into(),
+        Close::Watching | Close::OtherWindows(_) if runs > 0 => "quit (keeps running)".into(),
+        Close::Last if runs > 0 => format!("quit (stops {})", runs_word(runs)),
+        _ => "quit".into(),
+    }
+}
+
+pub fn close_message(c: &Close, runs: usize) -> String {
+    let (keep, them) = if runs == 1 {
+        ("1 run keeps running".to_owned(), "it")
+    } else {
+        (format!("{runs} runs keep running"), "them")
+    };
+    match c {
+        Close::NoSession => "Nothing was running.".into(),
+        Close::Stopping => "Mira was already stopping its runs.".into(),
+        Close::Watching | Close::Last if runs == 0 => "Nothing was running.".into(),
+        Close::Watching => format!("{keep}. `mira down` stops {them}."),
+        Close::Last => format!("Stopping {}.", runs_word(runs)),
+        Close::OtherWindows(n) => {
+            let open = if *n == 1 {
+                "Another Mira window is open.".to_owned()
+            } else {
+                format!("{n} other Mira windows are open.")
+            };
+            if runs == 0 {
+                open
+            } else {
+                format!("{open} {keep}.")
+            }
+        }
+        Close::Kept(until) => {
+            let until = until
+                .as_ref()
+                .map_or(String::new(), |t| format!(" until {t}"));
+            if runs == 0 {
+                format!("Mira keeps running in the background{until}. `mira down` stops it.")
+            } else {
+                format!("{keep}{until}. `mira down` stops {them}.")
+            }
+        }
+    }
 }
 
 /// Lifecycle stages a run notice outlives: a started run stays "started" while it runs.
@@ -2718,6 +2946,7 @@ mod tests {
                 started_at: None,
                 ended_at: None,
                 result: None,
+                cleanup: None,
             },
         );
         key(&mut a, KeyCode::Char('r'));
@@ -2730,6 +2959,30 @@ mod tests {
         assert_eq!(enter(&a).as_deref(), Some("run"));
         a.items[0].mode = ActionMode::Process;
         assert_eq!(enter(&a).as_deref(), Some("restart"));
+    }
+
+    #[test]
+    fn closing_messages_name_the_runs_in_plain_words() {
+        assert_eq!(close_message(&Close::Last, 2), "Stopping 2 runs.");
+        assert_eq!(close_label(&Close::Last, 2), "quit (stops 2 runs)");
+        assert_eq!(close_label(&Close::Last, 0), "quit");
+        assert_eq!(
+            close_message(&Close::Kept(None), 2),
+            "2 runs keep running. `mira down` stops them."
+        );
+        assert_eq!(
+            close_label(&Close::Kept(Some("16:07".into())), 2),
+            "quit (keeps running until 16:07)"
+        );
+        assert_eq!(
+            close_message(&Close::Kept(Some("16:07".into())), 1),
+            "1 run keeps running until 16:07. `mira down` stops it."
+        );
+        assert_eq!(
+            close_message(&Close::OtherWindows(1), 2),
+            "Another Mira window is open. 2 runs keep running."
+        );
+        assert_eq!(close_message(&Close::NoSession, 0), "Nothing was running.");
     }
 
     #[test]
