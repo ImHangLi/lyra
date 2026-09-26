@@ -694,32 +694,8 @@ async fn stop_other_build_host(ctx: &Ctx, cx: ReplyContext, refused: ErrorInfo) 
     }
 }
 
-/// The runtime directory of the product's former name. Hosts started by those builds live
-/// there, and `mira down` stops the one for this workspace so an upgrade leaves nothing behind.
-const FORMER_RUNTIME_PREFIX: &str = "/tmp/lyra-";
-
-/// Stops a host of this workspace that a pre-rename build left running. Returns its version.
-async fn stop_former_name_host(ctx: &Ctx) -> Option<String> {
-    if std::env::var_os("MIRA_RUNTIME_DIR").is_some() {
-        return None;
-    }
-    let paths = ctx.paths().ok()?;
-    let owner = std::path::PathBuf::from(format!(
-        "{FORMER_RUNTIME_PREFIX}{}",
-        mira_protocol::paths::current_uid()
-    ))
-    .join(format!("{}.owner", paths.id));
-    match stop_host_from_owner(&owner, paths.root.as_str()).await {
-        HostStop::Stopped(v) | HostStop::StillStopping(v) => Some(v),
-        HostStop::NotFound => None,
-    }
-}
-
 pub fn down(ctx: &Ctx, wait: bool) -> ExitCode {
     block_on(async {
-        if let Some(v) = stop_former_name_host(ctx).await {
-            eprintln!("mira: stopped a host from an older build ({v}) and its work");
-        }
         let mut client = match ctx.client(&ConnectOptions::cli()).await {
             Ok(c) => c,
             Err((cx, e)) if e.code == ErrorCode::PROTOCOL_MISMATCH => {
