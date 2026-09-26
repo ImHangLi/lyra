@@ -172,6 +172,13 @@ enum Command {
         max_bytes: Option<u32>,
         #[arg(long)]
         follow: bool,
+        /// Keep only records whose text contains PATTERN (case-insensitive), in the page and
+        /// with --follow.
+        #[arg(long, value_name = "PATTERN")]
+        grep: Option<String>,
+        /// Keep only records from one output stream.
+        #[arg(long, value_enum, value_name = "STREAM")]
+        stream: Option<commands::runtime::StreamArg>,
     },
     /// Read one page of a view with its source, revision, and freshness (never re-runs it).
     View {
@@ -548,7 +555,19 @@ fn main() -> ExitCode {
             limit,
             max_bytes,
             follow,
-        }) => commands::runtime::logs(&ctx, &target, after, limit, max_bytes, follow),
+            grep,
+            stream,
+        }) => commands::runtime::logs(
+            &ctx,
+            &target,
+            commands::runtime::LogArgs {
+                after,
+                limit,
+                max_bytes,
+                follow,
+                filter: commands::runtime::LogFilter::new(grep.as_deref(), stream),
+            },
+        ),
         Some(Command::View {
             view,
             after,

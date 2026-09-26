@@ -835,14 +835,70 @@ fn log_line(r: &mira_protocol::run::LogRecord) -> String {
     format!("{:>6} {tag} {}", r.log_seq, r.text)
 }
 
-pub fn logs(
-    ctx: &Ctx,
-    target: &str,
-    after: Option<String>,
-    limit: Option<u32>,
-    max_bytes: Option<u32>,
-    follow: bool,
-) -> ExitCode {
+/// `--stream` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum StreamArg {
+    Stdout,
+    Stderr,
+}
+
+/// Client-side log filter for `--grep` and `--stream`; the host still bounds the page.
+#[derive(Debug, Clone, Default)]
+pub struct LogFilter {
+    /// Lower-case pattern.
+    grep: Option<String>,
+    stream: Option<StreamArg>,
+}
+
+impl LogFilter {
+    pub fn new(grep: Option<&str>, stream: Option<StreamArg>) -> Self {
+        Self {
+            grep: grep.filter(|g| !g.is_empty()).map(str::to_lowercase),
+            stream,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.grep.is_none() && self.stream.is_none()
+    }
+
+    pub fn matches(&self, r: &mira_protocol::run::LogRecord) -> bool {
+        use mira_protocol::run::LogStream;
+        let stream_ok = match self.stream {
+            None => true,
+            Some(StreamArg::Stdout) => r.stream == LogStream::Stdout,
+            Some(StreamArg::Stderr) => r.stream == LogStream::Stderr,
+        };
+        stream_ok
+            && self
+                .grep
+                .as_deref()
+                .is_none_or(|g| r.text.to_lowercase().contains(g))
+    }
+
+    pub fn apply(&self, records: &mut Vec<mira_protocol::run::LogRecord>) {
+        if !self.is_empty() {
+            records.retain(|r| self.matches(r));
+        }
+    }
+}
+
+pub struct LogArgs {
+    pub after: Option<String>,
+    pub limit: Option<u32>,
+    pub max_bytes: Option<u32>,
+    pub follow: bool,
+    pub filter: LogFilter,
+}
+
+pub fn logs(ctx: &Ctx, target: &str, args: LogArgs) -> ExitCode {
+    let LogArgs {
+        after,
+        limit,
+        max_bytes,
+        follow,
+        filter,
+    } = args;
     block_on(async {
         let mut client = match connect(ctx).await {
             Ok(c) => c,
@@ -862,6 +918,12 @@ pub fn logs(
             Ok(r) => r,
             Err(e) => return ctx.fail(client.context(), e.to_error_info()),
         };
+        // New records follow the unfiltered tail, so remember where it ended.
+        let last_seen = page.data().and_then(|pg| pg.items.last().map(|r| r.log_seq));
+        let page = page.map(|mut pg| {
+            filter.apply(&mut pg.items);
+            pg
+        });
         if !follow || !page.is_ok() {
             return ctx.emit(&page, |pg| {
                 pg.items.iter().map(log_line).collect::<Vec<_>>().join("\n")
@@ -870,12 +932,17 @@ pub fn logs(
         let Some(tail) = page.data().cloned() else {
             return ctx.emit(&page, |_| String::new());
         };
-        follow_logs(ctx, tail).await
+        follow_logs(ctx, tail, last_seen, &filter).await
     })
 }
 
 /// `--follow`: JSONL stream frames (ready first), or text lines after the tail.
-async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
+async fn follow_logs(
+    ctx: &Ctx,
+    tail: LogPage,
+    last_seen: Option<mira_protocol::ids::LogSeq>,
+    filter: &LogFilter,
+) -> ExitCode {
     let opts = ConnectOptions::cli().kind(ClientKind::Cli, ConnectionKind::Stream);
     let mut stream = match ctx.client(&opts).await {
         Ok(c) => c,
@@ -893,7 +960,6 @@ async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
     {
         return ctx.fail(stream.context(), e.to_error_info());
     }
-    let last_seen = tail.items.last().map(|r| r.log_seq);
     let mut out = std::io::stdout().lock();
     if ctx.mode == Mode::Text {
         for r in &tail.items {
@@ -901,11 +967,16 @@ async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
         }
     }
     loop {
-        let frame = match stream.next_event().await {
+        let mut frame = match stream.next_event().await {
             Ok(f) => f,
             Err(e) => return output::fail(ctx.mode, stream.context(), e.to_error_info()),
         };
         let mut done = false;
+        let mut skip = false;
+        if let StreamEvent::Log { records, .. } = &mut frame.event {
+            filter.apply(records);
+            skip = records.is_empty();
+        }
         match &frame.event {
             StreamEvent::Log { records, .. } => {
                 if ctx.mode == Mode::Text {
@@ -942,6 +1013,7 @@ async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
             StreamEvent::State { .. } | StreamEvent::Snapshot(_)
         );
         if ctx.mode == Mode::Json
+            && !skip
             && (relevant || done)
             && let Ok(line) = serde_json::to_string(&frame)
         {
@@ -951,5 +1023,45 @@ async fn follow_logs(ctx: &Ctx, tail: LogPage) -> ExitCode {
         if done {
             return ExitCode::SUCCESS;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mira_protocol::run::{LogRecord, LogStream};
+
+    fn rec(stream: LogStream, text: &str) -> LogRecord {
+        serde_json::from_value(serde_json::json!({
+            "log_seq": 1,
+            "recorded_at": "2026-09-26T01:34:00.000Z",
+            "stream": stream,
+            "level": "info",
+            "text": text,
+            "continued": false,
+            "truncated": false,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn grep_is_a_case_insensitive_substring_and_stream_narrows_it() {
+        let f = LogFilter::new(Some("ERROR"), None);
+        assert!(f.matches(&rec(LogStream::Stdout, "db error: timeout")));
+        assert!(f.matches(&rec(LogStream::Stderr, "Error")));
+        assert!(!f.matches(&rec(LogStream::Stdout, "all good")));
+        let f = LogFilter::new(Some("error"), Some(StreamArg::Stderr));
+        assert!(!f.matches(&rec(LogStream::Stdout, "error")));
+        assert!(f.matches(&rec(LogStream::Stderr, "an ERROR")));
+        let f = LogFilter::new(None, Some(StreamArg::Stdout));
+        assert!(f.matches(&rec(LogStream::Stdout, "x")));
+        assert!(!f.matches(&rec(LogStream::Host, "x")));
+    }
+
+    #[test]
+    fn an_empty_filter_keeps_everything() {
+        let mut v = vec![rec(LogStream::Host, "a"), rec(LogStream::Pty, "b")];
+        LogFilter::new(Some(""), None).apply(&mut v);
+        assert_eq!(v.len(), 2);
     }
 }
