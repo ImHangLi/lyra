@@ -47,6 +47,16 @@ pub enum TuiEnd {
 
 /// Opens the TUI for a workspace. The caller has checked that stdin and stdout are TTYs.
 pub fn run(paths: WorkspacePaths) -> Result<TuiEnd, ErrorInfo> {
+    if theme::term_is_dumb() {
+        return Err(ErrorInfo::new(
+            ErrorCode::TTY_REQUIRED,
+            "TERM=dumb cannot show the full-screen TUI",
+        )
+        .with_next_action(
+            &["mira", "status"],
+            "`mira status` prints the same state as plain text; add `--json` for structured output.",
+        ));
+    }
     // Read the local offset while the process is still single-threaded.
     let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
     let rt = tokio::runtime::Builder::new_multi_thread()

@@ -4,9 +4,9 @@
 //! background (see [`Background`]). When the background is unknown, a middle set that
 //! passes as marks on both is used, and colored words fall back to the default foreground.
 //! Truecolor terminals get the exact tones, 256-color terminals a checked table entry,
-//! 16-color terminals a named color, and `NO_COLOR` gets none. The DIM modifier is for
-//! decoration only; secondary text uses the `Muted` tone. State is never shown by color
-//! alone: see [`Mark`].
+//! 16-color terminals a named color, and `NO_COLOR` or `TERM=dumb` get none. The DIM
+//! modifier is for decoration only; secondary text uses the `Muted` tone. State is never
+//! shown by color alone: see [`Mark`].
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -24,15 +24,23 @@ pub enum ColorMode {
 impl ColorMode {
     /// Reads `NO_COLOR`, `COLORTERM`, and `TERM` once at start.
     pub fn detect() -> Self {
-        let get = |k: &str| std::env::var(k).unwrap_or_default().to_lowercase();
-        if std::env::var_os("NO_COLOR").is_some() {
+        Self::from_env(|k| std::env::var(k).ok())
+    }
+
+    /// `NO_COLOR` counts only when it is set and not empty (no-color.org).
+    pub fn from_env(get: impl Fn(&str) -> Option<String>) -> Self {
+        if get("NO_COLOR").is_some_and(|v| !v.is_empty()) {
             return Self::None;
         }
-        let colorterm = get("COLORTERM");
+        let low = |k: &str| get(k).unwrap_or_default().to_lowercase();
+        let term = low("TERM");
+        if term == "dumb" {
+            return Self::None;
+        }
+        let colorterm = low("COLORTERM");
         if colorterm == "truecolor" || colorterm == "24bit" {
             return Self::TrueColor;
         }
-        let term = get("TERM");
         if term.contains("256") || term.contains("direct") {
             Self::Indexed
         } else {
@@ -43,6 +51,11 @@ impl ColorMode {
     pub fn enabled(self) -> bool {
         self != Self::None
     }
+}
+
+/// `TERM=dumb`: the terminal cannot place the cursor, so the full-screen TUI cannot work.
+pub fn term_is_dumb() -> bool {
+    std::env::var("TERM").is_ok_and(|t| t.eq_ignore_ascii_case("dumb"))
 }
 
 /// The terminal background, as far as Mira can tell.

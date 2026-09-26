@@ -2248,6 +2248,8 @@ fn help_lines(app: &App, t: &Theme, avail: usize) -> (Vec<Line<'static>>, usize)
         "Marks: ● running · ✓ ok · ✗ failed · ◐ starting or stopping · ○ not run yet · \
          ‖ disabled · ■ stopped. ASCII mode (MIRA_ASCII=1, or a locale that is not UTF-8) \
          shows them as * v x ~ o - =.",
+        "Screen reader: `mira status` prints the same state as plain text; `--json` adds \
+         structure.",
         "If a crash leaves the terminal in raw mode, type `reset` and press Enter.",
     ];
     for n in notes {
