@@ -1390,6 +1390,8 @@ impl App {
                 }
             }
             Focus::Logs => {
+                // First, so the footer keeps it at narrow widths.
+                v.push(bind("Esc", "back", Cmd::Escape));
                 if rows > 0 {
                     v.push(bind("j/k", "move", Cmd::Down));
                     v.push(hidden("PgUp/PgDn", "page", Cmd::PageUp));
@@ -2023,6 +2025,8 @@ impl App {
                     }
                 }
             }
+            // Esc leaves the view focus, like Tab.
+            (Cmd::Escape, Focus::Logs) => self.focus = Focus::List,
             (Cmd::Restart, _) => {
                 self.load_view(&r);
                 self.info(format!("reading {r} again"));
@@ -2162,5 +2166,63 @@ fn inputs_of(schema: Option<&JsonObject>) -> Inputs {
     match schema {
         Some(s) if form::has_fields(s) => Inputs::Form(s.clone()),
         _ => Inputs::Free,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app() -> App {
+        let (control, _) = tokio::sync::mpsc::unbounded_channel();
+        let (read, _) = tokio::sync::mpsc::unbounded_channel();
+        let (events, _) = tokio::sync::mpsc::unbounded_channel();
+        let root = lyra_protocol::ids::AbsolutePath::parse("/tmp/lyra-tui-test".into()).unwrap();
+        let paths = lyra_protocol::paths::WorkspacePaths::new(root);
+        App::new(
+            "/tmp/lyra-tui-test".into(),
+            time::UtcOffset::UTC,
+            Io {
+                control,
+                read,
+                events,
+                paths,
+            },
+        )
+    }
+
+    fn key(a: &mut App, code: KeyCode) {
+        a.key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn add_view(a: &mut App, r: &str, kind: ViewKind) {
+        let view_ref: ViewRef = r.parse().unwrap();
+        let plugin = view_ref.plugin.to_string();
+        if !a.plugin_order.contains(&plugin) {
+            a.plugin_order.push(plugin);
+        }
+        a.views.push(ViewItem {
+            view_ref,
+            title: r.into(),
+            description: String::new(),
+            tags: Vec::new(),
+            kind,
+        });
+        a.refilter(None);
+    }
+
+    #[test]
+    fn esc_leaves_the_view_focus() {
+        let mut a = app();
+        add_view(&mut a, "dev.grid", ViewKind::Table);
+        key(&mut a, KeyCode::Enter);
+        assert!(a.focus == Focus::Logs);
+        assert!(
+            a.bindings()
+                .iter()
+                .any(|b| b.footer && b.keys == "Esc" && b.label == "back")
+        );
+        key(&mut a, KeyCode::Esc);
+        assert!(a.focus == Focus::List);
     }
 }
