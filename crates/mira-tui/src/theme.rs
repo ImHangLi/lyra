@@ -492,10 +492,10 @@ mod tests {
                     .map(|(_, v)| (*v).to_owned())
             }
         };
-        assert!(locale_is_utf8(env(&[])));
-        assert!(locale_is_utf8(env(&[("LANG", "en_AU.UTF-8")])));
-        assert!(!locale_is_utf8(env(&[("LC_ALL", "C")])));
-        assert!(!locale_is_utf8(env(&[
+        assert!(super::locale_is_utf8(env(&[])));
+        assert!(super::locale_is_utf8(env(&[("LANG", "en_AU.UTF-8")])));
+        assert!(!super::locale_is_utf8(env(&[("LC_ALL", "C")])));
+        assert!(!super::locale_is_utf8(env(&[
             ("LC_ALL", "POSIX"),
             ("LANG", "en_AU.UTF-8")
         ])));
