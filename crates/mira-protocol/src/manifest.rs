@@ -215,6 +215,32 @@ pub struct ViewSourceWire {
     pub stream: Option<SourceStream>,
 }
 
+impl ViewSourceWire {
+    /// Human words for the filter: ` · filter "error" on stderr`, or empty.
+    pub fn filter_words(&self) -> String {
+        let stream = self.stream.map(|s| match s {
+            SourceStream::Stdout => "stdout",
+            SourceStream::Stderr => "stderr",
+        });
+        match (&self.grep, stream) {
+            (Some(g), Some(s)) => format!(" · filter \"{g}\" on {s}"),
+            (Some(g), None) => format!(" · filter \"{g}\""),
+            (None, Some(s)) => format!(" · {s} only"),
+            (None, None) => String::new(),
+        }
+    }
+}
+
+impl From<&ViewSource> for ViewSourceWire {
+    fn from(s: &ViewSource) -> Self {
+        Self {
+            logs: s.logs.to_item_ref(),
+            grep: s.grep.clone(),
+            stream: s.stream,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ViewDefinitionWire {

@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use mira_protocol::error::ErrorInfo;
 use mira_protocol::ids::{ActionId, RequestKey, RunId, ViewRef, ViewRevision};
 use mira_protocol::ipc::*;
+use mira_protocol::manifest::ViewSourceWire;
 use mira_protocol::reply::ReplyContext;
 use mira_protocol::view::{Freshness, SourceKind, TreeNode, ViewBody, ViewData, ViewSnapshot};
 use serde_json::Value;
@@ -112,17 +113,33 @@ fn source_text(s: &ViewSnapshot) -> String {
     }
 }
 
-fn snapshot_text(s: &ViewSnapshot) -> String {
-    let head = match s.view_revision {
-        None => format!(
-            "{}  no data yet{}",
-            s.view_ref,
-            s.freshness_reason
-                .as_deref()
-                .map(|r| format!(" ({r})"))
-                .unwrap_or_default()
-        ),
-        Some(r) => format!("{}  revision {r}\n  {}", s.view_ref, source_text(s)),
+/// A derived view's head: `● live · from dev.web (running) · 17 lines · filter "error"`.
+/// The revision and durability are host bookkeeping and are left to `--json`.
+fn derived_head(s: &ViewSnapshot, src: &ViewSourceWire) -> String {
+    let n = match &s.data {
+        Some(ViewBody::Inline(ViewData::Log { items })) => items.len(),
+        _ => 0,
+    };
+    let lines = format!(
+        "{n} line{}{}",
+        if n == 1 { "" } else { "s" },
+        src.filter_words()
+    );
+    if s.freshness == Freshness::Current {
+        format!("● live · from {} (running) · {lines}", src.logs)
+    } else {
+        let ended = s
+            .recorded_at
+            .map(|t| format!(" {}", crate::human::clock(t)))
+            .unwrap_or_default();
+        format!("○ from {} (ended{ended}) · {lines}", src.logs)
+    }
+}
+
+fn snapshot_text(s: &ViewSnapshot, source: Option<&ViewSourceWire>) -> String {
+    let head = match (s.view_revision, source) {
+        (Some(_), Some(src)) => format!("{}\n  {}", s.view_ref, derived_head(s, src)),
+        (r, _) => snapshot_head(s, r),
     };
     let body = match &s.data {
         Some(ViewBody::Inline(d)) => data_text(d),
@@ -133,6 +150,20 @@ fn snapshot_text(s: &ViewSnapshot) -> String {
         head
     } else {
         format!("{head}\n\n{body}")
+    }
+}
+
+fn snapshot_head(s: &ViewSnapshot, revision: Option<ViewRevision>) -> String {
+    match revision {
+        None => format!(
+            "{}  no data yet{}",
+            s.view_ref,
+            s.freshness_reason
+                .as_deref()
+                .map(|r| format!(" ({r})"))
+                .unwrap_or_default()
+        ),
+        Some(r) => format!("{}  revision {r}\n  {}", s.view_ref, source_text(s)),
     }
 }
 
@@ -153,13 +184,34 @@ pub fn view(
             Err(code) => return code,
         };
         let p = ViewReadParams {
-            view_ref,
+            view_ref: view_ref.clone(),
             cursor: after,
             limit,
             max_bytes,
         };
         match client.call::<_, ViewSnapshot>(Method::ViewRead, &p).await {
-            Ok(r) => ctx.emit(&r, snapshot_text),
+            Ok(r) => {
+                // A run source without a producer kind is a derived log view: its text head
+                // names the source action and filter, which only the definition holds.
+                let derived = r
+                    .data()
+                    .is_some_and(|s| s.source_run_id.is_some() && s.source_kind.is_none());
+                let source = if derived {
+                    let d = ItemDescribeParams {
+                        item_ref: view_ref.to_item_ref(),
+                        include_schema: false,
+                        max_bytes: None,
+                    };
+                    client
+                        .call::<_, ItemDescription>(Method::ItemDescribe, &d)
+                        .await
+                        .ok()
+                        .and_then(|d| d.data().and_then(|d| d.view.as_ref()?.source.clone()))
+                } else {
+                    None
+                };
+                ctx.emit(&r, |s| snapshot_text(s, source.as_ref()))
+            }
             Err(e) => ctx.fail(client.context(), e.to_error_info()),
         }
     })

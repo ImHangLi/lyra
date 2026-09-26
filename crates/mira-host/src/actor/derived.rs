@@ -100,25 +100,29 @@ impl Actor {
             .map_or(1000, |s| s.storage.view_log_items as usize)
     }
 
-    /// The source action's active run, else its most recent run this host still holds.
-    fn source_log(&self, action: &ActionRef) -> Option<(RunId, SharedLog)> {
+    /// The source action's active run, else its most recent run this host still holds,
+    /// with the run's end time when it has ended.
+    fn source_log(&self, action: &ActionRef) -> Option<(RunId, SharedLog, Option<Timestamp>)> {
         if let Some(id) = self.by_action.get(action)
             && let Some(run) = self.runs.get(id)
         {
-            return Some((id.clone(), run.log.clone()));
+            return Some((id.clone(), run.log.clone(), None));
         }
         self.recent
             .iter()
             .find(|(rec, _)| rec.action_ref.as_ref() == Some(action))
-            .map(|(rec, log)| (rec.run_id.clone(), log.clone()))
+            .map(|(rec, log)| (rec.run_id.clone(), log.clone(), rec.ended_at))
     }
 
     /// Rebuilds one derived view from a run log and announces the new revision.
+    /// `ended_at` (a finished source run) becomes `recorded_at`, so readers see when the
+    /// lines stopped changing.
     fn derived_rebuild(
         &mut self,
         view_ref: &ViewRef,
         def: &ViewDefinition,
         run_id: RunId,
+        ended_at: Option<Timestamp>,
         log: &mut RunLog,
     ) {
         let Some(src) = &def.source else { return };
@@ -132,7 +136,7 @@ impl Actor {
                 run_id,
                 items,
                 revision,
-                recorded_at: Timestamp::now(),
+                recorded_at: ended_at.unwrap_or_else(Timestamp::now),
             },
         );
         self.broadcast_view(view_ref, revision);
@@ -141,7 +145,7 @@ impl Actor {
     /// Makes sure a derived view reflects the source's current (or latest) run.
     fn derived_refresh(&mut self, view_ref: &ViewRef, def: &ViewDefinition) {
         let Some(src) = &def.source else { return };
-        let Some((run_id, log)) = self.source_log(&src.logs) else {
+        let Some((run_id, log, ended_at)) = self.source_log(&src.logs) else {
             return;
         };
         let current = self
@@ -153,7 +157,7 @@ impl Actor {
             return;
         }
         let Ok(mut log) = log.lock() else { return };
-        self.derived_rebuild(view_ref, def, run_id, &mut log);
+        self.derived_rebuild(view_ref, def, run_id, ended_at, &mut log);
     }
 
     /// A new run of `action` started: its derived views now follow it, starting empty.
@@ -224,7 +228,8 @@ impl Actor {
         }
     }
 
-    /// The source run ended: the content is unchanged, but it is historical now.
+    /// The source run ended: the lines are unchanged, but they are historical now, and
+    /// `recorded_at` becomes the end time.
     pub(crate) fn derived_run_ended(&mut self, action: &ActionRef, run_id: &RunId) {
         for (view_ref, _) in self.derived_for(action) {
             let revision = self.derived.next_revision();
@@ -235,6 +240,7 @@ impl Actor {
                 .filter(|e| &e.run_id == run_id)
             {
                 e.revision = revision;
+                e.recorded_at = Timestamp::now();
                 self.broadcast_view(&view_ref, revision);
             }
         }
@@ -264,7 +270,7 @@ impl Actor {
                 }
                 let mut log = RunLog::open_existing(dir);
                 let view_ref = ViewRef::new(lp.plugin.id.clone(), def.id.clone());
-                self.derived_rebuild(&view_ref, def, rec.run_id, &mut log);
+                self.derived_rebuild(&view_ref, def, rec.run_id, rec.ended_at, &mut log);
             }
         }
     }

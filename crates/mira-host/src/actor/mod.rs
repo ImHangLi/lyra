@@ -840,6 +840,7 @@ impl Actor {
                 view_kind: v.kind,
                 persistence: v.persistence,
                 row_actions: v.row_actions.iter().map(|r| r.action.clone()).collect(),
+                source: v.source.as_ref().map(Into::into),
             };
             (
                 None,
