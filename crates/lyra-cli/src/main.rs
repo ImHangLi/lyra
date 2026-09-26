@@ -193,6 +193,18 @@ enum Command {
         #[command(subcommand)]
         read: Option<ArtifactsCommand>,
     },
+    /// Accept a draft definition set (validate first; the catalog revision must match).
+    Apply {
+        #[arg(value_name = "DRAFT_DIR")]
+        draft: PathBuf,
+        /// The catalog revision your change is based on.
+        #[arg(long, value_name = "N")]
+        expected_revision: u64,
+        #[arg(long, value_name = "KEY")]
+        request_key: Option<String>,
+    },
+    /// Re-validate `.lyra` from disk; accept it only when valid.
+    Reload,
     /// Internal: serve the workspace host.
     #[command(name = "__host", hide = true)]
     Host {
@@ -345,6 +357,12 @@ fn main() -> ExitCode {
         },
         Some(Command::Schema { name }) => commands::contract::schema(mode, &name),
         Some(Command::Validate { path }) => commands::contract::validate(mode, &path),
+        Some(Command::Apply {
+            draft,
+            expected_revision,
+            request_key,
+        }) => commands::config::apply(&ctx, &draft, expected_revision, request_key),
+        Some(Command::Reload) => commands::config::reload(&ctx),
         Some(Command::Setup { refresh }) => {
             commands::setup::run(mode, ctx.project.as_deref(), refresh)
         }
