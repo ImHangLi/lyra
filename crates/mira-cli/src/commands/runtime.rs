@@ -19,6 +19,7 @@ use serde_json::{Map, Value};
 use super::ctx::{Ctx, block_on};
 use super::inspect::lifecycle_text;
 use super::runref::{resolve_run_id, resolve_target};
+use crate::human;
 use crate::output::{self, Mode, invalid_argument};
 
 const POLL: Duration = Duration::from_millis(100);
@@ -131,6 +132,9 @@ fn run_text(r: &RunRecord) -> String {
             (None, Some(sig)) => s.push_str(&format!("  signal {sig}")),
             _ => {}
         }
+    }
+    if let Some(c) = human::cleanup_failure(&r.cleanup) {
+        s.push_str(&format!("  {c}"));
     }
     if let Some(res) = &r.result {
         s.push_str(&format!(

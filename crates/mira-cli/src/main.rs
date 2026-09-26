@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use mira_protocol::reply::ReplyContext;
 
 mod commands;
+mod human;
 mod output;
 
 use output::Mode;
@@ -443,6 +444,8 @@ enum SkillsCommand {
 }
 
 fn main() -> ExitCode {
+    // Read the local UTC offset while the process is still single-threaded.
+    human::init_local_offset();
     let args = rewrite_input_text(std::env::args().collect());
     let cli = match Cli::try_parse_from(&args) {
         Ok(cli) => cli,
