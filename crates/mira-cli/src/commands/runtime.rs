@@ -716,26 +716,6 @@ pub fn up(ctx: &Ctx, background: bool, ttl: &str) -> ExitCode {
     })
 }
 
-pub fn keep(ctx: &Ctx, ttl: &str) -> ExitCode {
-    block_on(async {
-        let ttl = match parse_ttl(ttl) {
-            Ok(t) => t,
-            Err(e) => return ctx.fail(ReplyContext::default(), e),
-        };
-        let mut client = match connect(ctx).await {
-            Ok(c) => c,
-            Err(code) => return code,
-        };
-        match client
-            .call::<_, SessionData>(Method::SessionKeep, &SessionKeepParams { ttl })
-            .await
-        {
-            Ok(r) => ctx.emit(&r, session_text),
-            Err(e) => ctx.fail(client.context(), e.to_error_info()),
-        }
-    })
-}
-
 fn stop_text(d: &SessionStopData) -> String {
     match &d.stopped_session {
         None => "Nothing is running.".into(),

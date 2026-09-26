@@ -31,7 +31,6 @@ pub const COMMANDS: &[&str] = &[
     "publish",
     "artifacts",
     "schedule",
-    "keep",
     "up",
     "down",
     "exec",

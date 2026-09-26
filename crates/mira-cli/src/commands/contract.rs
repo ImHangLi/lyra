@@ -3,11 +3,13 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use mira_protocol::config::{Draft, validate_draft};
+use mira_protocol::config::{Draft, LoadedPlugin, WORKSPACE_FILE, validate_draft};
 use mira_protocol::reply::{PublicReply, ReplyContext, ReplyMeta};
 use mira_protocol::{ErrorCode, ErrorInfo, schemas};
 use serde::Serialize;
 
+use super::ctx::Ctx;
+use super::plugin_dir::PluginDraft;
 use crate::output::{self, Mode};
 
 /// `mira schema NAME`: the raw JSON Schema, not wrapped in a reply.
@@ -54,6 +56,8 @@ struct ValidateReport {
     workspace_name: Option<String>,
     plugins: Vec<PluginReport>,
     set_hash: Option<String>,
+    /// The project `.mira` a plugin was also checked against, if any.
+    checked_with: Option<String>,
 }
 
 fn report(p: &mira_protocol::config::LoadedPlugin) -> PluginReport {
@@ -66,8 +70,22 @@ fn report(p: &mira_protocol::config::LoadedPlugin) -> PluginReport {
     }
 }
 
+/// Checks a plugin against the selected project's `.mira`, as `mira apply` would add it.
+/// Returns the checked `.mira` path, or `None` outside a project.
+fn check_in_project(ctx: &Ctx, p: &LoadedPlugin) -> Result<Option<String>, ErrorInfo> {
+    let Ok(paths) = ctx.paths() else {
+        return Ok(None);
+    };
+    if !paths.mira_dir.join(WORKSPACE_FILE).is_file() {
+        return Ok(None);
+    }
+    PluginDraft::build(&paths.mira_dir, p)?.check()?;
+    Ok(Some(paths.mira_dir.to_string_lossy().into_owned()))
+}
+
 /// `mira validate PATH`: pure validation; never executes plugin or project code.
-pub fn validate(mode: Mode, path: &Path) -> ExitCode {
+pub fn validate(ctx: &Ctx, path: &Path) -> ExitCode {
+    let mode = ctx.mode;
     let shown = path.to_string_lossy().into_owned();
     if std::fs::symlink_metadata(path).is_err() {
         return output::fail(
@@ -85,20 +103,25 @@ pub fn validate(mode: Mode, path: &Path) -> ExitCode {
                 workspace_name: Some(set.workspace.name.clone()),
                 plugins: set.plugins.iter().map(report).collect(),
                 set_hash: Some(set.set_hash.to_string()),
+                checked_with: None,
             },
             ReplyMeta::default(),
         ),
-        Ok(Draft::Plugin(p)) => PublicReply::success(
-            ReplyContext::default(),
-            ValidateReport {
-                kind: "plugin",
-                path: shown,
-                workspace_name: None,
-                plugins: vec![report(&p)],
-                set_hash: None,
-            },
-            ReplyMeta::default(),
-        ),
+        Ok(Draft::Plugin(p)) => match check_in_project(ctx, &p) {
+            Ok(checked_with) => PublicReply::success(
+                ReplyContext::default(),
+                ValidateReport {
+                    kind: "plugin",
+                    path: shown,
+                    workspace_name: None,
+                    plugins: vec![report(&p)],
+                    set_hash: None,
+                    checked_with,
+                },
+                ReplyMeta::default(),
+            ),
+            Err(e) => PublicReply::failure(ReplyContext::default(), e),
+        },
         Err(issues) => PublicReply::failure(ReplyContext::default(), issues.to_error_info()),
     };
     output::emit(mode, &reply, |r| {
@@ -117,6 +140,9 @@ pub fn validate(mode: Mode, path: &Path) -> ExitCode {
                 p.views.len(),
                 if p.enabled { "" } else { ", disabled" }
             ));
+        }
+        if let Some(m) = &r.checked_with {
+            s.push_str(&format!("\nfits the project at {m}"));
         }
         s
     })

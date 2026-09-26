@@ -37,9 +37,10 @@ enum Command {
     /// Print a raw JSON Schema: workspace, plugin, local, invocation, plugin-event, cli-reply, ipc.
     #[command(hide = true)]
     Schema { name: String },
-    /// Check a .mira draft, workspace.json, or plugin.json without running anything.
+    /// Check a .mira draft, workspace.json, a plugin folder, or plugin.json without running
+    /// anything. Inside a project, a plugin is also checked against the project's .mira.
     Validate {
-        #[arg(value_name = "DRAFT_DIR")]
+        #[arg(value_name = "PATH")]
         path: PathBuf,
     },
     /// Show the session, active runs, schedules, and warnings.
@@ -138,18 +139,13 @@ enum Command {
         argv: Vec<String>,
     },
     /// Keep work running without an open window, until the time limit or `mira down`.
+    ///
+    /// When a session is already running, this sets its time limit again, counted from now.
     Up {
         /// Required: run the session in the background.
         #[arg(long)]
         background: bool,
-        /// How long to keep it: 30m, 2h, 1d, or none.
-        #[arg(long, default_value = "2h")]
-        ttl: String,
-    },
-    /// Keep the current session running in the background.
-    #[command(hide = true)]
-    Keep {
-        /// How long to keep it: 30m, 2h, 1d, or none.
+        /// How long to keep it, from now: 30m, 2h, 1d, or none.
         #[arg(long, default_value = "2h")]
         ttl: String,
     },
@@ -264,14 +260,18 @@ enum Command {
         #[command(subcommand)]
         command: PayloadCommand,
     },
-    /// Apply a validated draft of .mira.
+    /// Apply a validated draft of .mira, or add or replace one plugin folder.
+    ///
+    /// A plugin folder (with plugin.json) outside .mira is copied to .mira/plugins/<id>/,
+    /// and its path is added to .mira/workspace.json when it is new.
     #[command(hide = true)]
     Apply {
-        #[arg(value_name = "DRAFT_DIR")]
+        #[arg(value_name = "DRAFT_OR_PLUGIN_DIR")]
         draft: PathBuf,
-        /// The catalog revision your change is based on.
+        /// The catalog revision your change is based on. Required for a draft; for a plugin
+        /// folder it defaults to the current revision.
         #[arg(long, value_name = "N")]
-        expected_revision: u64,
+        expected_revision: Option<u64>,
         #[arg(long, value_name = "KEY")]
         request_key: Option<String>,
     },
@@ -582,7 +582,6 @@ fn main() -> ExitCode {
             argv,
         }) => commands::runtime::exec(&ctx, label, argv, request_key),
         Some(Command::Up { background, ttl }) => commands::runtime::up(&ctx, background, &ttl),
-        Some(Command::Keep { ttl }) => commands::runtime::keep(&ctx, &ttl),
         Some(Command::Down { wait }) => commands::runtime::down(&ctx, wait),
         Some(Command::Runs {
             run,
@@ -664,7 +663,7 @@ fn main() -> ExitCode {
             Err(_) => ExitCode::from(2),
         },
         Some(Command::Schema { name }) => commands::contract::schema(mode, &name),
-        Some(Command::Validate { path }) => commands::contract::validate(mode, &path),
+        Some(Command::Validate { path }) => commands::contract::validate(&ctx, &path),
         Some(Command::Apply {
             draft,
             expected_revision,
@@ -748,5 +747,13 @@ mod tests {
             rewrite(&["mira", "status", "--text"]),
             ["mira", "status", "--text"]
         );
+    }
+
+    #[test]
+    fn keep_is_gone_and_apply_revision_is_optional() {
+        use clap::Parser;
+        assert!(super::Cli::try_parse_from(["mira", "keep"]).is_err());
+        assert!(super::Cli::try_parse_from(["mira", "up", "--background", "--ttl", "30m"]).is_ok());
+        assert!(super::Cli::try_parse_from(["mira", "apply", "plugins/errors"]).is_ok());
     }
 }
